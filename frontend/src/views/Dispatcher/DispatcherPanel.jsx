@@ -3,8 +3,16 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { Truck, RefreshCw, Sliders, Search, Compass, AlertCircle, Eye, Package, Power, PowerOff, FileText, Download, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, MapPin, User, Clock, Play, Check, Send, Loader } from 'lucide-react';
-import { CEDIS, FLEET, DRIVERS, ID_TO_PLATE, SAP_ALERTS } from '../../config/fleet';
-import { syncSAP, getRemisiones, getRutas, generarRutas, updateRutaEstado } from '../../services/api';
+import { CEDIS, FLEET, DRIVERS, ID_TO_PLATE } from '../../config/fleet';
+import { syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado } from '../../services/api';
+
+// Cada cuánto se refresca la vista para traer lo más nuevo (pedidos nuevos de
+// SAP, cambios de estado de otros usuarios) sin que el dispatcher tenga que
+// recargar la página manualmente.
+const REFRESH_INTERVAL_MS = 45_000;
+// La ruta que dibuja el mapa evita autopistas de cuota (mismo criterio que el
+// optimizador en el backend), para no cruzar casetas visualmente ni en la práctica.
+const OSRM_EXCLUDE = 'motorway';
 
 // ── Leaflet defaults ──
 delete L.Icon.Default.prototype._getIconUrl;
@@ -31,6 +39,18 @@ function MapUpdater({ coords }) {
   return null;
 }
 
+// Leaflet no se entera cuando el contenedor cambia de tamaño por CSS (al
+// colapsar el panel izquierdo), así que hay que decirle explícitamente que
+// recalcule su tamaño una vez termine la transición (duration-300 → 320ms).
+function MapResizeHandler({ isPanelOpen }) {
+  const map = useMap();
+  useEffect(() => {
+    const t = setTimeout(() => map.invalidateSize(), 320);
+    return () => clearTimeout(t);
+  }, [isPanelOpen, map]);
+  return null;
+}
+
 // ── Component ──
 export default function DispatcherPanel() {
   const [trucks, setTrucks]             = useState(FLEET.map(t => ({ ...t, active: true })));
@@ -47,36 +67,65 @@ export default function DispatcherPanel() {
   const [activeTab, setActiveTab]       = useState('pedidos');
   const [isPanelOpen, setIsPanelOpen]   = useState(true);
   const [osrmRoutes, setOsrmRoutes]     = useState({});
+  const [osrmCache, setOsrmCache]       = useState({}); // signature de puntos → geometría, evita refetch
+  const [alertas, setAlertas]           = useState([]);
 
-  // ── OSRM Routing ──
+  // ── OSRM Routing (paralelo, cacheado por firma de puntos, evitando casetas) ──
   useEffect(() => {
     const fetchRoutes = async () => {
-      const newOsrm = { ...osrmRoutes };
-      for (const t of trucks.filter(x => x.active)) {
+      const activeTrucks = trucks.filter(x => x.active);
+      const results = await Promise.all(activeTrucks.map(async (t) => {
         const pts = routePts(t.id);
-        if (pts.length === 0) continue;
-        const allPoints = [CEDIS, ...pts, CEDIS]; // Regresa al CEDIS
+        if (pts.length === 0) return [t.id, null, null];
+        const signature = JSON.stringify(pts);
+        if (osrmCache[t.id]?.signature === signature) {
+          return [t.id, osrmCache[t.id].geometry, signature];
+        }
+        const allPoints = [CEDIS, ...pts, CEDIS];
         const coordsStr = allPoints.map(p => `${p[1]},${p[0]}`).join(';');
-        try {
-          const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=full&geometries=geojson`);
-          const data = await res.json();
-          if (data.routes && data.routes[0]) {
-            newOsrm[t.id] = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+        const baseUrl = `https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=full&geometries=geojson`;
+        // El servidor público de OSRM no soporta excluir autopistas en su perfil
+        // por defecto (responde 400 "Exclude flag combination is not supported").
+        // Se intenta igual por si algún día se apunta a un servidor propio, y si
+        // falla se reintenta sin exclude — mejor calles reales que nada.
+        for (const url of [`${baseUrl}&exclude=${OSRM_EXCLUDE}`, baseUrl]) {
+          try {
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.routes && data.routes[0]) {
+              return [t.id, data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]), signature];
+            }
+          } catch (e) {
+            console.error("OSRM Fetch Error:", e);
           }
-        } catch (e) {
-          console.error("OSRM Fetch Error:", e);
+        }
+        return [t.id, null, null];
+      }));
+
+      const newOsrm = {};
+      const newCache = { ...osrmCache };
+      for (const [id, geometry, signature] of results) {
+        if (geometry) {
+          newOsrm[id] = geometry;
+          newCache[id] = { signature, geometry };
         }
       }
       setOsrmRoutes(newOsrm);
+      setOsrmCache(newCache);
     };
     if (routesGenerated) fetchRoutes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orders, trucks, routesGenerated]);
 
-  // ── Data fetching con AbortController ──
+  // ── Data fetching con AbortController + refresco periódico ──
   useEffect(() => {
     const controller = new AbortController();
     fetchData(controller.signal);
-    return () => controller.abort();
+
+    // Siempre trae lo más nuevo: reintenta sync + refetch cada REFRESH_INTERVAL_MS
+    // sin que el dispatcher tenga que recargar la página manualmente.
+    const interval = setInterval(() => fetchData(controller.signal), REFRESH_INTERVAL_MS);
+    return () => { controller.abort(); clearInterval(interval); };
   }, []);
 
   const fetchData = async (signal) => {
@@ -91,10 +140,13 @@ export default function DispatcherPanel() {
       const rutData = await getRutas(fecha, { signal });
       setRutas(rutData);
       if (rutData.length > 0) setRoutesGenerated(true);
+
+      const alertData = await getAlertas(fecha, { signal });
+      setAlertas(alertData);
     } catch (e) {
-      if (e.name === 'AbortError') return; // StrictMode unmount — ignore
+      if (e.name === 'AbortError') return; // StrictMode unmount / refresh cancelado — ignore
       console.error('Backend error:', e);
-      setSyncStatus('Sin conexión — datos simulados');
+      setSyncStatus('Sin conexión con el backend');
     }
   };
 
@@ -140,8 +192,8 @@ export default function DispatcherPanel() {
     return true;
   });
 
-  const ordersOf = (id) => orders.filter(o => o.truck === id);
-  const routePts = (id) => orders.filter(o => o.truck === id && o.lat && o.lng).map(o => [o.lat, o.lng]);
+  const ordersOf = (id) => orders.filter(o => o.truck === id).sort((a, b) => (a.secuencia_ruta ?? 0) - (b.secuencia_ruta ?? 0));
+  const routePts = (id) => ordersOf(id).filter(o => o.lat && o.lng).map(o => [o.lat, o.lng]);
 
   // ── Optimize ──
   const optimize = async () => {
@@ -354,20 +406,20 @@ export default function DispatcherPanel() {
             })}
           </div>
 
-          {/* SAP Alerts */}
+          {/* Alertas reales (calculadas en vivo desde la BD, no una lista fija) */}
           <div className="border-t border-gray-200 p-3 space-y-2 flex-shrink-0 max-h-[180px] overflow-y-auto">
             <div className="flex items-center gap-1.5 text-red-600 mb-1">
               <AlertCircle className="h-3.5 w-3.5" />
-              <span className="text-[10px] font-bold uppercase tracking-wider">Alertas SAP</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider">Alertas ({alertas.length})</span>
             </div>
-            {SAP_ALERTS.map(a => (
-              <div key={a.id} className="bg-red-50/60 border border-red-100 rounded-lg p-2.5">
-                <div className="flex justify-between items-center mb-0.5">
-                  <span className="text-[10px] font-bold text-red-700">Ped {a.docNum}</span>
-                  <button className="text-[10px] text-orange-600 font-bold hover:underline">Resolver</button>
-                </div>
-                <div className="text-[11px] font-semibold text-gray-700">{a.client}</div>
-                <div className="text-[9px] text-gray-400">{a.error}</div>
+            {alertas.length === 0 && (
+              <p className="text-[10px] text-gray-400 italic">Sin alertas pendientes.</p>
+            )}
+            {alertas.map(a => (
+              <div key={a.doc_num} className="bg-red-50/60 border border-red-100 rounded-lg p-2.5">
+                <span className="text-[10px] font-bold text-red-700">Ped #{a.doc_num}</span>
+                <div className="text-[11px] font-semibold text-gray-700">{a.card_name}</div>
+                <div className="text-[9px] text-gray-400">{a.motivo}</div>
               </div>
             ))}
           </div>
@@ -403,6 +455,7 @@ export default function DispatcherPanel() {
 
             <MapContainer center={CEDIS} zoom={13} className="w-full h-full" zoomControl={false}>
               <MapUpdater coords={focusedCoords} />
+              <MapResizeHandler isPanelOpen={isPanelOpen} />
               <TileLayer
                 attribution='&copy; <a href="https://carto.com">CARTO</a>'
                 url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
@@ -427,24 +480,25 @@ export default function DispatcherPanel() {
                 </Marker>
               ))}
 
-              {/* Routes */}
+              {/* Routes — borde blanco debajo + línea de color encima para efecto "tubo" limpio */}
               {routesGenerated && trucks.filter(t => t.active).map(t => {
                 const pts = routePts(t.id);
                 if (!pts.length) return null;
+                const positions = osrmRoutes[t.id] || [CEDIS, ...pts, CEDIS];
                 return (
                   <React.Fragment key={`r-${t.id}`}>
+                    {/* Sombra/borde blanco debajo */}
+                    <Polyline positions={positions} pathOptions={{ color: '#fff', weight: 8, opacity: 0.9 }} />
+                    {/* Línea de color encima */}
+                    <Polyline positions={positions} pathOptions={{ color: t.color, weight: 4, opacity: 1, lineCap: 'round', lineJoin: 'round' }} />
                     {pts.map((p, i) => (
                       <Marker key={`s-${t.id}-${i}`} position={p} icon={L.divIcon({
                         className: 'custom-div-icon',
-                        html: `<div style="background:${t.color};width:20px;height:20px;border-radius:50%;border:2px solid #fff;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:900;box-shadow:0 2px 4px rgba(0,0,0,0.4);">${i + 1}</div>`,
-                        iconSize: [20, 20],
-                        iconAnchor: [10, 10]
+                        html: `<div style="background:${t.color};width:24px;height:24px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:900;box-shadow:0 2px 6px rgba(0,0,0,0.35);">${i + 1}</div>`,
+                        iconSize: [24, 24],
+                        iconAnchor: [12, 12]
                       })} />
                     ))}
-                    <Polyline 
-                      positions={osrmRoutes[t.id] || [CEDIS, ...pts, CEDIS]} 
-                      pathOptions={{ color: t.color, weight: 4, opacity: 0.8 }} 
-                    />
                   </React.Fragment>
                 );
               })}

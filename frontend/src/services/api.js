@@ -55,6 +55,17 @@ export async function generarRutas(fecha, numCamiones, { signal } = {}) {
 }
 
 /**
+ * Obtiene las alertas reales del día (pedidos sin georreferencia o sin asignar
+ * a ninguna ruta). Calculado en vivo desde la BD, no es una lista fija.
+ * @param {string} fecha — Formato YYYY-MM-DD
+ */
+export async function getAlertas(fecha, { signal } = {}) {
+  const res = await fetch(`${BASE}/alertas?fecha=${fecha}`, { signal });
+  if (!res.ok) throw new Error(`Alertas failed: ${res.status}`);
+  return res.json();
+}
+
+/**
  * Actualiza el estado de despacho de una ruta en específico.
  * @param {number} rutaId
  * @param {string} estado (Borrador, Cargando, Listo, En_Ruta, Finalizada)
