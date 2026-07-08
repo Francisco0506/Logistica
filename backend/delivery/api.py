@@ -16,6 +16,7 @@ class RemisionOut(Schema):
     doc_total: float
     window: str = "09:00 - 12:00"
     eta: str = "09:30 AM"
+    address: str = ""
     lat: Optional[float] = None
     lng: Optional[float] = None
     truck: Optional[str] = None
@@ -46,6 +47,8 @@ def get_remisiones(request, fecha: date):
             "estado": r.estado,
             "ship_to_code": r.destino.ship_to_code if r.destino else "",
             "doc_total": float(r.doc_total),
+            "address": r.destino.street if r.destino and r.destino.street else "Sin direccion en SAP",
+            "eta": r.eta if r.eta else "Pendiente",
             "lat": lat,
             "lng": lng,
             "truck": r.ruta.camion if r.ruta else None
@@ -94,3 +97,25 @@ def get_rutas(request, fecha: date):
             "pedidos_count": r.remisiones.count()
         })
     return result
+
+# 5. Actualizar estado de despacho de una ruta
+class RutaEstadoIn(Schema):
+    estado: str
+
+@api.patch("/dispatcher/rutas/{ruta_id}/estado")
+def update_ruta_estado(request, ruta_id: int, payload: RutaEstadoIn):
+    from datetime import datetime
+    try:
+        ruta = Ruta.objects.get(id=ruta_id)
+        ruta.estado = payload.estado
+        if payload.estado == 'En_Ruta':
+            ruta.hora_salida = datetime.now().time()
+        ruta.save()
+        
+        # También actualizar el estado de sus remisiones
+        if payload.estado == 'En_Ruta':
+            ruta.remisiones.update(estado='En_Camino')
+            
+        return {"status": "success", "message": f"Estado de ruta actualizado a {payload.estado}"}
+    except Ruta.DoesNotExist:
+        return {"status": "error", "message": "Ruta no encontrada"}

@@ -107,7 +107,14 @@ def sync_from_sap(fecha: date):
 def load_mock_data(fecha: date, error_msg=None):
     """
     Carga de datos simulados realistas para desarrollo.
+    Es idempotente: si ya hay datos para esta fecha, no vuelve a crearlos.
     """
+    if Remision.objects.filter(doc_date=fecha).exists():
+        msg = f"Pedidos ya sincronizados para el {fecha}."
+        if error_msg:
+            msg += f" (Nota: Falló la conexión real con SAP B1: {error_msg})"
+        return {"status": "success", "message": msg}
+        
     mock_orders = [
       { "id": 1901, "client": "Pollo Loco Santa Catarina", "total": 14000, "pos": [25.698, -100.495] },
       { "id": 1902, "client": "Pizza Hut Valle", "total": 21000, "pos": [25.681, -100.452] },

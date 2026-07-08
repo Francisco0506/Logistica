@@ -2,9 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { Truck, Box, Clock, AlertTriangle, Navigation, CheckCircle2, RefreshCw, Sliders, Search, Compass, AlertCircle, Eye, Package, User, Plus, X, Power, PowerOff } from 'lucide-react';
+import { Truck, RefreshCw, Sliders, Search, Compass, AlertCircle, Eye, Package, Power, PowerOff, FileText, Download, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, MapPin, User, Clock, Play, Check, Send, Loader } from 'lucide-react';
+import { CEDIS, FLEET, DRIVERS, ID_TO_PLATE, SAP_ALERTS } from '../../config/fleet';
+import { syncSAP, getRemisiones, getRutas, generarRutas, updateRutaEstado } from '../../services/api';
 
-// Corregir icono por defecto de Leaflet
+// ── Leaflet defaults ──
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
@@ -12,608 +14,599 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-// Icono personalizado para camiones
-const createTruckIcon = (color, isActive) => {
-  return L.divIcon({
+const createTruckIcon = (color, isActive) =>
+  L.divIcon({
     className: 'custom-div-icon',
-    html: `<div style="background-color: ${isActive ? color : '#94a3b8'}; width: 32px; height: 32px; border-radius: 50%; border: 3px solid white; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.25);"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 18V6a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h1"/><path d="M14 9h4l4 4v4a1 1 0 0 1-1 1h-1"/><circle cx="7.5" cy="18.5" r="2.5"/><circle cx="17.5" cy="18.5" r="2.5"/></svg></div>`,
-    iconSize: [32, 32],
-    iconAnchor: [16, 16],
+    html: `<div style="background:${isActive ? color : '#cbd5e1'};width:30px;height:30px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 8px rgba(0,0,0,.25)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M14 18V6a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h1"/><path d="M14 9h4l4 4v4a1 1 0 0 1-1 1h-1"/><circle cx="7.5" cy="18.5" r="2.5"/><circle cx="17.5" cy="18.5" r="2.5"/></svg></div>`,
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
   });
-};
 
-const center = [25.693214524592616, -100.48167993202988]; // CEDIS en Santa Catarina
-const defaultDate = "2026-07-05";
+// Fecha dinámica del sistema
+const getToday = () => new Date().toISOString().split('T')[0];
 
-const initialDrivers = ['Roberto Sánchez', 'Luis Garza', 'Mario Gómez', 'Saúl Cano', 'Tono Vega'];
-
-const truckColors = {
-  'T-001': '#F27A18',
-  'T-002': '#D92525',
-  'T-003': '#3b82f6',
-  'T-004': '#10b981',
-  'T-005': '#8b5cf6'
-};
-
-// Datos base de los 5 camiones de Laben
-const baseTrucks = [
-  { id: 'T-001', driver: 'Roberto Sánchez', route: 'Santa Catarina Poniente', load: 85, pos: [25.705, -100.512], color: '#F27A18', nextStop: 'Plaza Sendero', eta: '10:15 AM' },
-  { id: 'T-002', driver: 'Luis Garza', route: 'San Pedro / Valle', load: 68, pos: [25.661, -100.421], color: '#D92525', nextStop: 'HEB San Pedro', eta: '10:45 AM' },
-  { id: 'T-003', driver: 'Mario Gómez', route: 'Mitras / Lincoln', load: 92, pos: [25.728, -100.445], color: '#3b82f6', nextStop: 'Smart Lincoln', eta: '09:50 AM' },
-  { id: 'T-004', driver: 'Saúl Cano', route: 'García Industrial', load: 50, pos: [25.715, -100.535], color: '#10b981', nextStop: 'García Centro', eta: '11:10 AM' },
-  { id: 'T-005', driver: 'Tono Vega', route: 'Centro Monterrey', load: 74, pos: [25.679, -100.352], color: '#8b5cf6', nextStop: 'Pabellón M', eta: '10:30 AM' }
-];
-
-// Excepciones SAP B1
-const sapExceptions = [
-  { id: 1, docNum: 'Ped #1915', client: 'Taquería La Fama', error: 'Falta georreferencia en SAP', type: 'error' },
-  { id: 2, docNum: 'Ped #1918', client: 'Buffet Express', error: 'Excede ventana de chofer', type: 'warning' },
-];
-
-function ChangeMapView({ coords }) {
+function MapUpdater({ coords }) {
   const map = useMap();
-  map.setView(coords, 13, { animate: true });
+  useEffect(() => { map.setView(coords, 13, { animate: true }); }, [coords]);
   return null;
 }
 
+// ── Component ──
 export default function DispatcherPanel() {
-  const [trucks, setTrucks] = useState(baseTrucks.map(t => ({ ...t, active: true })));
-  const [routesGenerated, setRoutesGenerated] = useState(true);
+  const [trucks, setTrucks]             = useState(FLEET.map(t => ({ ...t, active: true })));
+  const [routesGenerated, setRoutesGenerated] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [focusedCoords, setFocusedCoords] = useState(center);
-  
-  // Estado para acordeón expandido en la barra lateral
+  const [searchQuery, setSearchQuery]   = useState('');
+  const [focusedCoords, setFocusedCoords] = useState(CEDIS);
   const [expandedTruck, setExpandedTruck] = useState(null);
+  const [orders, setOrders]             = useState([]);
+  const [rutas, setRutas]               = useState([]);
+  const [syncStatus, setSyncStatus]     = useState('Conectando…');
+  const [orderFilter, setOrderFilter]   = useState('todos');
+  const [orderSearch, setOrderSearch]   = useState('');
+  const [activeTab, setActiveTab]       = useState('pedidos');
+  const [isPanelOpen, setIsPanelOpen]   = useState(true);
+  const [osrmRoutes, setOsrmRoutes]     = useState({});
 
-  // Estados para tabla de pedidos
-  const [orders, setOrders] = useState([]);
-  const [routes, setRoutes] = useState([]);
-  const [syncStatus, setSyncStatus] = useState("Sin sincronizar");
-  const [orderFilter, setOrderFilter] = useState('todos');
-  const [orderSearch, setOrderSearch] = useState('');
-
-  // Modales
-  const [showGeocodeModal, setShowGeocodeModal] = useState(false);
-  const [selectedException, setSelectedException] = useState(null);
-  const [manualAddress, setManualAddress] = useState('');
-
+  // ── OSRM Routing ──
   useEffect(() => {
-    fetchData();
+    const fetchRoutes = async () => {
+      const newOsrm = { ...osrmRoutes };
+      for (const t of trucks.filter(x => x.active)) {
+        const pts = routePts(t.id);
+        if (pts.length === 0) continue;
+        const allPoints = [CEDIS, ...pts, CEDIS]; // Regresa al CEDIS
+        const coordsStr = allPoints.map(p => `${p[1]},${p[0]}`).join(';');
+        try {
+          const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=full&geometries=geojson`);
+          const data = await res.json();
+          if (data.routes && data.routes[0]) {
+            newOsrm[t.id] = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+          }
+        } catch (e) {
+          console.error("OSRM Fetch Error:", e);
+        }
+      }
+      setOsrmRoutes(newOsrm);
+    };
+    if (routesGenerated) fetchRoutes();
+  }, [orders, trucks, routesGenerated]);
+
+  // ── Data fetching con AbortController ──
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchData(controller.signal);
+    return () => controller.abort();
   }, []);
 
-  const fetchData = async () => {
+  const fetchData = async (signal) => {
+    const fecha = getToday();
     try {
-      const syncRes = await fetch(`http://127.0.0.1:8000/api/dispatcher/sync?fecha=${defaultDate}`, { method: 'POST' });
-      const syncData = await syncRes.json();
+      const syncData = await syncSAP(fecha, { signal });
       setSyncStatus(syncData.message);
 
-      const remRes = await fetch(`http://127.0.0.1:8000/api/dispatcher/remisiones?fecha=${defaultDate}`);
-      const remData = await remRes.json();
-      setOrders(remData);
+      const remData = await getRemisiones(fecha, { signal });
+      setOrders(remData.map(o => ({ ...o, truck: ID_TO_PLATE[o.truck] || o.truck || null })));
 
-      const rutRes = await fetch(`http://127.0.0.1:8000/api/dispatcher/rutas?fecha=${defaultDate}`);
-      const rutData = await rutRes.json();
-      setRoutes(rutData);
-      
-      if (rutData.length > 0) {
-        setRoutesGenerated(true);
-      }
+      const rutData = await getRutas(fecha, { signal });
+      setRutas(rutData);
+      if (rutData.length > 0) setRoutesGenerated(true);
     } catch (e) {
-      console.error("Error conectando con el backend Django:", e);
-      setSyncStatus("Error de conexión (cargando datos locales)");
+      if (e.name === 'AbortError') return; // StrictMode unmount — ignore
+      console.error('Backend error:', e);
+      setSyncStatus('Sin conexión — datos simulados');
     }
   };
 
-  // Alternar el estado activo/inactivo de un camión específico
-  const toggleTruckActive = (id) => {
+  // ── Truck toggle ──
+  const toggleTruck = (id) =>
     setTrucks(prev => prev.map(t => {
-      if (t.id === id) {
-        const newActive = !t.active;
-        // Si desactivamos el camión, quitamos sus órdenes asociadas
-        if (!newActive) {
-          setOrders(ordersArr => ordersArr.map(o => o.truck === id ? { ...o, truck: null, estado: 'Pendiente' } : o));
-        }
-        return { ...t, active: newActive };
-      }
-      return t;
+      if (t.id !== id) return t;
+      const next = !t.active;
+      if (!next) setOrders(o => o.map(x => x.truck === id ? { ...x, truck: null, estado: 'Pendiente' } : x));
+      return { ...t, active: next };
     }));
+
+  const changeDriver = (id, d) => setTrucks(p => p.map(t => t.id === id ? { ...t, driver: d } : t));
+
+  // ── Dispatch Actions ──
+  const changeTruckState = async (truckId, newState) => {
+    const ruta = rutas.find(r => ID_TO_PLATE[r.camion] === truckId || r.camion === truckId);
+    if (!ruta) {
+        alert('Ruta no encontrada para este camión. Genera rutas primero.');
+        return;
+    }
+    try {
+      await updateRutaEstado(ruta.id, newState);
+      await fetchData(); // Refresh to sync ETAs and statuses
+    } catch (e) {
+      alert('Error cambiando estado: ' + e.message);
+    }
   };
 
-  // Cambiar chofer de un camión de forma manual
-  const handleDriverChange = (truckId, newDriver) => {
-    setTrucks(prev => prev.map(t => t.id === truckId ? { ...t, driver: newDriver } : t));
-  };
-
-  // Filtrar camiones por buscador
-  const searchedTrucks = trucks.filter(t => 
-    t.id.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    t.driver.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    t.route.toLowerCase().includes(searchQuery.toLowerCase())
+  // ── Filters ──
+  const visibleTrucks = trucks.filter(t =>
+    t.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    t.driver.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Filtrar pedidos según el estado de camiones activos
-  const filteredOrders = orders.filter(o => {
-    if (o.truck) {
-      const truck = trucks.find(t => t.id === o.truck);
-      if (!truck || !truck.active) return false;
-    }
-
-    if (orderFilter !== 'todos' && o.estado.toLowerCase() !== orderFilter.toLowerCase()) return false;
-
+  const visibleOrders = orders.filter(o => {
+    if (o.truck) { const t = trucks.find(x => x.id === o.truck); if (!t?.active) return false; }
+    if (orderFilter !== 'todos' && o.estado?.toLowerCase() !== orderFilter) return false;
     if (orderSearch) {
       const q = orderSearch.toLowerCase();
-      return o.card_name.toLowerCase().includes(q) || String(o.doc_num).includes(q) || (o.truck && o.truck.toLowerCase().includes(q));
+      return o.card_name?.toLowerCase().includes(q) || String(o.doc_num).includes(q) || o.truck?.toLowerCase().includes(q);
     }
     return true;
   });
 
-  // Optimizar rutas dinámicamente con los camiones que Norberto dejó ACTIVOS
-  const handleGenerateRoutes = async () => {
+  const ordersOf = (id) => orders.filter(o => o.truck === id);
+  const routePts = (id) => orders.filter(o => o.truck === id && o.lat && o.lng).map(o => [o.lat, o.lng]);
+
+  // ── Optimize ──
+  const optimize = async () => {
     setIsOptimizing(true);
     setRoutesGenerated(false);
-    const activeVehiclesCount = trucks.filter(t => t.active).length;
-
-    if (activeVehiclesCount === 0) {
-      alert("Debes activar al menos un camión en la flota para optimizar.");
-      setIsOptimizing(false);
-      return;
-    }
-
+    const fecha = getToday();
+    const n = trucks.filter(t => t.active).length;
+    if (!n) { alert('Activa al menos un camión.'); setIsOptimizing(false); return; }
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/dispatcher/rutas/generar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fecha: defaultDate,
-          numero_camiones: activeVehiclesCount
-        })
-      });
-      const data = await res.json();
-      if (data.status === 'success') {
-        await fetchData();
-      } else {
-        alert(data.message);
-      }
-    } catch (e) {
-      console.error("Error optimizando rutas:", e);
-      alert("Error en el optimizador matemático del backend.");
-    } finally {
-      setIsOptimizing(false);
-    }
+      const data = await generarRutas(fecha, n);
+      if (data.status === 'success') await fetchData();
+      else alert(data.message);
+    } catch { alert('Error del optimizador.'); }
+    finally { setIsOptimizing(false); }
   };
 
-  const handleFocusPoint = (pos) => {
-    if (pos && pos[0] && pos[1]) {
-      setFocusedCoords(pos);
-    }
-  };
+  const focus = (pos) => pos?.[0] && pos?.[1] && setFocusedCoords(pos);
 
-  // Obtener pedidos específicos asignados a un camión
-  const getOrdersForTruck = (truckId) => {
-    return orders.filter(o => o.truck === truckId);
-  };
+  const colorOf = (plate) => trucks.find(t => t.id === plate)?.color || '#94a3b8';
 
-  // Obtener puntos de ruta para las polilíneas de un camión a partir de las órdenes asignadas
-  const getRoutePointsForTruck = (truckId) => {
-    return orders
-      .filter(o => o.truck === truckId && o.lat && o.lng)
-      .map(o => [o.lat, o.lng]);
-  };
-
-  // Abrir modal de geocodificación
-  const openGeocodeResolver = (exc) => {
-    setSelectedException(exc);
-    setManualAddress(exc.client);
-    setShowGeocodeModal(true);
-  };
-
-  const saveGeocode = () => {
-    alert(`Georreferencia guardada para ${selectedException.client}. Coordenadas: 25.685, -100.460`);
-    setShowGeocodeModal(false);
-  };
-
+  // ── JSX ──
   return (
-    <div className="flex flex-col h-screen w-full bg-slate-50 text-slate-700 font-sans overflow-hidden">
-      
-      {/* Top Header */}
-      <div className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-sm z-20 flex-shrink-0">
+    <div className="flex flex-col h-screen w-full bg-gray-50 text-gray-800 overflow-hidden" style={{ fontFamily: "'Inter', sans-serif" }}>
+
+      {/* ═══ HEADER ═══ */}
+      <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0 z-20">
         <div className="flex items-center gap-3">
-          <div className="flex-shrink-0">
-            <svg width="40" height="32" viewBox="0 0 100 80" className="drop-shadow-sm">
-              <path d="M 10,20 L 50,45 L 90,20 L 75,10 L 50,25 L 25,10 Z" fill="#F27A18" />
-              <path d="M 10,40 L 50,65 L 90,40 L 80,32 L 50,52 L 20,32 Z" fill="#D92525" />
-            </svg>
-          </div>
+          <svg width="38" height="30" viewBox="0 0 100 80">
+            <path d="M10,20 L50,45 L90,20 L75,10 L50,25 L25,10Z" fill="#F27A18" />
+            <path d="M10,40 L50,65 L90,40 L80,32 L50,52 L20,32Z" fill="#D92525" />
+          </svg>
           <div>
-            <h1 className="text-2xl font-black text-slate-800 tracking-tight leading-none">LABEN</h1>
-            <p className="text-[10px] text-slate-400 font-bold tracking-widest uppercase mt-1">Food Service · Consola de Despacho</p>
+            <h1 className="text-xl font-black text-gray-900 tracking-tight leading-none">LABEN</h1>
+            <p className="text-[9px] text-gray-400 font-bold tracking-[.2em] uppercase">Food Service · Despacho</p>
           </div>
         </div>
-
-        <div className="flex items-center gap-6">
-          <div className="bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-1.5 flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-            <span className="text-xs font-bold text-emerald-800 uppercase tracking-wide">SAP B1 Conectado</span>
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="text-[10px] font-bold text-emerald-700 uppercase">SAP B1</span>
           </div>
-          <span className="text-xs font-extrabold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl">
-            Norberto (Dispatcher)
-          </span>
+          <div className="flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-1.5">
+            <User className="h-3.5 w-3.5 text-gray-500" />
+            <span className="text-xs font-bold text-gray-700">Norberto</span>
+          </div>
         </div>
-      </div>
+      </header>
 
-      {/* Main Container */}
-      <div className="flex-1 flex flex-col min-h-0 overflow-y-auto">
-        
-        {/* Sección Superior: Mapa y Gestor de Flota */}
-        <div className="flex h-[58%] min-h-[400px] w-full border-b border-slate-200 flex-shrink-0">
-          
-          {/* Panel Lateral: Gestor de Flota Completo */}
-          <div className="w-96 bg-white flex flex-col h-full border-r border-slate-200 flex-shrink-0 overflow-hidden">
-            
-            {/* Cabecera del Gestor de Flota */}
-            <div className="p-4 border-b border-slate-200 bg-slate-50/50 space-y-3 flex-shrink-0">
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1.5 text-xs font-bold text-slate-500 uppercase tracking-wider">
-                  <Sliders className="h-4 w-4 text-orange-600" /> Control de Flota
-                </span>
-                <span className="text-[10px] bg-slate-200 text-slate-700 font-extrabold px-2 py-0.5 rounded-full">
-                  {trucks.filter(t => t.active).length} / 5 Camiones Activos
-                </span>
-              </div>
+      {/* ═══ BODY ═══ */}
+      <div className="flex-1 flex min-h-0 relative">
 
-              {/* Botón Optimizar */}
-              <button 
-                onClick={handleGenerateRoutes}
-                disabled={isOptimizing}
-                className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-500 hover:to-red-500 text-white font-extrabold py-2.5 px-4 rounded-xl shadow-md transition-all text-xs"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${isOptimizing ? 'animate-spin' : ''}`} />
-                {isOptimizing ? 'Optimizando con OR-Tools...' : 'Optimizar Rutas del Día'}
-              </button>
+        {/* ─── LEFT SIDEBAR ─── */}
+        <aside className={`relative w-[340px] bg-white border-r border-gray-200 flex flex-col flex-shrink-0 transition-all duration-300 z-10 ${isPanelOpen ? 'ml-0' : '-ml-[340px]'}`}>
+
+          {/* Fleet Header */}
+          <div className="p-4 border-b border-gray-100 space-y-3 flex-shrink-0">
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-1.5 text-[11px] font-extrabold text-gray-500 uppercase tracking-wider">
+                <Sliders className="h-3.5 w-3.5 text-orange-600" /> Control de Flota
+              </span>
+              <span className="text-[10px] bg-orange-50 text-orange-700 font-bold px-2 py-0.5 rounded-md border border-orange-200">
+                {trucks.filter(t => t.active).length}/5
+              </span>
             </div>
+            <button
+              onClick={optimize}
+              disabled={isOptimizing}
+              className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-bold py-2.5 rounded-lg shadow transition-all text-xs disabled:opacity-60"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isOptimizing ? 'animate-spin' : ''}`} />
+              {isOptimizing ? 'Optimizando…' : 'Optimizar Rutas'}
+            </button>
+          </div>
 
-            {/* Buscador */}
-            <div className="p-3 border-b border-slate-200 bg-white flex-shrink-0">
-              <div className="relative">
-                <Search className="absolute inset-y-0 left-0 pl-2.5 h-3.5 w-3.5 my-auto text-slate-400" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-8 pr-3 py-1.5 bg-slate-100 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none"
-                  placeholder="Buscar camión o chofer..."
-                />
-              </div>
+          {/* Search */}
+          <div className="px-4 py-2 border-b border-gray-100 flex-shrink-0">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+              <input
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className="w-full pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium focus:outline-none focus:ring-2 focus:ring-orange-200"
+                placeholder="Buscar placa o chofer…"
+              />
             </div>
+          </div>
 
-            {/* Listado de Camiones (Con Acordeón y Toggles On/Off) */}
-            <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-slate-50/20">
-              {searchedTrucks.map(truck => {
-                const isExpanded = expandedTruck === truck.id;
-                const truckOrders = getOrdersForTruck(truck.id);
+          {/* Truck List */}
+          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+            {visibleTrucks.map(truck => {
+              const expanded = expandedTruck === truck.id;
+              const tOrders = ordersOf(truck.id);
 
-                return (
-                  <div 
-                    key={truck.id} 
-                    className={`bg-white border rounded-xl transition-all shadow-sm relative overflow-hidden ${
-                      truck.active ? 'border-slate-200 hover:border-slate-300' : 'border-slate-200 opacity-60 bg-slate-100/50'
-                    }`}
+              return (
+                <div key={truck.id} className={`rounded-lg border overflow-hidden transition-all ${truck.active ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-50'}`}>
+
+                  {/* Card header */}
+                  <div
+                    className="flex items-center gap-3 px-3 py-2.5 cursor-pointer select-none"
+                    onClick={() => truck.active && setExpandedTruck(expanded ? null : truck.id)}
                   >
-                    <div className="absolute top-0 left-0 w-1 h-full" style={{ backgroundColor: truck.active ? truck.color : '#94a3b8' }}></div>
-                    
-                    {/* Fila principal del camión */}
-                    <div className="p-3 flex justify-between items-center cursor-pointer" onClick={() => truck.active && setExpandedTruck(isExpanded ? null : truck.id)}>
-                      <div className="flex items-center gap-2">
-                        <Truck className="h-4 w-4" style={{ color: truck.active ? truck.color : '#94a3b8' }} />
-                        <div>
-                          <span className="font-extrabold text-slate-800 text-xs">{truck.id}</span>
-                          <span className="text-[10px] text-slate-400 ml-2">({truck.route})</span>
-                        </div>
-                      </div>
-
-                      {/* Botón On/Off para Quitar/Agregar camión */}
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleTruckActive(truck.id);
-                        }}
-                        className={`p-1.5 rounded-lg border transition-colors flex items-center justify-center ${
-                          truck.active 
-                            ? 'bg-red-50 hover:bg-red-100 border-red-200 text-red-600' 
-                            : 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-600'
-                        }`}
-                        title={truck.active ? "Quitar Camión de Flota" : "Agregar Camión a Flota"}
-                      >
-                        {truck.active ? <PowerOff className="h-3.5 w-3.5" /> : <Power className="h-3.5 w-3.5" />}
-                      </button>
+                    <Truck className="h-4 w-4 flex-shrink-0" style={{ color: truck.active ? truck.color : '#94a3b8' }} />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-extrabold text-gray-800 text-[13px] tracking-wide">{truck.id}</div>
+                      <div className="text-[10px] text-gray-400 font-medium truncate">{truck.driver} · {truck.route}</div>
                     </div>
 
-                    {/* Contenido expandido (Detalle de paradas y Chofer) */}
-                    {isExpanded && truck.active && (
-                      <div className="border-t border-slate-100 p-3 bg-slate-50/50 space-y-3 text-xs">
-                        
-                        {/* Selector de Chofer */}
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase">Chofer Asignado:</span>
-                          <select 
-                            value={truck.driver}
-                            onChange={(e) => handleDriverChange(truck.id, e.target.value)}
-                            className="bg-white border border-slate-200 rounded px-1.5 py-0.5 text-xs font-semibold focus:outline-none"
-                          >
-                            {initialDrivers.map(d => <option key={d} value={d}>{d}</option>)}
-                          </select>
-                        </div>
+                    {/* Order count badge */}
+                    {truck.active && tOrders.length > 0 && (
+                      <span className="text-[9px] font-bold bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-md flex-shrink-0">
+                        {tOrders.length} ped.
+                      </span>
+                    )}
 
-                        {/* Paradas */}
-                        <div className="space-y-1.5">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Secuencia de Entregas:</span>
-                          {truckOrders.length > 0 ? (
-                            truckOrders.map((o, idx) => (
-                              <div 
-                                key={o.id} 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleFocusPoint([o.lat, o.lng]);
-                                }}
-                                className="flex justify-between items-center bg-white p-2 rounded-lg border border-slate-150 hover:border-slate-300 transition-all cursor-pointer"
-                              >
-                                <span className="font-bold truncate text-[11px]">{idx + 1}. {o.card_name}</span>
-                                <span className="text-[10px] font-mono text-slate-500 font-bold flex-shrink-0 ml-2">{o.eta}</span>
-                              </div>
-                            ))
-                          ) : (
-                            <p className="text-[10px] text-slate-400 italic">No hay pedidos asignados.</p>
-                          )}
-                        </div>
-                      </div>
+                    {/* Toggle */}
+                    <button
+                      onClick={e => { e.stopPropagation(); toggleTruck(truck.id); }}
+                      className={`p-1.5 rounded-lg border transition flex-shrink-0 ${truck.active ? 'bg-orange-50 border-orange-200 text-orange-500 hover:bg-orange-100' : 'bg-gray-100 border-gray-200 text-gray-400 hover:bg-gray-200'}`}
+                      title={truck.active ? 'Desactivar' : 'Activar'}
+                    >
+                      <Truck className="h-3.5 w-3.5" />
+                    </button>
+
+                    {/* Chevron */}
+                    {truck.active && (
+                      expanded ? <ChevronUp className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
                     )}
                   </div>
-                );
-              })}
-            </div>
+
+                  {/* Expanded detail */}
+                  {expanded && truck.active && (
+                    <div className="border-t border-gray-100 bg-gray-50/60 px-4 py-3 space-y-3 text-xs">
+                      {/* Driver select */}
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-gray-400 uppercase">Chofer</span>
+                        <select
+                          value={truck.driver}
+                          onChange={e => changeDriver(truck.id, e.target.value)}
+                          className="bg-white border border-gray-200 rounded px-2 py-0.5 text-xs font-semibold focus:outline-none"
+                        >
+                          {DRIVERS.map(d => <option key={d}>{d}</option>)}
+                        </select>
+                      </div>
+
+                      {/* Dispatch Controls */}
+                      {(() => {
+                        const r = rutas.find(x => ID_TO_PLATE[x.camion] === truck.id || x.camion === truck.id);
+                        if (!r) return null;
+                        
+                        return (
+                          <div className="bg-white p-2 rounded-lg border border-gray-200 flex flex-col gap-2">
+                            <span className="text-[10px] font-bold text-gray-400 uppercase">Estado: {r.estado}</span>
+                            <div className="grid grid-cols-3 gap-1">
+                              <button 
+                                onClick={() => changeTruckState(truck.id, 'Cargando')}
+                                disabled={r.estado !== 'Borrador'}
+                                className={`flex flex-col items-center justify-center p-1.5 rounded border transition-all ${r.estado === 'Borrador' ? 'bg-orange-50 border-orange-200 text-orange-600 hover:bg-orange-100 cursor-pointer' : 'bg-gray-50 border-gray-100 text-gray-300'}`}
+                              >
+                                <Loader className="w-3.5 h-3.5 mb-0.5" /> <span className="text-[9px] font-bold">Cargar</span>
+                              </button>
+                              <button 
+                                onClick={() => changeTruckState(truck.id, 'Listo')}
+                                disabled={r.estado !== 'Cargando'}
+                                className={`flex flex-col items-center justify-center p-1.5 rounded border transition-all ${r.estado === 'Cargando' ? 'bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100 cursor-pointer' : 'bg-gray-50 border-gray-100 text-gray-300'}`}
+                              >
+                                <Check className="w-3.5 h-3.5 mb-0.5" /> <span className="text-[9px] font-bold">Listo</span>
+                              </button>
+                              <button 
+                                onClick={() => changeTruckState(truck.id, 'En_Ruta')}
+                                disabled={r.estado !== 'Listo'}
+                                className={`flex flex-col items-center justify-center p-1.5 rounded border transition-all ${r.estado === 'Listo' ? 'bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-100 cursor-pointer' : 'bg-gray-50 border-gray-100 text-gray-300'}`}
+                              >
+                                <Play className="w-3.5 h-3.5 mb-0.5" /> <span className="text-[9px] font-bold">Salida</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Stops */}
+                      <div>
+                        <span className="text-[10px] font-bold text-gray-400 uppercase block mb-1.5">Paradas ({tOrders.length})</span>
+                        {tOrders.length > 0 ? (
+                          <div className="space-y-1.5 max-h-[140px] overflow-y-auto pr-1">
+                            {tOrders.map((o, i) => (
+                              <div
+                                key={o.id}
+                                onClick={e => { e.stopPropagation(); focus([o.lat, o.lng]); }}
+                                className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-2.5 py-2 cursor-pointer hover:border-gray-300 transition"
+                              >
+                                <span className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0" style={{ backgroundColor: truck.color }}>{i + 1}</span>
+                                <div className="flex-1 min-w-0">
+                                  <div className="font-bold text-gray-700 text-[11px] truncate">
+                                    <span className="text-gray-400">#{o.doc_num}</span> {o.card_name}
+                                  </div>
+                                  <div className="text-[9px] text-gray-500 font-medium flex items-center gap-1">
+                                    <Clock className="w-3 h-3" /> {o.eta || 'Pendiente'}
+                                  </div>
+                                </div>
+                                <MapPin className="h-3 w-3 text-gray-300 flex-shrink-0" />
+                              </div>
+                            ))}
+                          </div>
+                        ) : <p className="text-[10px] text-gray-400 italic">Sin paradas aún. Presiona Optimizar.</p>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
-          {/* Mapa Claro */}
-          <div className="flex-1 relative h-full bg-slate-100">
-            <button 
-              onClick={() => handleFocusPoint(center)}
-              className="absolute top-4 right-4 z-[400] bg-white hover:bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl shadow-md flex items-center gap-1.5 text-xs font-bold text-slate-700"
+          {/* SAP Alerts */}
+          <div className="border-t border-gray-200 p-3 space-y-2 flex-shrink-0 max-h-[180px] overflow-y-auto">
+            <div className="flex items-center gap-1.5 text-red-600 mb-1">
+              <AlertCircle className="h-3.5 w-3.5" />
+              <span className="text-[10px] font-bold uppercase tracking-wider">Alertas SAP</span>
+            </div>
+            {SAP_ALERTS.map(a => (
+              <div key={a.id} className="bg-red-50/60 border border-red-100 rounded-lg p-2.5">
+                <div className="flex justify-between items-center mb-0.5">
+                  <span className="text-[10px] font-bold text-red-700">Ped {a.docNum}</span>
+                  <button className="text-[10px] text-orange-600 font-bold hover:underline">Resolver</button>
+                </div>
+                <div className="text-[11px] font-semibold text-gray-700">{a.client}</div>
+                <div className="text-[9px] text-gray-400">{a.error}</div>
+              </div>
+            ))}
+          </div>
+        </aside>
+
+        {/* ─── MAP AREA ─── */}
+        <div className="flex-1 flex flex-col min-w-0 bg-gray-100 relative">
+
+          {/* Collapsible toggle handle floating dynamically over the map edge */}
+          <button
+            onClick={() => setIsPanelOpen(!isPanelOpen)}
+            className="absolute top-1/2 -translate-y-1/2 left-0 z-[2000] bg-white border border-l-0 border-gray-200 text-gray-500 hover:text-gray-800 rounded-r-md p-1 shadow-md hover:shadow-lg transition-all flex items-center justify-center cursor-pointer w-4 h-14"
+            title={isPanelOpen ? "Ocultar Panel" : "Mostrar Panel"}
+          >
+            {isPanelOpen ? (
+              <ChevronLeft className="w-3.5 h-3.5" />
+            ) : (
+              <ChevronRight className="w-3.5 h-3.5" />
+            )}
+          </button>
+
+          <div className="flex-1 relative">
+            <button
+              onClick={() => focus(CEDIS)}
+              className="absolute top-3 right-3 z-[400] bg-white/95 border border-gray-200 px-3 py-1.5 rounded-lg shadow-sm flex items-center gap-1.5 text-[11px] font-bold text-gray-700 hover:bg-gray-50 transition"
             >
-              <Compass className="h-4 w-4 text-orange-600" /> CEDIS Base
+              <Compass className="h-3.5 w-3.5 text-orange-600" /> CEDIS
             </button>
 
-            <div className="absolute bottom-4 left-4 z-[400] bg-white/95 border border-slate-200 px-3 py-2 rounded-xl shadow-md text-[10px] font-bold text-slate-500 max-w-[280px]">
+            <div className="absolute bottom-3 left-3 z-[400] bg-white/90 border border-gray-200 px-3 py-1.5 rounded-lg shadow-sm text-[10px] font-semibold text-gray-500 max-w-[260px]">
               {syncStatus}
             </div>
 
-            <div className="w-full h-full z-0">
-              <MapContainer center={center} zoom={13} className="w-full h-full" zoomControl={false}>
-                <ChangeMapView coords={focusedCoords} />
-                <TileLayer
-                  attribution='&copy; <a href="https://carto.com/attributions">CARTO</a>'
-                  url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
-                />
-                
-                {/* CEDIS */}
-                <Marker position={center} icon={L.divIcon({
-                    className: 'custom-depot-icon',
-                    html: `<div style="background-color: #0f172a; width: 28px; height: 28px; border-radius: 8px; border: 3px solid #fff; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 8px rgba(0,0,0,0.2);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg></div>`,
-                    iconSize: [28, 28],
-                })}>
+            <MapContainer center={CEDIS} zoom={13} className="w-full h-full" zoomControl={false}>
+              <MapUpdater coords={focusedCoords} />
+              <TileLayer
+                attribution='&copy; <a href="https://carto.com">CARTO</a>'
+                url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+              />
+
+              {/* CEDIS marker */}
+              <Marker position={CEDIS} icon={L.divIcon({
+                className: '',
+                html: '<div style="background:#0f172a;width:26px;height:26px;border-radius:6px;border:3px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 8px rgba(0,0,0,.2)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><rect x="3" y="3" width="18" height="18" rx="2"/></svg></div>',
+                iconSize: [26, 26],
+              })}>
+                <Popup><b>CEDIS Laben</b><br /><span style={{ fontSize: 11, color: '#64748b' }}>Salida de Embarques</span></Popup>
+              </Marker>
+
+              {/* Trucks */}
+              {trucks.map(t => (
+                <Marker key={t.id} position={t.pos} icon={createTruckIcon(t.color, t.active)}>
                   <Popup>
-                    <div className="font-bold text-slate-800 text-sm">CEDIS Laben</div>
-                    <div className="text-xs text-slate-400">Punto de salida exacto</div>
+                    <b>{t.id}</b> — {t.driver}<br />
+                    <span style={{ fontSize: 11, color: '#64748b' }}>{t.route}</span>
                   </Popup>
                 </Marker>
+              ))}
 
-                {/* Camiones */}
-                {trucks.map(truck => (
-                  <Marker key={truck.id} position={truck.pos} icon={createTruckIcon(truck.color, truck.active)}>
-                    <Popup>
-                      <div className="font-bold text-slate-800">{truck.id} - {truck.driver}</div>
-                      <div className="text-xs text-slate-500">Estado: {truck.active ? 'Activo' : 'Fuera de Servicio'}</div>
-                    </Popup>
-                  </Marker>
-                ))}
-
-                {/* Líneas de rutas */}
-                {routesGenerated && trucks.filter(t => t.active).map(truck => {
-                  const points = getRoutePointsForTruck(truck.id);
-                  if (points.length === 0) return null;
-                  
-                  return (
-                    <React.Fragment key={`lines-${truck.id}`}>
-                      {points.map((pt, idx) => (
-                        <Marker key={`pt-${truck.id}-${idx}`} position={pt} icon={L.divIcon({
-                          className: 'custom-stop',
-                          html: `<div style="background-color: ${truck.color}; width: 10px; height: 10px; border-radius: 50%; border: 2px solid white;"></div>`,
-                          iconSize: [10, 10],
-                        })} />
-                      ))}
-                      <Polyline positions={[center, ...points, truck.pos]} pathOptions={{ color: truck.color, weight: 3, opacity: 0.7 }} />
-                    </React.Fragment>
-                  );
-                })}
-              </MapContainer>
-            </div>
+              {/* Routes */}
+              {routesGenerated && trucks.filter(t => t.active).map(t => {
+                const pts = routePts(t.id);
+                if (!pts.length) return null;
+                return (
+                  <React.Fragment key={`r-${t.id}`}>
+                    {pts.map((p, i) => (
+                      <Marker key={`s-${t.id}-${i}`} position={p} icon={L.divIcon({
+                        className: 'custom-div-icon',
+                        html: `<div style="background:${t.color};width:20px;height:20px;border-radius:50%;border:2px solid #fff;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:900;box-shadow:0 2px 4px rgba(0,0,0,0.4);">${i + 1}</div>`,
+                        iconSize: [20, 20],
+                        iconAnchor: [10, 10]
+                      })} />
+                    ))}
+                    <Polyline 
+                      positions={osrmRoutes[t.id] || [CEDIS, ...pts, CEDIS]} 
+                      pathOptions={{ color: t.color, weight: 4, opacity: 0.8 }} 
+                    />
+                  </React.Fragment>
+                );
+              })}
+            </MapContainer>
           </div>
 
-        </div>
+          {/* ═══ BOTTOM PANEL ═══ */}
+          <div className="h-[340px] flex flex-col border-t border-gray-200 bg-white flex-shrink-0">
 
-        {/* Sección Inferior: Lista de Pedidos */}
-        <div className="flex-grow flex min-h-[300px] bg-white">
-          
-          {/* Panel Izquierdo: Alertas de SAP */}
-          <div className="w-80 border-r border-slate-200 bg-slate-50/50 p-4 space-y-3 flex-shrink-0 flex flex-col overflow-y-auto">
-            <div className="flex items-center gap-1.5 text-red-600">
-              <AlertCircle className="h-4 w-4" />
-              <h3 className="text-xs font-bold uppercase tracking-wider">Alertas de SAP B1</h3>
-            </div>
-            <div className="space-y-2 flex-1">
-              {sapExceptions.map(exc => (
-                <div key={exc.id} className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col shadow-sm animate-pulse-slow">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] bg-red-50 text-red-700 font-extrabold px-1.5 py-0.5 rounded">{exc.docNum}</span>
-                    <button onClick={() => openGeocodeResolver(exc)} className="text-[10px] text-orange-600 font-bold hover:underline">Resolver</button>
-                  </div>
-                  <span className="text-xs font-bold text-slate-700">{exc.client}</span>
-                  <p className="text-[10px] text-slate-400 mt-1">{exc.error}</p>
+            {/* Tab bar */}
+            <div className="flex items-center gap-1 px-5 pt-3 pb-0 flex-shrink-0">
+              <button
+                onClick={() => setActiveTab('pedidos')}
+                className={`flex items-center gap-1.5 px-4 py-2 rounded-t-lg text-xs font-bold transition ${activeTab === 'pedidos' ? 'bg-white border border-b-0 border-gray-200 text-orange-600' : 'text-gray-400 hover:text-gray-600'}`}
+              >
+                <Package className="h-3.5 w-3.5" /> Pedidos del Día
+              </button>
+              <button
+                onClick={() => setActiveTab('manifiesto')}
+                className={`flex items-center gap-1.5 px-4 py-2 rounded-t-lg text-xs font-bold transition ${activeTab === 'manifiesto' ? 'bg-white border border-b-0 border-gray-200 text-orange-600' : 'text-gray-400 hover:text-gray-600'}`}
+              >
+                <FileText className="h-3.5 w-3.5" /> Manifiesto de Carga
+              </button>
+
+              {/* Search (pedidos only) */}
+              {activeTab === 'pedidos' && (
+                <div className="ml-auto relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+                  <input
+                    value={orderSearch}
+                    onChange={e => setOrderSearch(e.target.value)}
+                    className="pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium w-56 focus:outline-none focus:ring-2 focus:ring-orange-200"
+                    placeholder="Buscar pedido…"
+                  />
                 </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Panel Derecho: Tabla de Pedidos */}
-          <div className="flex-1 p-5 flex flex-col min-h-0">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4 flex-shrink-0">
-              <div className="flex items-center gap-2">
-                <Package className="h-5 w-5 text-orange-600" />
-                <h2 className="text-lg font-black text-slate-800">Plan de Carga y Pedidos</h2>
-              </div>
-              
-              <div className="relative w-full sm:w-64">
-                <Search className="absolute inset-y-0 left-0 pl-3 h-4 w-4 my-auto text-slate-400" />
-                <input
-                  type="text"
-                  value={orderSearch}
-                  onChange={(e) => setOrderSearch(e.target.value)}
-                  className="w-full pl-9 pr-4 py-1.5 bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none"
-                  placeholder="Buscar por ID SAP, cliente..."
-                />
-              </div>
+              )}
             </div>
 
-            <div className="flex border-b border-slate-200 gap-6 text-xs font-bold mb-4 flex-shrink-0">
-              {['todos', 'pendiente', 'asignado', 'en_camino', 'entregado'].map(filter => (
-                <button
-                  key={filter}
-                  onClick={() => setOrderFilter(filter)}
-                  className={`pb-2 capitalize border-b-2 transition-all ${
-                    orderFilter === filter
-                      ? 'border-orange-600 text-orange-600'
-                      : 'border-transparent text-slate-400 hover:text-slate-600'
-                  }`}
-                >
-                  {filter.replace('_', ' ')}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex-grow overflow-auto border border-slate-200 rounded-xl">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                    <th className="p-3 pl-4">ID SAP</th>
-                    <th className="p-3">Cliente</th>
-                    <th className="p-3">Vehículo</th>
-                    <th className="p-3">Monto / Cajas</th>
-                    <th className="p-3">Dirección de Entrega</th>
-                    <th className="p-3">Estado</th>
-                    <th className="p-3 pr-4 text-center">Ubicación</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-xs font-semibold text-slate-700">
-                  {filteredOrders.map(order => (
-                    <tr key={order.id} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="p-3 pl-4 font-mono font-bold text-slate-800">#{order.doc_num}</td>
-                      <td className="p-3 font-bold text-slate-800">{order.card_name}</td>
-                      <td className="p-3">
-                        {order.truck ? (
-                          <span className="inline-flex items-center gap-1.5">
-                            <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: truckColors[order.truck] }}></span>
-                            {order.truck}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 italic">No asignado</span>
-                        )}
-                      </td>
-                      <td className="p-3">${order.doc_total.toLocaleString()}</td>
-                      <td className="p-3 text-slate-500 max-w-xs truncate">{order.ship_to_code}</td>
-                      <td className="p-3">
-                        <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                          order.estado === 'Entregado' ? 'bg-emerald-50 text-emerald-700' :
-                          order.estado === 'En_Camino' ? 'bg-blue-50 text-blue-700' :
-                          order.estado === 'Asignado' ? 'bg-orange-50 text-orange-700' : 'bg-slate-100 text-slate-500'
-                        }`}>
-                          {order.estado.replace('_', ' ')}
-                        </span>
-                      </td>
-                      <td className="p-3 pr-4 text-center">
-                        {order.lat && order.lng ? (
-                          <button 
-                            onClick={() => handleFocusPoint([order.lat, order.lng])}
-                            className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-orange-600 transition-colors"
-                            title="Ubicar en Mapa"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </button>
-                        ) : (
-                          <span className="text-slate-400">-</span>
-                        )}
-                      </td>
-                    </tr>
+            {/* ── TAB: PEDIDOS ── */}
+            {activeTab === 'pedidos' && (
+              <div className="flex-1 flex flex-col min-h-0 px-5 pb-3">
+                {/* Status filter */}
+                <div className="flex gap-4 border-b border-gray-200 text-[11px] font-bold mb-2 flex-shrink-0">
+                  {['todos', 'pendiente', 'asignado', 'en_camino', 'entregado'].map(f => (
+                    <button
+                      key={f}
+                      onClick={() => setOrderFilter(f)}
+                      className={`pb-2 capitalize transition border-b-2 ${orderFilter === f ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                    >{f.replace('_', ' ')}</button>
                   ))}
-                  {filteredOrders.length === 0 && (
-                    <tr>
-                      <td colSpan="7" className="text-center py-6 text-slate-400 italic">No hay pedidos disponibles.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+                </div>
+                {/* Table */}
+                <div className="flex-1 overflow-auto rounded-lg border border-gray-200">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-gray-50 border-b border-gray-200 text-[10px] font-bold text-gray-400 uppercase sticky top-0">
+                      <tr>
+                        <th className="px-3 py-2">ID</th>
+                        <th className="px-3 py-2">Cliente</th>
+                        <th className="px-3 py-2">Placa</th>
+                        <th className="px-3 py-2">ID Dirección</th>
+                        <th className="px-3 py-2">Dirección</th>
+                        <th className="px-3 py-2">Estado</th>
+                        <th className="px-3 py-2 text-center">📍</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
+                      {visibleOrders.map(o => (
+                        <tr key={o.id} className="hover:bg-gray-50/60 transition">
+                          <td className="px-3 py-2 font-mono font-bold text-gray-800">#{o.doc_num}</td>
+                          <td className="px-3 py-2 font-semibold">{o.card_name}</td>
+                          <td className="px-3 py-2">
+                            {o.truck ? (
+                              <span className="inline-flex items-center gap-1.5 font-bold">
+                                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colorOf(o.truck) }} />
+                                {o.truck}
+                              </span>
+                            ) : <span className="text-gray-400 italic text-[10px]">—</span>}
+                          </td>
+                          <td className="px-3 py-2 font-mono font-bold text-gray-600">{o.ship_to_code}</td>
+                          <td className="px-3 py-2 text-gray-500 truncate max-w-[180px]" title={o.address}>{o.address || 'Sin dirección'}</td>
+                          <td className="px-3 py-2">
+                            <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
+                              o.estado === 'Entregado' ? 'bg-emerald-50 text-emerald-700' :
+                              o.estado === 'En_Camino' ? 'bg-blue-50 text-blue-700' :
+                              o.estado === 'Asignado'  ? 'bg-orange-50 text-orange-700' :
+                              'bg-gray-100 text-gray-500'
+                            }`}>{o.estado?.replace('_', ' ')}</span>
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            {o.lat && o.lng ? (
+                              <button onClick={() => focus([o.lat, o.lng])} className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-orange-600 transition">
+                                <Eye className="h-3.5 w-3.5" />
+                              </button>
+                            ) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                      {!visibleOrders.length && (
+                        <tr><td colSpan="7" className="text-center py-8 text-gray-400 italic">Sin pedidos.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
+            {/* ── TAB: MANIFIESTO DE CARGA ── */}
+            {activeTab === 'manifiesto' && (
+              <div className="flex-1 overflow-auto px-5 py-3">
+                <p className="text-[11px] text-gray-400 mb-3 font-medium">
+                  Orden de carga <b>LIFO</b> — lo primero que se carga en almacén es lo último que se entrega en ruta.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {trucks.filter(t => t.active).map(truck => {
+                    const tOrders = ordersOf(truck.id);
+                    // LIFO: reverse the delivery sequence for loading order
+                    const loadSeq = [...tOrders].reverse();
+
+                    return (
+                      <div key={truck.id} className="border border-gray-200 rounded-xl overflow-hidden bg-white">
+                        {/* Truck header */}
+                        <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100" style={{ borderLeft: `4px solid ${truck.color}` }}>
+                          <div className="flex-1">
+                            <div className="font-extrabold text-gray-800 text-sm">{truck.id}</div>
+                            <div className="text-[10px] text-gray-400 font-medium">{truck.driver}</div>
+                          </div>
+                          <span className="text-[9px] font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded">{tOrders.length} pedidos</span>
+                        </div>
+
+                        {/* Loading sequence */}
+                        <div className="px-3 py-2 space-y-1.5 max-h-[160px] overflow-y-auto">
+                          {loadSeq.length > 0 ? loadSeq.map((o, i) => (
+                            <div key={o.id} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2 text-xs">
+                              <span className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0" style={{ backgroundColor: truck.color }}>{i + 1}</span>
+                              <div className="flex-1 min-w-0">
+                                <div className="font-bold text-gray-700 text-[11px] truncate">{o.card_name}</div>
+                              </div>
+                              <span className="font-bold text-gray-800 text-[11px] flex-shrink-0">${o.doc_total?.toLocaleString()}</span>
+                            </div>
+                          )) : (
+                            <p className="text-[10px] text-gray-400 italic text-center py-4">Sin pedidos asignados.</p>
+                          )}
+                        </div>
+
+                        {/* Download */}
+                        <div className="px-3 pb-3 pt-1">
+                          <button
+                            onClick={() => alert(`Imprimiendo manifiesto: ${truck.id}`)}
+                            className="w-full flex items-center justify-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold py-2 rounded-lg text-[11px] transition border border-gray-200"
+                          >
+                            <Download className="h-3 w-3" /> Descargar Guía
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
-
         </div>
-
       </div>
-
-      {/* Modal interactivo para georreferenciación manual */}
-      {showGeocodeModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl p-6 w-full max-w-md space-y-4">
-            <div className="flex justify-between items-start">
-              <div className="flex items-center gap-2 text-orange-600">
-                <Compass className="h-5 w-5 animate-spin-slow" />
-                <h3 className="font-extrabold text-slate-800">Resolver Georreferencia</h3>
-              </div>
-              <button onClick={() => setShowGeocodeModal(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            
-            <p className="text-xs text-slate-500">
-              El pedido <b>{selectedException?.docNum}</b> de <b>{selectedException?.client}</b> no tiene coordenadas válidas en SAP B1.
-            </p>
-
-            <div className="space-y-3">
-              <div>
-                <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Dirección de búsqueda</label>
-                <input 
-                  type="text" 
-                  value={manualAddress} 
-                  onChange={(e) => setManualAddress(e.target.value)}
-                  className="w-full bg-slate-100 border border-slate-200 rounded-lg px-3 py-2 text-xs font-semibold focus:outline-none focus:bg-white" 
-                />
-              </div>
-              <div className="bg-slate-200 rounded-xl h-36 flex items-center justify-center text-xs text-slate-400 border border-slate-300">
-                [Minimapa para dar clic]
-              </div>
-            </div>
-
-            <div className="flex gap-2 pt-2">
-              <button onClick={() => setShowGeocodeModal(false)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-xl text-xs">
-                Cancelar
-              </button>
-              <button onClick={saveGeocode} className="flex-1 bg-orange-600 hover:bg-orange-500 text-white font-bold py-2 rounded-xl text-xs shadow-md">
-                Guardar Posición
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
     </div>
   );
 }

@@ -3,6 +3,8 @@ from django.db import models
 class Ruta(models.Model):
     ESTADOS = [
         ('Borrador', 'En preparación'),
+        ('Cargando', 'Cargando mercancía'),
+        ('Listo', 'Listo para salir'),
         ('En_Ruta', 'En ruta'),
         ('Finalizada', 'Finalizada'),
     ]
@@ -10,6 +12,7 @@ class Ruta(models.Model):
     camion = models.CharField(max_length=100)
     chofer = models.CharField(max_length=100)
     estado = models.CharField(max_length=20, choices=ESTADOS, default='Borrador')
+    hora_salida = models.TimeField(null=True, blank=True)
     creado_en = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -69,6 +72,7 @@ class Remision(models.Model):
     destino = models.ForeignKey(Destino, on_delete=models.SET_NULL, null=True)
     ruta = models.ForeignKey(Ruta, on_delete=models.SET_NULL, null=True, blank=True, related_name='remisiones')
     secuencia_ruta = models.IntegerField(null=True, blank=True)
+    eta = models.CharField(max_length=20, null=True, blank=True)
     
     estado = models.CharField(max_length=20, choices=ESTADOS, default='Pendiente')
     ultima_actualizacion = models.DateTimeField(auto_now=True)
