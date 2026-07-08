@@ -83,17 +83,23 @@ export default function DispatcherPanel() {
         }
         const allPoints = [CEDIS, ...pts, CEDIS];
         const coordsStr = allPoints.map(p => `${p[1]},${p[0]}`).join(';');
-        try {
-          const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=full&geometries=geojson&exclude=${OSRM_EXCLUDE}`);
-          const data = await res.json();
-          if (data.routes && data.routes[0]) {
-            return [t.id, data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]), signature];
+        const baseUrl = `https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=full&geometries=geojson`;
+        // El servidor público de OSRM no soporta excluir autopistas en su perfil
+        // por defecto (responde 400 "Exclude flag combination is not supported").
+        // Se intenta igual por si algún día se apunta a un servidor propio, y si
+        // falla se reintenta sin exclude — mejor calles reales que nada.
+        for (const url of [`${baseUrl}&exclude=${OSRM_EXCLUDE}`, baseUrl]) {
+          try {
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.routes && data.routes[0]) {
+              return [t.id, data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]), signature];
+            }
+          } catch (e) {
+            console.error("OSRM Fetch Error:", e);
           }
-          return [t.id, null, null];
-        } catch (e) {
-          console.error("OSRM Fetch Error:", e);
-          return [t.id, null, null];
         }
+        return [t.id, null, null];
       }));
 
       const newOsrm = {};

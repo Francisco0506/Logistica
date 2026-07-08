@@ -28,35 +28,50 @@ def haversine_distance(lat1, lon1, lat2, lon2):
 def osrm_table(locations):
     """
     Pide a OSRM la matriz real de distancias (metros) y tiempos (segundos) entre
-    todos los puntos, evitando autopistas de cuota. `locations` es una lista de
-    (lat, lng). Regresa (distance_matrix_m, duration_matrix_s) o None si falla.
+    todos los puntos. `locations` es una lista de (lat, lng). Regresa
+    (distance_matrix_m, duration_matrix_s) o None si falla.
+
+    NOTA IMPORTANTE: el servidor público de demostración de OSRM
+    (router.project-osrm.org) usa el perfil de coche por defecto, que NO tiene
+    configuradas clases excluibles — pedirle `exclude=motorway` responde
+    "Exclude flag combination is not supported" (400). Es decir, con este
+    servidor gratuito NO se puede evitar autopistas/casetas de forma real.
+    Se intenta primero con la exclusión (funcionaría si algún día se apunta a
+    un servidor OSRM propio con un perfil que sí defina esa clase excluible) y,
+    si el servidor la rechaza, se reintenta sin excluir nada — mejor calles
+    reales sin evitar casetas que no tener ninguna respuesta.
     """
     coords_str = ";".join(f"{lng},{lat}" for lat, lng in locations)
     url = f"{OSRM_BASE}/table/v1/driving/{coords_str}"
-    params = {"annotations": "distance,duration", "exclude": OSRM_EXCLUDE}
-    try:
-        resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("code") != "Ok":
-            return None
-        return data["distances"], data["durations"]
-    except (requests.RequestException, KeyError, ValueError):
-        return None
+    for params, evito_casetas in (
+        ({"annotations": "distance,duration", "exclude": OSRM_EXCLUDE}, True),
+        ({"annotations": "distance,duration"}, False),
+    ):
+        try:
+            resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+            data = resp.json()
+            if data.get("code") == "Ok":
+                return data["distances"], data["durations"], evito_casetas
+        except (requests.RequestException, KeyError, ValueError):
+            continue
+    return None
 
 
 def build_distance_time_matrices(locations, velocidad_kmh_fallback):
     """
-    Intenta construir las matrices con OSRM (calles reales, sin autopistas de
-    cuota). Si el servicio no responde, cae a Haversine en línea recta para no
-    tronar el optimizador, pero el resultado ya no evita casetas en ese caso.
+    Intenta construir las matrices con OSRM (calles reales). Si el servicio no
+    responde en absoluto, cae a Haversine en línea recta para no tronar el
+    optimizador. Regresa (distance_matrix, time_matrix_min, fuente) donde
+    fuente es "osrm_sin_casetas", "osrm" (calles reales pero sin garantía de
+    evitar casetas) o "haversine" (línea recta, respaldo último).
     """
     osrm_result = osrm_table(locations)
     if osrm_result:
-        distances_m, durations_s = osrm_result
+        distances_m, durations_s, evito_casetas = osrm_result
         distance_matrix = [[int(d) for d in row] for row in distances_m]
         time_matrix_min = [[int(d / 60) for d in row] for row in durations_s]
-        return distance_matrix, time_matrix_min, True
+        fuente = "osrm_sin_casetas" if evito_casetas else "osrm"
+        return distance_matrix, time_matrix_min, fuente
 
     n = len(locations)
     distance_matrix = [[0] * n for _ in range(n)]
@@ -66,7 +81,7 @@ def build_distance_time_matrices(locations, velocidad_kmh_fallback):
             dist_km = haversine_distance(locations[i][0], locations[i][1], locations[j][0], locations[j][1])
             distance_matrix[i][j] = int(dist_km * 1000)
             time_matrix_min[i][j] = int((dist_km / velocidad_kmh_fallback) * 60)
-    return distance_matrix, time_matrix_min, False
+    return distance_matrix, time_matrix_min, "haversine"
 
 
 def geocode_address(street, city, state="Nuevo Leon", country="Mexico"):

@@ -77,7 +77,7 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords):
     if len(locations) <= 1:
         return {'sin_solucion': True, 'remisiones_sin_geo': remisiones_sin_geo}
 
-    distance_matrix, time_matrix, uso_osrm = build_distance_time_matrices(locations, VELOCIDAD_PROMEDIO_KMH)
+    distance_matrix, time_matrix, fuente_matriz = build_distance_time_matrices(locations, VELOCIDAD_PROMEDIO_KMH)
 
     # Sumar tiempo de descarga a cada columna destino (excepto el regreso al CEDIS)
     for i in range(len(time_matrix)):
@@ -98,7 +98,7 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords):
         'depot': 0,
         'remisiones_validas': remisiones_validas,
         'remisiones_sin_geo': remisiones_sin_geo,
-        'uso_osrm': uso_osrm,
+        'fuente_matriz': fuente_matriz,
     }
 
 
@@ -260,8 +260,12 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords):
         ]
         pedidos_sin_geo = [r.doc_num for r in data['remisiones_sin_geo']]
 
-        message = "Rutas generadas con distancias reales de calle (evitando casetas)." if data['uso_osrm'] \
-            else "Rutas generadas con distancia en línea recta: OSRM no respondió, no se garantiza evitar casetas."
+        mensajes_fuente = {
+            "osrm_sin_casetas": "Rutas generadas con distancias reales de calle, evitando autopistas de cuota.",
+            "osrm": "Rutas generadas con distancias reales de calle. El servidor de ruteo no soportó evitar casetas en esta corrida.",
+            "haversine": "OSRM no respondió: rutas generadas en línea recta, sin garantía de evitar casetas.",
+        }
+        message = mensajes_fuente[data['fuente_matriz']]
         if pedidos_no_asignados:
             message += f" {len(pedidos_no_asignados)} pedido(s) no cupieron en ninguna ruta: {pedidos_no_asignados}."
         if pedidos_sin_geo:
