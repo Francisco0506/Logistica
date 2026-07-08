@@ -2,6 +2,7 @@ import os
 from datetime import date
 from django.db import transaction
 from .models import Remision, Destino
+from .routing_service import geocode_address
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -26,43 +27,77 @@ def sync_from_sap(fecha: date):
     db_port = os.getenv("SAP_DB_PORT", "1433")
 
     # Si no están las credenciales configuradas, hacer Mock con datos de prueba realistas
-    if not HAS_PYODBC or not db_host or "your_sap" in db_password:
+    if not HAS_PYODBC or not db_host or not db_password or "your_sap" in db_password:
         return load_mock_data(fecha)
 
     conn_str = f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={db_host},{db_port};DATABASE={db_name};UID={db_user};PWD={db_password}"
-    
+
+    # Nombres de los UDF (campos definidos por el usuario) en SAP B1 que guardan
+    # latitud/longitud y ventanas de horario del Ship-To. Se configuran por .env
+    # porque cada instalación de SAP los nombra distinto y aún no se han confirmado
+    # los nombres reales en la base de este cliente.
+    udf_lat = os.getenv("SAP_UDF_LATITUDE")   # ej. "U_Latitud"
+    udf_lng = os.getenv("SAP_UDF_LONGITUDE")  # ej. "U_Longitud"
+    udf_ini1 = os.getenv("SAP_UDF_HORA_INI1")  # ej. "U_HorarioIni1"
+    udf_fin1 = os.getenv("SAP_UDF_HORA_FIN1")  # ej. "U_HorarioFin1"
+    has_geo_udf = bool(udf_lat and udf_lng)
+    has_window_udf = bool(udf_ini1 and udf_fin1)
+
+    extra_cols = ""
+    if has_geo_udf:
+        extra_cols += f", A.{udf_lat} AS UdfLat, A.{udf_lng} AS UdfLng"
+    if has_window_udf:
+        extra_cols += f", A.{udf_ini1} AS UdfIni1, A.{udf_fin1} AS UdfFin1"
+
     try:
         conn = pyodbc.connect(conn_str, timeout=5)
         cursor = conn.cursor()
-        
-        # Consulta SQL segura de lectura (SELECT) para obtener pedidos pendientes
-        query = """
-            SELECT 
-                O.DocEntry, 
-                O.DocNum, 
-                O.CardCode, 
-                O.CardName, 
-                O.DocDueDate, 
-                O.DocTotal, 
+
+        # Consulta SQL segura de lectura (SELECT) para obtener pedidos pendientes.
+        # A.Address es el ID real de la dirección del Ship-To en SAP (AdresID),
+        # usado como identificador estable en vez del texto libre de la calle.
+        #
+        # El peso NO existe como campo de cabecera en SAP: se calcula sumando, por
+        # cada línea del pedido (RDR1), la cantidad pedida por el peso unitario real
+        # del artículo (OITM.SWeight1, campo estándar del maestro de artículos de
+        # SAP B1 — no requiere UDF). Si un artículo no tiene peso capturado en su
+        # ficha, cuenta como 0 y el pedido queda con el peso parcial de lo que sí
+        # está capturado (mejor una subestimación que un peso 100% inventado).
+        query = f"""
+            SELECT
+                O.DocEntry,
+                O.DocNum,
+                O.CardCode,
+                O.CardName,
+                O.DocDueDate,
+                O.DocTotal,
                 O.SlpCode,
                 (SELECT SlpName FROM OSLP WHERE SlpCode = O.SlpCode) as SlpName,
+                A.Address,
                 A.Street,
                 A.Block,
                 A.City,
-                A.ZipCode
+                A.ZipCode,
+                (
+                    SELECT SUM(L.Quantity * ISNULL(I.SWeight1, 0))
+                    FROM RDR1 L
+                    LEFT JOIN OITM I ON I.ItemCode = L.ItemCode
+                    WHERE L.DocEntry = O.DocEntry
+                ) AS PesoTotalKg
+                {extra_cols}
             FROM ORDR O
             INNER JOIN RDR12 A ON O.DocEntry = A.DocEntry AND A.AdresType = 'S'
             WHERE O.DocStatus = 'O' AND O.DocDueDate = ?
         """
         cursor.execute(query, str(fecha))
         rows = cursor.fetchall()
-        
+
         imported_count = 0
         for row in rows:
-            # Crear o actualizar Destino
+            # Crear o actualizar Destino, usando el AdresID real de SAP como clave estable
             destino, _ = Destino.objects.get_or_create(
                 card_code=row.CardCode,
-                ship_to_code=row.Street or "Dirección Principal",
+                ship_to_code=row.Address or "Dirección Principal",
                 defaults={
                     "street": row.Street,
                     "block": row.Block,
@@ -71,14 +106,25 @@ def sync_from_sap(fecha: date):
                 }
             )
 
-            # Si no tiene coordenadas, simulamos una
-            if not destino.latitude or not destino.longitude:
-                import random
-                lat = 25.6932 + random.uniform(-0.05, 0.05)
-                lng = -100.4816 + random.uniform(-0.05, 0.05)
-                destino.latitude = lat
-                destino.longitude = lng
-                destino.save()
+            if has_window_udf:
+                destino.ini_recibo_1 = getattr(row, "UdfIni1", None)
+                destino.fin_recibo_1 = getattr(row, "UdfFin1", None)
+
+            if has_geo_udf and getattr(row, "UdfLat", None) and getattr(row, "UdfLng", None):
+                destino.latitude = row.UdfLat
+                destino.longitude = row.UdfLng
+            elif not destino.latitude or not destino.longitude:
+                # No hay UDF de geolocalización o SAP no trae el dato: en vez de
+                # inventar una coordenada, se intenta geocodificar la dirección real
+                # (calle/ciudad) contra un servicio real (Nominatim/OSM). Esto es lo
+                # que garantiza que todo pedido con dirección capturada en SAP termine
+                # con coordenada real. Solo si ni siquiera hay texto de dirección
+                # capturado en SAP se deja en None y se reporta como alerta genuina.
+                geo = geocode_address(row.Street, row.City)
+                if geo:
+                    destino.latitude, destino.longitude = geo
+
+            destino.save()
 
             # Crear o actualizar Remision
             Remision.objects.update_or_create(
@@ -92,11 +138,12 @@ def sync_from_sap(fecha: date):
                     "slp_code": str(row.SlpCode),
                     "slp_name": row.SlpName or "Vendedor General",
                     "destino": destino,
+                    "peso_kg": float(row.PesoTotalKg) if getattr(row, "PesoTotalKg", None) else None,
                     "estado": "Pendiente"
                 }
             )
             imported_count += 1
-            
+
         conn.close()
         return {"status": "success", "message": f"Sincronizados {imported_count} pedidos reales desde SAP B1."}
         
