@@ -73,6 +73,11 @@ class Remision(models.Model):
     ruta = models.ForeignKey(Ruta, on_delete=models.SET_NULL, null=True, blank=True, related_name='remisiones')
     secuencia_ruta = models.IntegerField(null=True, blank=True)
     eta = models.CharField(max_length=20, null=True, blank=True)
+
+    # Peso real del pedido en KG. Null cuando SAP no lo trae todavía (ver SAP_UDF_PESO
+    # en sync.py): en ese caso el optimizador usa un estimado fijo y lo marca como tal,
+    # nunca un dato inventado que aparente ser real.
+    peso_kg = models.FloatField(null=True, blank=True)
     
     estado = models.CharField(max_length=20, choices=ESTADOS, default='Pendiente')
     ultima_actualizacion = models.DateTimeField(auto_now=True)
