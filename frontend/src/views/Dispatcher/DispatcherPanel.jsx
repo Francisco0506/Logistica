@@ -30,8 +30,15 @@ const createTruckIcon = (color, isActive) =>
     iconAnchor: [15, 15],
   });
 
-// Fecha dinámica del sistema
-const getToday = () => new Date().toISOString().split('T')[0];
+// Fecha dinámica del sistema, en hora LOCAL (no UTC: toISOString() se
+// adelanta de día después de las 6pm en México y rompe la sincronización).
+const getToday = () => {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
 
 function MapUpdater({ coords }) {
   const map = useMap();

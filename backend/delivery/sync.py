@@ -36,10 +36,24 @@ def sync_from_sap(fecha: date):
     # latitud/longitud y ventanas de horario del Ship-To. Se configuran por .env
     # porque cada instalación de SAP los nombra distinto y aún no se han confirmado
     # los nombres reales en la base de este cliente.
-    udf_lat = os.getenv("SAP_UDF_LATITUDE")   # ej. "U_Latitud"
-    udf_lng = os.getenv("SAP_UDF_LONGITUDE")  # ej. "U_Longitud"
-    udf_ini1 = os.getenv("SAP_UDF_HORA_INI1") # ej. "U_HorarioIni1"
-    udf_fin1 = os.getenv("SAP_UDF_HORA_FIN1") # ej. "U_HorarioFin1"
+    udf_lat = os.getenv("SAP_UDF_LATITUDE", "U_Latitud")
+    udf_lng = os.getenv("SAP_UDF_LONGITUDE", "U_Longitud")
+    udf_ini1 = os.getenv("SAP_UDF_HORA_INI1", "U_IniRecibo1")
+    udf_fin1 = os.getenv("SAP_UDF_HORA_FIN1", "U_FinRecibo1")
+    udf_ini2 = os.getenv("SAP_UDF_HORA_INI2", "U_IniRecibo2")
+    udf_fin2 = os.getenv("SAP_UDF_HORA_FIN2", "U_FinRecibo2")
+    udf_dias = {
+        "ent_lun": os.getenv("SAP_UDF_ENT_LUN", "U_EntLun"),
+        "ent_mar": os.getenv("SAP_UDF_ENT_MAR", "U_EntMar"),
+        "ent_mie": os.getenv("SAP_UDF_ENT_MIE", "U_EntMie"),
+        "ent_jue": os.getenv("SAP_UDF_ENT_JUE", "U_EntJue"),
+        "ent_vie": os.getenv("SAP_UDF_ENT_VIE", "U_EntVie"),
+        "ent_sab": os.getenv("SAP_UDF_ENT_SAB", "U_EntSab"),
+    }
+    udf_contacto = os.getenv("SAP_UDF_CONTACTO", "U_Contacto")
+    udf_telefono = os.getenv("SAP_UDF_TELEFONO", "U_Telefono")
+    udf_referencias = os.getenv("SAP_UDF_REFERENCIAS", "U_Referencias")
+
     has_geo_udf = bool(udf_lat and udf_lng)
     has_window_udf = bool(udf_ini1 and udf_fin1)
 
@@ -48,6 +62,10 @@ def sync_from_sap(fecha: date):
         extra_cols += f", A.{udf_lat} AS UdfLat, A.{udf_lng} AS UdfLng"
     if has_window_udf:
         extra_cols += f", A.{udf_ini1} AS UdfIni1, A.{udf_fin1} AS UdfFin1"
+    extra_cols += f", A.{udf_ini2} AS UdfIni2, A.{udf_fin2} AS UdfFin2"
+    for campo, udf in udf_dias.items():
+        extra_cols += f", A.{udf} AS Udf_{campo}"
+    extra_cols += f", A.{udf_contacto} AS UdfContacto, A.{udf_telefono} AS UdfTelefono, A.{udf_referencias} AS UdfReferencias"
 
     try:
         conn = pyodbc.connect(conn_str, timeout=5)
@@ -109,6 +127,18 @@ def sync_from_sap(fecha: date):
             if has_window_udf:
                 destino.ini_recibo_1 = getattr(row, "UdfIni1", None)
                 destino.fin_recibo_1 = getattr(row, "UdfFin1", None)
+
+            destino.ini_recibo_2 = getattr(row, "UdfIni2", None)
+            destino.fin_recibo_2 = getattr(row, "UdfFin2", None)
+
+            # Días de entrega permitidos: SAP guarda 'S'/'N' en cada UDF
+            for campo in udf_dias:
+                valor = getattr(row, f"Udf_{campo}", None)
+                setattr(destino, campo, str(valor).strip().upper() == "S" if valor is not None else True)
+
+            destino.contacto = getattr(row, "UdfContacto", None)
+            destino.telefono = getattr(row, "UdfTelefono", None)
+            destino.referencias = getattr(row, "UdfReferencias", None)
 
             if has_geo_udf and getattr(row, "UdfLat", None) and getattr(row, "UdfLng", None):
                 destino.latitude = row.UdfLat

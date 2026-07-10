@@ -45,6 +45,11 @@ class Destino(models.Model):
     ent_vie = models.BooleanField(default=True)
     ent_sab = models.BooleanField(default=True)
 
+    # Datos de contacto del Ship-To (UDFs de SAP: U_Contacto, U_Telefono, U_Referencias)
+    contacto = models.CharField(max_length=150, null=True, blank=True)
+    telefono = models.CharField(max_length=30, null=True, blank=True)
+    referencias = models.CharField(max_length=255, null=True, blank=True)
+
     class Meta:
         unique_together = ('card_code', 'ship_to_code')
 
