@@ -10,7 +10,11 @@ api = NinjaAPI(title="Laben Routing API", version="1.0.0")
 # Capacidades promedio en KG por camión y coordenadas de salida del CEDIS.
 # Únicas en todo el backend (frontend/src/config/fleet.js mantiene su propia
 # copia de CEDIS solo para centrar el mapa, no para el cálculo de rutas).
-CAPACIDADES_CAMION_KG = [3500, 3500, 3000, 2500, 2500]
+# VALOR PROVISIONAL: se asume la capacidad del camión más chico de la flota
+# (~3 toneladas de caja) para los 5 camiones, para no arriesgar sobrecarga
+# real en los camiones que en verdad cargan menos. Actualizar en cuanto se
+# confirmen las capacidades reales por camión (tarjeta de circulación).
+CAPACIDADES_CAMION_KG = [3000, 3000, 3000, 3000, 3000]
 DEPOT_COORDS = (25.693214524592616, -100.48167993202988)
 
 # Transiciones válidas del flujo de despacho: no se puede saltar pasos

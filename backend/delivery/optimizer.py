@@ -59,23 +59,36 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords):
     if not remisiones:
         return None
 
-    # Nodo 0 es el CEDIS
-    locations = [depot_coords]
-    demands = [0]
-    time_windows = [(0, MINUTOS_TURNO_MAXIMO)]
-    remisiones_validas = []
+    # Varios documentos (remisiones) del mismo cliente el mismo día llegan al
+    # mismo destino físico: el camión entra una sola vez. Se agrupan por
+    # destino ANTES de armar el modelo VRP para que cada parada real sea un
+    # solo nodo (con el peso sumado), en vez de contar cada documento como una
+    # parada aparte y duplicar tiempo de descarga que en la calle no existe.
+    grupos_por_destino = {}
     remisiones_sin_geo = []
-
     for r in remisiones:
         if r.destino and r.destino.latitude is not None and r.destino.longitude is not None:
-            locations.append((r.destino.latitude, r.destino.longitude))
-            demands.append(int(r.peso_kg) if r.peso_kg else PESO_ESTIMADO_KG)
-            time_windows.append(_ventana_en_minutos(r.destino))
-            remisiones_validas.append(r)
+            grupos_por_destino.setdefault(r.destino_id, []).append(r)
         else:
             # Nunca se asignan silenciosamente: se reportan para que el dispatcher
             # los vea y pueda resolverlos (geocodificar manualmente, etc.)
             remisiones_sin_geo.append(r)
+
+    # Nodo 0 es el CEDIS
+    locations = [depot_coords]
+    demands = [0]
+    time_windows = [(0, MINUTOS_TURNO_MAXIMO)]
+    remisiones_validas = []  # una entrada por nodo: lista de remisiones de esa parada
+
+    for remisiones_del_destino in grupos_por_destino.values():
+        destino = remisiones_del_destino[0].destino
+        locations.append((destino.latitude, destino.longitude))
+        peso_parada = sum(
+            (r.peso_kg if r.peso_kg else PESO_ESTIMADO_KG) for r in remisiones_del_destino
+        )
+        demands.append(int(peso_parada))
+        time_windows.append(_ventana_en_minutos(destino))
+        remisiones_validas.append(remisiones_del_destino)
 
     if len(locations) <= 1:
         return {'sin_solucion': True, 'remisiones_sin_geo': remisiones_sin_geo}
@@ -211,13 +224,15 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords):
 
         Ruta.objects.filter(fecha=fecha, estado='Borrador').delete()
 
+        # remisiones_validas[i] es una LISTA de documentos que comparten parada
+        # (mismo destino) — se recorren y actualizan todos juntos.
         remisiones_validas = data['remisiones_validas']
         nodos_visitados = set()
         rutas_generadas = []
         siguiente_num_camion = 1
         for vehicle_id in range(data['num_vehicles']):
             index = routing.Start(vehicle_id)
-            route_sequence = []
+            route_sequence = []  # lista de paradas; cada parada es una lista de remisiones
 
             while not routing.IsEnd(index):
                 time_var = time_dimension.CumulVar(index)
@@ -226,10 +241,11 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords):
                 node_index = manager.IndexToNode(index)
                 if node_index != 0:
                     nodos_visitados.add(node_index)
-                    remision = remisiones_validas[node_index - 1]
+                    remisiones_parada = remisiones_validas[node_index - 1]
                     eta_time = HORA_CERO + timedelta(minutes=minutos_desde_cero)
-                    remision.eta = eta_time.strftime("%I:%M %p")
-                    route_sequence.append(remision)
+                    for remision in remisiones_parada:
+                        remision.eta = eta_time.strftime("%I:%M %p")
+                    route_sequence.append(remisiones_parada)
 
                 index = solution.Value(routing.NextVar(index))
 
@@ -249,27 +265,32 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords):
                 )
 
                 remisiones_to_update = []
-                for seq, remision in enumerate(route_sequence):
-                    remision.ruta = ruta_obj
-                    remision.secuencia_ruta = seq + 1
-                    remision.estado = 'Asignado'
-                    remisiones_to_update.append(remision)
+                total_documentos = 0
+                for seq, remisiones_parada in enumerate(route_sequence):
+                    for remision in remisiones_parada:
+                        remision.ruta = ruta_obj
+                        remision.secuencia_ruta = seq + 1
+                        remision.estado = 'Asignado'
+                        remisiones_to_update.append(remision)
+                        total_documentos += 1
 
                 Remision.objects.bulk_update(remisiones_to_update, ['ruta', 'secuencia_ruta', 'estado', 'eta'])
 
                 rutas_generadas.append({
                     "ruta_id": ruta_obj.id,
                     "camion": ruta_obj.camion,
-                    "pedidos": len(route_sequence)
+                    "paradas": len(route_sequence),
+                    "pedidos": total_documentos,
                 })
 
         # Pedidos que el solver no pudo colocar en ninguna ruta (capacidad/tiempo
         # insuficientes) + los que no tenían coordenadas: se reportan, nunca se
         # pierden silenciosamente.
         pedidos_no_asignados = [
-            remisiones_validas[i - 1].doc_num
+            remision.doc_num
             for i in range(1, len(remisiones_validas) + 1)
             if i not in nodos_visitados
+            for remision in remisiones_validas[i - 1]
         ]
         pedidos_sin_geo = [r.doc_num for r in data['remisiones_sin_geo']]
 
