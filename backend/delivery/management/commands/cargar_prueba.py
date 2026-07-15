@@ -29,7 +29,10 @@ class Command(BaseCommand):
         fecha = date.fromisoformat(options["fecha"])
         n = options["n"]
 
-        destinos = Destino.objects.all()
+        # Nunca mezclar con el mock hardcodeado de sync.py (load_mock_data usa
+        # direcciones "Calle Falsa #..." y card_code "C-19XX") aunque haya
+        # quedado pegado en la tabla Destino de una sincronizacion vieja.
+        destinos = Destino.objects.exclude(street__startswith="Calle Falsa")
         if options["solo_locales"]:
             destinos = destinos.filter(
                 Q(latitude__range=(25.3, 26.0)) & Q(longitude__range=(-100.8, -100.0))

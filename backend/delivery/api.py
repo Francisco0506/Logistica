@@ -2,7 +2,7 @@ from ninja import NinjaAPI, Schema
 from typing import List, Optional
 from datetime import date, datetime
 from .models import Remision, Ruta, Destino
-from .optimizer import solve_vrp, ESTADOS_RUTA_CONGELADOS
+from .optimizer import solve_vrp, ESTADOS_RUTA_CONGELADOS, sugerir_camiones_para_remision, asignar_manualmente
 from .sync import sync_from_sap
 
 api = NinjaAPI(title="Laben Routing API", version="1.0.0")
@@ -148,6 +148,7 @@ def update_ruta_estado(request, ruta_id: int, payload: RutaEstadoIn):
 # 6. Alertas reales del día: pedidos sin georreferencia o sin asignar a ninguna
 # ruta. Sustituye cualquier lista de alertas fija — se calcula en vivo desde BD.
 class AlertaOut(Schema):
+    id: int
     doc_num: int
     card_name: str
     motivo: str
@@ -159,8 +160,36 @@ def get_alertas(request, fecha: date):
     for r in remisiones:
         sin_geo = not r.destino or r.destino.latitude is None or r.destino.longitude is None
         alertas.append({
+            "id": r.id,
             "doc_num": r.doc_num,
             "card_name": r.card_name,
             "motivo": "Sin georreferencia en SAP B1" if sin_geo else "Pendiente de asignar a una ruta",
         })
     return alertas
+
+# 7. Sugerir en qué camión conviene meter un pedido que quedó sin asignar.
+# No modifica nada: solo calcula opciones para que el despachador decida.
+@api.get("/dispatcher/remisiones/{remision_id}/sugerencias")
+def get_sugerencias(request, remision_id: int):
+    try:
+        remision = Remision.objects.select_related('destino').get(id=remision_id)
+    except Remision.DoesNotExist:
+        return {"error": "Pedido no encontrado."}
+    return sugerir_camiones_para_remision(remision, DEPOT_COORDS)
+
+# 8. Asignar manualmente un pedido a una ruta específica. Si el pedido no cabe
+# limpio (turno, peso o ventana de horario) regresa status='requiere_confirmacion'
+# con el motivo; el despachador debe volver a llamar con forzar=true para
+# confirmar que quiere meterlo de todos modos.
+class AsignarManualIn(Schema):
+    ruta_id: int
+    posicion: Optional[int] = None
+    forzar: bool = False
+
+@api.post("/dispatcher/remisiones/{remision_id}/asignar")
+def post_asignar_manual(request, remision_id: int, payload: AsignarManualIn):
+    try:
+        remision = Remision.objects.select_related('destino').get(id=remision_id)
+    except Remision.DoesNotExist:
+        return {"status": "error", "message": "Pedido no encontrado."}
+    return asignar_manualmente(remision, payload.ruta_id, payload.posicion, payload.forzar)

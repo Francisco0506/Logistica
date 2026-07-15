@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { Truck, RefreshCw, Sliders, Search, Compass, AlertCircle, Eye, Package, Power, PowerOff, FileText, Download, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, MapPin, User, Clock, Play, Check, Send, Loader } from 'lucide-react';
 import { CEDIS, FLEET, DRIVERS, ID_TO_PLATE } from '../../config/fleet';
-import { syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado } from '../../services/api';
+import { syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado, getSugerencias, asignarManual } from '../../services/api';
 
 // Cada cuánto se refresca la vista para traer lo más nuevo (pedidos nuevos de
 // SAP, cambios de estado de otros usuarios) sin que el dispatcher tenga que
@@ -76,6 +76,10 @@ export default function DispatcherPanel() {
   const [osrmRoutes, setOsrmRoutes]     = useState({});
   const [osrmCache, setOsrmCache]       = useState({}); // signature de puntos → geometría, evita refetch
   const [alertas, setAlertas]           = useState([]);
+  const [alertaAbierta, setAlertaAbierta] = useState(null); // id de la remisión con el panel de sugerencias abierto
+  const [sugerencias, setSugerencias]   = useState(null);   // respuesta de getSugerencias para alertaAbierta
+  const [cargandoSugerencias, setCargandoSugerencias] = useState(false);
+  const [asignando, setAsignando]       = useState(null);   // ruta_id que se está confirmando, para deshabilitar el botón
 
   // ── OSRM Routing (paralelo, cacheado por firma de puntos, evitando casetas) ──
   useEffect(() => {
@@ -154,6 +158,55 @@ export default function DispatcherPanel() {
       if (e.name === 'AbortError') return; // StrictMode unmount / refresh cancelado — ignore
       console.error('Backend error:', e);
       setSyncStatus('Sin conexión con el backend');
+    }
+  };
+
+  // ── Sugerencia de camión para un pedido que quedó fuera ──
+  const toggleAlerta = async (alerta) => {
+    if (alertaAbierta === alerta.id) {
+      setAlertaAbierta(null);
+      setSugerencias(null);
+      return;
+    }
+    setAlertaAbierta(alerta.id);
+    setSugerencias(null);
+    setCargandoSugerencias(true);
+    try {
+      const data = await getSugerencias(alerta.id);
+      setSugerencias(data);
+    } catch (e) {
+      console.error('Error al pedir sugerencias:', e);
+    } finally {
+      setCargandoSugerencias(false);
+    }
+  };
+
+  const handleAsignar = async (remisionId, opcion, forzar = false) => {
+    setAsignando(opcion.ruta_id);
+    try {
+      const res = await asignarManual(remisionId, {
+        rutaId: opcion.ruta_id,
+        posicion: opcion.posicion_sugerida,
+        forzar,
+      });
+      if (res.status === 'requiere_confirmacion') {
+        const confirmar = window.confirm(
+          `${res.message}\n\n¿Meterlo de todos modos a ${opcion.camion}?`
+        );
+        if (confirmar) {
+          await handleAsignar(remisionId, opcion, true);
+        }
+        return;
+      }
+      // Éxito: cerrar el panel de sugerencias y refrescar todo (alertas, rutas, pedidos)
+      setAlertaAbierta(null);
+      setSugerencias(null);
+      await fetchData();
+    } catch (e) {
+      console.error('Error al asignar manualmente:', e);
+      alert('No se pudo asignar el pedido. Intenta de nuevo.');
+    } finally {
+      setAsignando(null);
     }
   };
 
@@ -424,9 +477,53 @@ export default function DispatcherPanel() {
             )}
             {alertas.map(a => (
               <div key={a.doc_num} className="bg-red-50/60 border border-red-100 rounded-lg p-2.5">
-                <span className="text-[10px] font-bold text-red-700">Ped #{a.doc_num}</span>
-                <div className="text-[11px] font-semibold text-gray-700">{a.card_name}</div>
-                <div className="text-[9px] text-gray-400">{a.motivo}</div>
+                <button
+                  onClick={() => toggleAlerta(a)}
+                  className="w-full text-left cursor-pointer"
+                >
+                  <span className="text-[10px] font-bold text-red-700">Ped #{a.doc_num}</span>
+                  <div className="text-[11px] font-semibold text-gray-700">{a.card_name}</div>
+                  <div className="text-[9px] text-gray-400">{a.motivo}</div>
+                </button>
+
+                {alertaAbierta === a.id && (
+                  <div className="mt-2 pt-2 border-t border-red-100 space-y-1.5">
+                    {cargandoSugerencias && (
+                      <p className="text-[9px] text-gray-400 italic flex items-center gap-1">
+                        <Loader className="w-3 h-3 animate-spin" /> Calculando mejor camión…
+                      </p>
+                    )}
+                    {sugerencias?.error && (
+                      <p className="text-[9px] text-red-500">{sugerencias.error}</p>
+                    )}
+                    {sugerencias?.opciones?.map(o => (
+                      <div key={o.ruta_id} className="bg-white border border-gray-200 rounded-md p-1.5 flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="text-[10px] font-bold text-gray-700 flex items-center gap-1">
+                            {o.factible ? '🟢' : '🔴'} {o.camion}
+                            <span className="text-gray-400 font-normal">+{o.minutos_agregados} min</span>
+                          </div>
+                          {!o.factible && (
+                            <div className="text-[8.5px] text-red-500 truncate" title={o.motivos_riesgo.join('; ')}>
+                              {o.motivos_riesgo.join('; ')}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          disabled={asignando === o.ruta_id}
+                          onClick={() => handleAsignar(a.id, o)}
+                          className={`text-[9px] font-bold px-2 py-1 rounded flex-shrink-0 ${
+                            o.factible
+                              ? 'bg-green-600 text-white hover:bg-green-700'
+                              : 'bg-red-100 text-red-700 hover:bg-red-200'
+                          } disabled:opacity-50`}
+                        >
+                          {asignando === o.ruta_id ? '...' : o.factible ? 'Asignar' : 'Forzar'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>

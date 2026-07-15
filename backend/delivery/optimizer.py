@@ -15,6 +15,7 @@ HORA_CERO = datetime.strptime("07:00", "%H:%M") # Hora a la que arranca el CEDIS
 MINUTOS_TURNO_MAXIMO = 6 * 60  # Límite de 6 horas por turno de chofer
 PESO_ESTIMADO_KG = 150  # Fallback SOLO cuando SAP no trae peso real de línea (ver sync.py)
 INTERVALO_SALIDA_MINUTOS = 30  # No todos los camiones salen a la misma hora: salidas cada 30 min
+CAPACIDAD_CAMION_KG_DEFAULT = 3000  # Ruta no guarda la capacidad real del camión asignado; ver api.py:CAPACIDADES_CAMION_KG
 
 # Estados de Ruta que ya fueron despachados/en proceso físico: nunca se destruyen
 # ni recalculan al re-optimizar, para no reasignarle a otro camión un pedido que
@@ -312,3 +313,153 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords):
             "pedidos_no_asignados": pedidos_no_asignados,
             "pedidos_sin_geo": pedidos_sin_geo,
         }
+
+
+# ==========================================
+# 4. ASIGNACIÓN MANUAL DE UN PEDIDO SUELTO
+# ==========================================
+def sugerir_camiones_para_remision(remision, depot_coords):
+    """
+    Para un pedido que el optimizador dejó sin asignar, calcula en qué punto de
+    cada ruta del día (que no esté ya despachada/congelada) conviene más
+    insertarlo — el de menor tiempo agregado ("cheapest insertion") — y si
+    cabe en tiempo (turno) y peso, o si se pasaría de alguno.
+
+    No modifica nada en la BD: solo calcula y regresa las opciones para que el
+    despachador decida. Siempre regresa las 5 rutas evaluadas, incluso las que
+    no caben, marcadas con el motivo, para que el despachador pueda forzar la
+    asignación de todos modos si así lo decide (ej. cliente urgente).
+    """
+    destino = remision.destino
+    if not destino or destino.latitude is None or destino.longitude is None:
+        return {"error": "Este pedido no tiene coordenadas; no se puede sugerir un camión."}
+
+    rutas = list(
+        Ruta.objects.filter(fecha=remision.doc_date)
+        .exclude(estado__in=['En_Ruta', 'Finalizada'])
+        .prefetch_related('remisiones__destino')
+    )
+    if not rutas:
+        return {"error": "No hay rutas generadas todavía para este día. Corre el optimizador primero."}
+
+    peso_pedido = remision.peso_kg if remision.peso_kg else PESO_ESTIMADO_KG
+
+    opciones = []
+    for ruta in rutas:
+        remisiones_ruta = sorted(
+            [r for r in ruta.remisiones.all() if r.destino and r.destino.latitude is not None],
+            key=lambda r: r.secuencia_ruta or 0,
+        )
+
+        # Puntos de la ruta actual: CEDIS -> paradas existentes -> CEDIS
+        puntos = [depot_coords] + [(r.destino.latitude, r.destino.longitude) for r in remisiones_ruta] + [depot_coords]
+        locations_con_nuevo = puntos + [(destino.latitude, destino.longitude)]
+        idx_nuevo = len(puntos)  # último índice = el pedido a insertar
+
+        distance_matrix, time_matrix, _ = build_distance_time_matrices(locations_con_nuevo, VELOCIDAD_PROMEDIO_KMH)
+
+        # Probar insertar el nuevo punto entre cada par consecutivo de la ruta
+        # actual (incluye antes de la primera parada y después de la última) y
+        # quedarse con la posición que agrega menos tiempo.
+        mejor_costo = None
+        mejor_posicion = None
+        for i in range(len(puntos) - 1):
+            costo_actual = time_matrix[i][i + 1]
+            costo_con_insercion = (
+                time_matrix[i][idx_nuevo] + TIEMPO_DESCARGA_MINUTOS + time_matrix[idx_nuevo][i + 1]
+            )
+            minutos_agregados = costo_con_insercion - costo_actual
+            if mejor_costo is None or minutos_agregados < mejor_costo:
+                mejor_costo = minutos_agregados
+                mejor_posicion = i  # se inserta después de la parada i (0 = después del CEDIS)
+
+        peso_actual = sum((r.peso_kg if r.peso_kg else PESO_ESTIMADO_KG) for r in remisiones_ruta)
+        capacidad = CAPACIDAD_CAMION_KG_DEFAULT
+
+        # Tiempo total de la ruta si se agrega este pedido, contra el turno de
+        # 6h del camión (aproximado: se asume que ya venía ajustada al turno).
+        duracion_actual = sum(time_matrix[i][i + 1] for i in range(len(puntos) - 1))
+        duracion_con_insercion = duracion_actual + mejor_costo
+
+        motivos = []
+        cabe_tiempo = duracion_con_insercion <= MINUTOS_TURNO_MAXIMO
+        if not cabe_tiempo:
+            motivos.append(
+                f"se pasaría del turno de {MINUTOS_TURNO_MAXIMO // 60}h "
+                f"(quedaría en {int(duracion_con_insercion)} min)"
+            )
+
+        cabe_peso = (peso_actual + peso_pedido) <= capacidad
+        if not cabe_peso:
+            motivos.append(f"se pasaría del peso máximo del camión ({capacidad} kg)")
+
+        # Choque de ventana de horario del propio destino nuevo.
+        ini_ventana, fin_ventana = _ventana_en_minutos(destino)
+        minutos_llegada_estimados = sum(time_matrix[i][i + 1] for i in range(mejor_posicion + 1)) if mejor_posicion is not None else 0
+        choca_ventana = not (ini_ventana <= minutos_llegada_estimados <= fin_ventana)
+        if choca_ventana:
+            hora_ini = (HORA_CERO + timedelta(minutes=ini_ventana)).strftime("%I:%M %p")
+            hora_fin = (HORA_CERO + timedelta(minutes=fin_ventana)).strftime("%I:%M %p")
+            motivos.append(f"llegaría fuera de la ventana de recibo del cliente ({hora_ini} - {hora_fin})")
+
+        eta_estimada = (HORA_CERO + timedelta(minutes=minutos_llegada_estimados)).strftime("%I:%M %p")
+
+        opciones.append({
+            "ruta_id": ruta.id,
+            "camion": ruta.camion,
+            "chofer": ruta.chofer,
+            "estado_ruta": ruta.estado,
+            "factible": cabe_tiempo and cabe_peso and not choca_ventana,
+            "minutos_agregados": int(mejor_costo) if mejor_costo is not None else None,
+            "eta_estimada": eta_estimada,
+            "posicion_sugerida": mejor_posicion + 1 if mejor_posicion is not None else None,
+            "motivos_riesgo": motivos,  # vacío si cabe perfecto; si no, se puede forzar de todos modos
+        })
+
+    opciones.sort(key=lambda o: (not o["factible"], o["minutos_agregados"] if o["minutos_agregados"] is not None else 9999))
+    return {"pedido": remision.doc_num, "cliente": remision.card_name, "opciones": opciones}
+
+
+@transaction.atomic
+def asignar_manualmente(remision, ruta_id, posicion=None, forzar=False):
+    """
+    Mete un pedido a una ruta específica a mano, en la posición sugerida (o al
+    final si no se da). Si hay riesgo (fuera de turno/peso/ventana) y no se
+    pasa forzar=True, rechaza la asignación explicando por qué — el
+    despachador debe confirmar explícitamente que quiere forzarla.
+    """
+    try:
+        ruta = Ruta.objects.get(id=ruta_id)
+    except Ruta.DoesNotExist:
+        return {"status": "error", "message": "Esa ruta ya no existe."}
+
+    if ruta.estado in ['En_Ruta', 'Finalizada']:
+        return {"status": "error", "message": "Ese camión ya salió a la calle o terminó su ruta, no se le puede agregar nada."}
+
+    if not forzar:
+        depot = (25.693214524592616, -100.48167993202988)
+        sugerencias = sugerir_camiones_para_remision(remision, depot)
+        opcion = next((o for o in sugerencias.get("opciones", []) if o["ruta_id"] == ruta_id), None)
+        if opcion and not opcion["factible"]:
+            return {
+                "status": "requiere_confirmacion",
+                "message": "Este pedido no cabe limpio en esta ruta: " + "; ".join(opcion["motivos_riesgo"]),
+                "motivos_riesgo": opcion["motivos_riesgo"],
+            }
+
+    remisiones_ruta = list(ruta.remisiones.order_by('secuencia_ruta'))
+    if posicion is None or posicion > len(remisiones_ruta):
+        posicion = len(remisiones_ruta) + 1
+
+    # Recorrer secuencia para abrir espacio en la posición indicada
+    for r in remisiones_ruta:
+        if r.secuencia_ruta >= posicion:
+            r.secuencia_ruta += 1
+    Remision.objects.bulk_update(remisiones_ruta, ['secuencia_ruta'])
+
+    remision.ruta = ruta
+    remision.secuencia_ruta = posicion
+    remision.estado = 'Asignado'
+    remision.save()
+
+    return {"status": "success", "message": f"Pedido #{remision.doc_num} asignado a {ruta.camion} en la posición {posicion}."}

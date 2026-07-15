@@ -80,3 +80,32 @@ export async function updateRutaEstado(rutaId, estado, { signal } = {}) {
   if (!res.ok) throw new Error(`Update estado failed: ${res.status}`);
   return res.json();
 }
+
+/**
+ * Para un pedido que quedó sin asignar, calcula en qué camión conviene meterlo
+ * (menor tiempo agregado) y si cabe limpio en turno/peso/ventana de horario.
+ * @param {number} remisionId
+ */
+export async function getSugerencias(remisionId, { signal } = {}) {
+  const res = await fetch(`${BASE}/remisiones/${remisionId}/sugerencias`, { signal });
+  if (!res.ok) throw new Error(`Sugerencias failed: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * Asigna manualmente un pedido a una ruta. Si no cabe limpio, regresa
+ * status='requiere_confirmacion'; hay que volver a llamar con forzar=true
+ * para confirmar que se quiere meter de todos modos.
+ * @param {number} remisionId
+ * @param {{rutaId: number, posicion?: number, forzar?: boolean}} opts
+ */
+export async function asignarManual(remisionId, { rutaId, posicion, forzar = false }, { signal } = {}) {
+  const res = await fetch(`${BASE}/remisiones/${remisionId}/asignar`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ruta_id: rutaId, posicion, forzar }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`Asignar manual failed: ${res.status}`);
+  return res.json();
+}
