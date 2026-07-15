@@ -2,7 +2,7 @@ from ninja import NinjaAPI, Schema
 from typing import List, Optional
 from datetime import date, datetime
 from .models import Remision, Ruta, Destino
-from .optimizer import solve_vrp, ESTADOS_RUTA_CONGELADOS, sugerir_camiones_para_remision, asignar_manualmente
+from .optimizer import solve_vrp, ESTADOS_RUTA_CONGELADOS, sugerir_camiones_para_remision, asignar_manualmente, CAPACIDAD_CAMION_KG_DEFAULT
 from .sync import sync_from_sap
 
 api = NinjaAPI(title="Laben Routing API", version="1.0.0")
@@ -90,7 +90,13 @@ class GenerarRutasIn(Schema):
 
 @api.post("/dispatcher/rutas/generar")
 def generar_rutas(request, payload: GenerarRutasIn):
-    vehicle_capacities = CAPACIDADES_CAMION_KG[:payload.numero_camiones]
+    # Si piden más camiones de los que hay capacidad configurada (ej. se agregó
+    # un 6to camión desde el panel), se completa con el valor conservador por
+    # default en vez de tronar — hasta que se confirme su capacidad real.
+    vehicle_capacities = [
+        CAPACIDADES_CAMION_KG[i] if i < len(CAPACIDADES_CAMION_KG) else CAPACIDAD_CAMION_KG_DEFAULT
+        for i in range(payload.numero_camiones)
+    ]
 
     res = solve_vrp(
         fecha=payload.fecha,

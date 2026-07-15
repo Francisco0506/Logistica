@@ -80,6 +80,24 @@ export default function DispatcherPanel() {
   const [sugerencias, setSugerencias]   = useState(null);   // respuesta de getSugerencias para alertaAbierta
   const [cargandoSugerencias, setCargandoSugerencias] = useState(false);
   const [asignando, setAsignando]       = useState(null);   // ruta_id que se está confirmando, para deshabilitar el botón
+  const [confirmacion, setConfirmacion] = useState(null);   // {remisionId, opcion, mensaje} | null — modal de "forzar" pendiente
+  const [mostrarAgregarCamion, setMostrarAgregarCamion] = useState(false);
+  const [nuevaPlaca, setNuevaPlaca]     = useState('');
+  const [nuevoChofer, setNuevoChofer]   = useState('');
+
+  const PALETA_COLORES_CAMION = ['#F27A18', '#D92525', '#3b82f6', '#10b981', '#8b5cf6', '#ec4899', '#eab308', '#06b6d4'];
+
+  const agregarCamion = () => {
+    if (!nuevaPlaca.trim() || !nuevoChofer.trim()) return;
+    const color = PALETA_COLORES_CAMION[trucks.length % PALETA_COLORES_CAMION.length];
+    setTrucks(prev => [
+      ...prev,
+      { id: nuevaPlaca.trim(), driver: nuevoChofer.trim(), route: 'Sin ruta asignada', pos: [CEDIS[0], CEDIS[1]], color, active: true },
+    ]);
+    setNuevaPlaca('');
+    setNuevoChofer('');
+    setMostrarAgregarCamion(false);
+  };
 
   // ── OSRM Routing (paralelo, cacheado por firma de puntos, evitando casetas) ──
   useEffect(() => {
@@ -190,12 +208,7 @@ export default function DispatcherPanel() {
         forzar,
       });
       if (res.status === 'requiere_confirmacion') {
-        const confirmar = window.confirm(
-          `${res.message}\n\n¿Meterlo de todos modos a ${opcion.camion}?`
-        );
-        if (confirmar) {
-          await handleAsignar(remisionId, opcion, true);
-        }
+        setConfirmacion({ remisionId, opcion, mensaje: res.message });
         return;
       }
       // Éxito: cerrar el panel de sugerencias y refrescar todo (alertas, rutas, pedidos)
@@ -314,10 +327,52 @@ export default function DispatcherPanel() {
               <span className="flex items-center gap-1.5 text-[11px] font-extrabold text-gray-500 uppercase tracking-wider">
                 <Sliders className="h-3.5 w-3.5 text-orange-600" /> Control de Flota
               </span>
-              <span className="text-[10px] bg-orange-50 text-orange-700 font-bold px-2 py-0.5 rounded-md border border-orange-200">
-                {trucks.filter(t => t.active).length}/5
-              </span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] bg-orange-50 text-orange-700 font-bold px-2 py-0.5 rounded-md border border-orange-200">
+                  {trucks.filter(t => t.active).length}/{trucks.length}
+                </span>
+                <button
+                  onClick={() => setMostrarAgregarCamion(v => !v)}
+                  title="Agregar camión"
+                  className="w-5 h-5 flex items-center justify-center rounded-md bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-700 transition text-sm font-bold leading-none"
+                >
+                  +
+                </button>
+              </div>
             </div>
+
+            {mostrarAgregarCamion && (
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-2.5 space-y-2">
+                <input
+                  value={nuevaPlaca}
+                  onChange={e => setNuevaPlaca(e.target.value)}
+                  placeholder="Placa (ej. ABC-12-34)"
+                  className="w-full px-2.5 py-1.5 bg-white border border-gray-200 rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-orange-200"
+                />
+                <input
+                  value={nuevoChofer}
+                  onChange={e => setNuevoChofer(e.target.value)}
+                  placeholder="Nombre del chofer"
+                  className="w-full px-2.5 py-1.5 bg-white border border-gray-200 rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-orange-200"
+                />
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={agregarCamion}
+                    disabled={!nuevaPlaca.trim() || !nuevoChofer.trim()}
+                    className="flex-1 bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs py-1.5 rounded-md transition disabled:opacity-40"
+                  >
+                    Agregar
+                  </button>
+                  <button
+                    onClick={() => { setMostrarAgregarCamion(false); setNuevaPlaca(''); setNuevoChofer(''); }}
+                    className="flex-1 bg-white border border-gray-200 text-gray-500 font-bold text-xs py-1.5 rounded-md hover:bg-gray-100 transition"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
+
             <button
               onClick={optimize}
               disabled={isOptimizing}
@@ -467,65 +522,94 @@ export default function DispatcherPanel() {
           </div>
 
           {/* Alertas reales (calculadas en vivo desde la BD, no una lista fija) */}
-          <div className="border-t border-gray-200 p-3 space-y-2 flex-shrink-0 max-h-[180px] overflow-y-auto">
-            <div className="flex items-center gap-1.5 text-red-600 mb-1">
-              <AlertCircle className="h-3.5 w-3.5" />
-              <span className="text-[10px] font-bold uppercase tracking-wider">Alertas ({alertas.length})</span>
+          <div className="border-t border-gray-200 p-3 space-y-2 flex-shrink-0 max-h-[320px] overflow-y-auto">
+            <div className="flex items-center gap-1.5 text-red-600 mb-1.5">
+              <AlertCircle className="h-4 w-4" />
+              <span className="text-xs font-bold uppercase tracking-wider">Sin asignar ({alertas.length})</span>
             </div>
             {alertas.length === 0 && (
-              <p className="text-[10px] text-gray-400 italic">Sin alertas pendientes.</p>
+              <p className="text-xs text-gray-400 italic">Sin alertas pendientes.</p>
             )}
-            {alertas.map(a => (
-              <div key={a.doc_num} className="bg-red-50/60 border border-red-100 rounded-lg p-2.5">
-                <button
-                  onClick={() => toggleAlerta(a)}
-                  className="w-full text-left cursor-pointer"
+            {alertas.map(a => {
+              const abierta = alertaAbierta === a.id;
+              return (
+                <div
+                  key={a.doc_num}
+                  className={`bg-white border rounded-xl overflow-hidden transition-shadow ${
+                    abierta ? 'border-orange-300 shadow-md' : 'border-red-100 shadow-sm hover:shadow-md'
+                  }`}
                 >
-                  <span className="text-[10px] font-bold text-red-700">Ped #{a.doc_num}</span>
-                  <div className="text-[11px] font-semibold text-gray-700">{a.card_name}</div>
-                  <div className="text-[9px] text-gray-400">{a.motivo}</div>
-                </button>
-
-                {alertaAbierta === a.id && (
-                  <div className="mt-2 pt-2 border-t border-red-100 space-y-1.5">
-                    {cargandoSugerencias && (
-                      <p className="text-[9px] text-gray-400 italic flex items-center gap-1">
-                        <Loader className="w-3 h-3 animate-spin" /> Calculando mejor camión…
-                      </p>
-                    )}
-                    {sugerencias?.error && (
-                      <p className="text-[9px] text-red-500">{sugerencias.error}</p>
-                    )}
-                    {sugerencias?.opciones?.map(o => (
-                      <div key={o.ruta_id} className="bg-white border border-gray-200 rounded-md p-1.5 flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="text-[10px] font-bold text-gray-700 flex items-center gap-1">
-                            {o.factible ? '🟢' : '🔴'} {o.camion}
-                            <span className="text-gray-400 font-normal">+{o.minutos_agregados} min</span>
-                          </div>
-                          {!o.factible && (
-                            <div className="text-[8.5px] text-red-500 truncate" title={o.motivos_riesgo.join('; ')}>
-                              {o.motivos_riesgo.join('; ')}
-                            </div>
-                          )}
-                        </div>
-                        <button
-                          disabled={asignando === o.ruta_id}
-                          onClick={() => handleAsignar(a.id, o)}
-                          className={`text-[9px] font-bold px-2 py-1 rounded flex-shrink-0 ${
-                            o.factible
-                              ? 'bg-green-600 text-white hover:bg-green-700'
-                              : 'bg-red-100 text-red-700 hover:bg-red-200'
-                          } disabled:opacity-50`}
-                        >
-                          {asignando === o.ruta_id ? '...' : o.factible ? 'Asignar' : 'Forzar'}
-                        </button>
+                  <button
+                    onClick={() => toggleAlerta(a)}
+                    className="w-full text-left cursor-pointer flex items-center justify-between gap-2 p-3"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">#{a.doc_num}</span>
+                        <span className="text-[11px] text-gray-400">{a.motivo}</span>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
+                      <div className="text-[13px] font-semibold text-gray-800 truncate mt-0.5">{a.card_name}</div>
+                    </div>
+                    {abierta
+                      ? <ChevronUp className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                      : <ChevronDown className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />}
+                  </button>
+
+                  {abierta && (
+                    <div className="bg-gray-50 border-t border-gray-100 p-2.5 space-y-1.5">
+                      <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
+                        ¿A qué camión lo mando?
+                      </p>
+                      {cargandoSugerencias && (
+                        <p className="text-[11px] text-gray-400 italic flex items-center gap-1.5 py-1">
+                          <Loader className="w-3.5 h-3.5 animate-spin" /> Calculando mejor camión…
+                        </p>
+                      )}
+                      {sugerencias?.error && (
+                        <p className="text-[11px] text-red-500">{sugerencias.error}</p>
+                      )}
+                      {sugerencias?.opciones?.map(o => (
+                        <div
+                          key={o.ruta_id}
+                          className={`bg-white border rounded-lg p-2.5 flex items-center justify-between gap-2 ${
+                            o.factible ? 'border-green-200' : 'border-red-200'
+                          }`}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <Truck className={`w-3.5 h-3.5 flex-shrink-0 ${o.factible ? 'text-green-600' : 'text-red-500'}`} />
+                              <span className="text-[12px] font-bold text-gray-800">{o.camion}</span>
+                              <span className="text-[10px] text-gray-400">· {o.chofer}</span>
+                            </div>
+                            <div className="flex items-center gap-2 mt-0.5 text-[10px] text-gray-500">
+                              <span className="flex items-center gap-0.5"><Clock className="w-3 h-3" /> Llega ~{o.eta_estimada}</span>
+                              <span>· agrega {o.minutos_agregados} min a la ruta</span>
+                            </div>
+                            {!o.factible && (
+                              <div className="text-[10px] text-red-500 mt-1 flex items-start gap-1">
+                                <AlertCircle className="w-3 h-3 flex-shrink-0 mt-0.5" />
+                                <span>{o.motivos_riesgo.join('; ')}</span>
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            disabled={asignando === o.ruta_id}
+                            onClick={() => handleAsignar(a.id, o)}
+                            className={`text-[11px] font-bold px-3 py-1.5 rounded-lg flex-shrink-0 transition-colors ${
+                              o.factible
+                                ? 'bg-green-600 text-white hover:bg-green-700'
+                                : 'bg-white text-red-600 border border-red-300 hover:bg-red-50'
+                            } disabled:opacity-50`}
+                          >
+                            {asignando === o.ruta_id ? '...' : o.factible ? 'Asignar' : 'Forzar'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </aside>
 
@@ -765,6 +849,44 @@ export default function DispatcherPanel() {
           </div>
         </div>
       </div>
+
+      {/* ═══ MODAL DE CONFIRMACIÓN: forzar un pedido que no cabe limpio ═══ */}
+      {confirmacion && (
+        <div className="fixed inset-0 z-[3000] bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
+            <div className="bg-red-50 border-b border-red-100 px-5 py-4 flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <h3 className="text-sm font-bold text-red-700">Este pedido no cabe limpio</h3>
+                <p className="text-xs text-red-600 mt-0.5">{confirmacion.mensaje}</p>
+              </div>
+            </div>
+            <div className="px-5 py-4">
+              <p className="text-sm text-gray-600">
+                ¿Meterlo de todos modos a <span className="font-bold text-gray-800">{confirmacion.opcion.camion}</span>?
+              </p>
+            </div>
+            <div className="px-5 pb-5 flex gap-2 justify-end">
+              <button
+                onClick={() => setConfirmacion(null)}
+                className="px-4 py-2 text-sm font-semibold text-gray-500 hover:bg-gray-100 rounded-lg transition"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={async () => {
+                  const { remisionId, opcion } = confirmacion;
+                  setConfirmacion(null);
+                  await handleAsignar(remisionId, opcion, true);
+                }}
+                className="px-4 py-2 text-sm font-bold text-white bg-red-600 hover:bg-red-700 rounded-lg transition"
+              >
+                Forzar de todos modos
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
