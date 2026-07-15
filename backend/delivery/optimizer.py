@@ -287,12 +287,24 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords):
         # Pedidos que el solver no pudo colocar en ninguna ruta (capacidad/tiempo
         # insuficientes) + los que no tenían coordenadas: se reportan, nunca se
         # pierden silenciosamente.
-        pedidos_no_asignados = [
-            remision.doc_num
+        remisiones_no_asignadas = [
+            remision
             for i in range(1, len(remisiones_validas) + 1)
             if i not in nodos_visitados
             for remision in remisiones_validas[i - 1]
         ]
+        # Regresarlos explícitamente a Pendiente y sin ruta: si venían de una
+        # corrida anterior con estado 'Asignado' apuntando a una ruta que esta
+        # corrida ya borró, sin esto quedan huérfanos (ni en ningún camión, ni
+        # en Alertas porque esas solo muestran estado='Pendiente') — invisibles
+        # para el despachador aunque sigan existiendo en la base de datos.
+        for remision in remisiones_no_asignadas:
+            remision.estado = 'Pendiente'
+            remision.ruta = None
+        if remisiones_no_asignadas:
+            Remision.objects.bulk_update(remisiones_no_asignadas, ['estado', 'ruta'])
+
+        pedidos_no_asignados = [r.doc_num for r in remisiones_no_asignadas]
         pedidos_sin_geo = [r.doc_num for r in data['remisiones_sin_geo']]
 
         mensajes_fuente = {
