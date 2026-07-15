@@ -55,6 +55,24 @@ export async function generarRutas(fecha, numCamiones, { signal } = {}) {
 }
 
 /**
+ * Carga N pedidos de prueba con destinos reales ya importados del Excel de
+ * SAP, sin depender de la conexión a SAP. SOLO para pruebas: borra las rutas
+ * que hubiera ese día, incluidas las ya despachadas.
+ * @param {string} fecha — Formato YYYY-MM-DD
+ * @param {number} n — Cuántos pedidos de prueba crear
+ */
+export async function cargarPruebaPedidos(fecha, n, { signal } = {}) {
+  const res = await fetch(`${BASE}/pedidos/cargar-prueba`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fecha, n }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`Cargar prueba failed: ${res.status}`);
+  return res.json();
+}
+
+/**
  * Obtiene las alertas reales del día (pedidos sin georreferencia o sin asignar
  * a ninguna ruta). Calculado en vivo desde la BD, no es una lista fija.
  * @param {string} fecha — Formato YYYY-MM-DD

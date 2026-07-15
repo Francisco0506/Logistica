@@ -26,8 +26,13 @@ ESTADOS_RUTA_CONGELADOS = ['Cargando', 'Listo', 'En_Ruta', 'Finalizada']
 def _ventana_en_minutos(destino):
     """
     Convierte la ventana de recibo real del Ship-To (ini_recibo_1/fin_recibo_1)
-    a minutos desde HORA_CERO. Si el destino no tiene ventana configurada en SAP,
-    se usa todo el turno para no bloquear la ruta.
+    a minutos desde HORA_CERO, SIN recortar al turno del chofer. Si el destino
+    no tiene ventana configurada en SAP, se usa todo el turno para no bloquear
+    la ruta.
+
+    Devuelve la ventana real (puede empezar después del turno máximo, ej. un
+    cliente que recibe hasta la tarde) — quien la use para restricciones duras
+    de OR-Tools debe recortarla con _ventana_recortada_a_turno().
     """
     if destino.ini_recibo_1 and destino.fin_recibo_1:
         ini = destino.ini_recibo_1
@@ -35,9 +40,30 @@ def _ventana_en_minutos(destino):
         ini_min = (ini.hour * 60 + ini.minute) - (HORA_CERO.hour * 60 + HORA_CERO.minute)
         fin_min = (fin.hour * 60 + fin.minute) - (HORA_CERO.hour * 60 + HORA_CERO.minute)
         ini_min = max(0, ini_min)
-        fin_min = max(ini_min, min(fin_min, MINUTOS_TURNO_MAXIMO))
+        fin_min = max(0, fin_min)
+        if fin_min < ini_min:
+            # Dato inconsistente capturado en SAP (hora fin antes que hora
+            # inicio, ej. "08:00-06:00" — probablemente un cierre vespertino
+            # mal capturado sin PM). No tiene sentido bloquear al cliente con
+            # una ventana de 0 minutos por un dato corrupto: se ignora la
+            # ventana y se usa el turno completo, igual que si no tuviera
+            # ventana configurada en SAP.
+            return (0, MINUTOS_TURNO_MAXIMO)
         return (ini_min, fin_min)
     return (0, MINUTOS_TURNO_MAXIMO)
+
+
+def _ventana_recortada_a_turno(ini_min, fin_min):
+    """
+    Recorta una ventana real al turno máximo del chofer, para usarla como
+    restricción dura de OR-Tools (que exige ini <= fin). Un cliente que abre
+    su ventana después del turno máximo queda con una ventana de un solo
+    minuto al final del turno: en la práctica, inalcanzable, y el solver lo
+    deja fuera de esa ruta en vez de reventar con una ventana inválida.
+    """
+    ini_cap = min(ini_min, MINUTOS_TURNO_MAXIMO)
+    fin_cap = max(ini_cap, min(fin_min, MINUTOS_TURNO_MAXIMO))
+    return (ini_cap, fin_cap)
 
 
 # ==========================================
@@ -88,7 +114,7 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords):
             (r.peso_kg if r.peso_kg else PESO_ESTIMADO_KG) for r in remisiones_del_destino
         )
         demands.append(int(peso_parada))
-        time_windows.append(_ventana_en_minutos(destino))
+        time_windows.append(_ventana_recortada_a_turno(*_ventana_en_minutos(destino)))
         remisiones_validas.append(remisiones_del_destino)
 
     if len(locations) <= 1:
@@ -129,6 +155,23 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords):
     distancias/tiempos reales de calle (OSRM, evitando autopistas de cuota).
     Nunca destruye rutas ya despachadas (Cargando/Listo/En_Ruta/Finalizada).
     """
+    # Los camiones ya despachados hoy (Cargando/Listo/En_Ruta/Finalizada) no
+    # están disponibles para rutas NUEVAS: ya salieron con su propia carga. Si
+    # no se restan aquí, el solver intenta crear una ruta nueva por cada
+    # camión activo en el panel sin importar cuántos ya están ocupados, y al
+    # guardarlas se queda sin códigos T-00X libres e inventa uno (T-006, etc.)
+    # que no corresponde a ningún camión real de la flota.
+    camiones_congelados = set(
+        Ruta.objects.filter(fecha=fecha, estado__in=ESTADOS_RUTA_CONGELADOS).values_list('camion', flat=True)
+    )
+    num_vehicles = max(0, num_vehicles - len(camiones_congelados))
+    vehicle_capacities = vehicle_capacities[:num_vehicles]
+    if num_vehicles == 0:
+        return {
+            "status": "error",
+            "message": "Todos los camiones activos ya están despachados hoy. Agrega otro camión o espera a que alguno termine su ruta.",
+        }
+
     data = build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords)
     if not data:
         return {"status": "error", "message": "No hay remisiones válidas para optimizar en esta fecha."}
@@ -206,7 +249,11 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords):
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
     search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
     search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    search_parameters.time_limit.FromSeconds(5)
+    # 20s (antes 5s): con 5s el guided local search a veces se quedaba corto
+    # para exprimir mejoras de 2-opt en rutas largas (~1-3% de tiempo de
+    # manejo) en días con muchos pedidos. Optimizar Rutas tarda más en
+    # responder a cambio de rutas más ajustadas.
+    search_parameters.time_limit.FromSeconds(20)
 
     solution = routing.SolveWithParameters(search_parameters)
 
@@ -219,10 +266,8 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords):
     with transaction.atomic():
         # Solo se destruyen rutas 'Borrador' del día (aún no despachadas). Las
         # congeladas (Cargando/Listo/En_Ruta/Finalizada) quedan intactas.
-        camiones_congelados = set(
-            Ruta.objects.filter(fecha=fecha, estado__in=ESTADOS_RUTA_CONGELADOS).values_list('camion', flat=True)
-        )
-
+        # (camiones_congelados ya se calculó arriba, antes de armar el modelo,
+        # para descontarlos del num_vehicles disponible.)
         Ruta.objects.filter(fecha=fecha, estado='Borrador').delete()
 
         # remisiones_validas[i] es una LISTA de documentos que comparten parada

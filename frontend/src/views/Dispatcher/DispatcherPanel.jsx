@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { Truck, RefreshCw, Sliders, Search, Compass, AlertCircle, Eye, Package, Power, PowerOff, FileText, Download, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, MapPin, User, Clock, Play, Check, Send, Loader } from 'lucide-react';
+import { Truck, RefreshCw, Sliders, Search, Compass, AlertCircle, Eye, Package, FileText, Download, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, MapPin, User, Clock, Play, Check, Loader, Menu, X, FlaskConical } from 'lucide-react';
 import { CEDIS, FLEET, DRIVERS, ID_TO_PLATE } from '../../config/fleet';
-import { syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado, getSugerencias, asignarManual } from '../../services/api';
+import { syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado, getSugerencias, asignarManual, cargarPruebaPedidos } from '../../services/api';
 
 // Cada cuánto se refresca la vista para traer lo más nuevo (pedidos nuevos de
 // SAP, cambios de estado de otros usuarios) sin que el dispatcher tenga que
@@ -76,6 +76,7 @@ export default function DispatcherPanel() {
   const [osrmRoutes, setOsrmRoutes]     = useState({});
   const [osrmCache, setOsrmCache]       = useState({}); // signature de puntos → geometría, evita refetch
   const [alertas, setAlertas]           = useState([]);
+  const [sidebarTab, setSidebarTab]     = useState('camiones'); // 'camiones' | 'alertas' — pestañas del sidebar, en vez de dos secciones apiladas
   const [alertaAbierta, setAlertaAbierta] = useState(null); // id de la remisión con el panel de sugerencias abierto
   const [sugerencias, setSugerencias]   = useState(null);   // respuesta de getSugerencias para alertaAbierta
   const [cargandoSugerencias, setCargandoSugerencias] = useState(false);
@@ -84,6 +85,9 @@ export default function DispatcherPanel() {
   const [mostrarAgregarCamion, setMostrarAgregarCamion] = useState(false);
   const [nuevaPlaca, setNuevaPlaca]     = useState('');
   const [nuevoChofer, setNuevoChofer]   = useState('');
+  const [mostrarCargarPrueba, setMostrarCargarPrueba] = useState(false);
+  const [nPruebaPedidos, setNPruebaPedidos] = useState(80);
+  const [cargandoPrueba, setCargandoPrueba] = useState(false);
 
   const PALETA_COLORES_CAMION = ['#F27A18', '#D92525', '#3b82f6', '#10b981', '#8b5cf6', '#ec4899', '#eab308', '#06b6d4'];
 
@@ -97,6 +101,31 @@ export default function DispatcherPanel() {
     setNuevaPlaca('');
     setNuevoChofer('');
     setMostrarAgregarCamion(false);
+  };
+
+  // Solo para pruebas: carga N pedidos con destinos reales (sin depender de
+  // SAP) para poder probar el optimizador. Borra las rutas que hubiera hoy,
+  // incluidas las ya despachadas — por eso pide confirmación antes.
+  const cargarPrueba = async () => {
+    const n = Number(nPruebaPedidos);
+    if (!n || n < 1) return;
+    if (!window.confirm(
+      `Esto va a borrar todas las rutas de hoy (incluidas las ya despachadas) y crear ${n} pedidos de prueba. ¿Continuar?`
+    )) return;
+    setCargandoPrueba(true);
+    try {
+      const data = await cargarPruebaPedidos(getToday(), n);
+      if (data.status === 'success') {
+        setMostrarCargarPrueba(false);
+        await fetchData();
+      } else {
+        alert(data.message);
+      }
+    } catch {
+      alert('Error al cargar pedidos de prueba.');
+    } finally {
+      setCargandoPrueba(false);
+    }
   };
 
   // ── OSRM Routing (paralelo, cacheado por firma de puntos, evitando casetas) ──
@@ -234,6 +263,17 @@ export default function DispatcherPanel() {
 
   const changeDriver = (id, d) => setTrucks(p => p.map(t => t.id === id ? { ...t, driver: d } : t));
 
+  // El backend identifica camiones con códigos genéricos (T-001, T-002…) y les
+  // pone un chofer placeholder ("Chofer 1") al crear la ruta — no conoce la
+  // placa real ni el chofer que el dispatcher asignó en el panel. Acá se
+  // resuelve siempre a la placa real (ID_TO_PLATE) y al chofer real vigente
+  // en `trucks`, para no mostrar identificadores genéricos en la UI.
+  const truckLabel = (camionCode) => {
+    const placa = ID_TO_PLATE[camionCode] || camionCode;
+    const truckReal = trucks.find(t => t.id === placa);
+    return { placa, chofer: truckReal?.driver || null };
+  };
+
   // ── Dispatch Actions ──
   const changeTruckState = async (truckId, newState) => {
     const ruta = rutas.find(r => ID_TO_PLATE[r.camion] === truckId || r.camion === truckId);
@@ -292,8 +332,15 @@ export default function DispatcherPanel() {
     <div className="flex flex-col h-screen w-full bg-gray-50 text-gray-800 overflow-hidden" style={{ fontFamily: "'Inter', sans-serif" }}>
 
       {/* ═══ HEADER ═══ */}
-      <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0 z-20">
+      <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0 z-20 relative">
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => setIsPanelOpen(v => !v)}
+            title={isPanelOpen ? 'Ocultar camiones y pedidos sin asignar' : 'Ver camiones y pedidos sin asignar'}
+            className="p-1.5 -ml-1.5 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition"
+          >
+            {isPanelOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          </button>
           <svg width="38" height="30" viewBox="0 0 100 80">
             <path d="M10,20 L50,45 L90,20 L75,10 L50,25 L25,10Z" fill="#F27A18" />
             <path d="M10,40 L50,65 L90,40 L80,32 L50,52 L20,32Z" fill="#D92525" />
@@ -321,25 +368,87 @@ export default function DispatcherPanel() {
         {/* ─── LEFT SIDEBAR ─── */}
         <aside className={`relative w-[340px] bg-white border-r border-gray-200 flex flex-col flex-shrink-0 transition-all duration-300 z-10 ${isPanelOpen ? 'ml-0' : '-ml-[340px]'}`}>
 
-          {/* Fleet Header */}
-          <div className="p-4 border-b border-gray-100 space-y-3 flex-shrink-0">
-            <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1.5 text-[11px] font-extrabold text-gray-500 uppercase tracking-wider">
-                <Sliders className="h-3.5 w-3.5 text-orange-600" /> Control de Flota
+          {/* ── PESTAÑAS DEL SIDEBAR: Camiones / Sin asignar ── */}
+          <div className="flex items-stretch border-b border-gray-200 flex-shrink-0">
+            <button
+              onClick={() => setSidebarTab('camiones')}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-3 text-xs font-bold transition border-b-2 ${
+                sidebarTab === 'camiones'
+                  ? 'text-orange-600 border-orange-500 bg-orange-50/50'
+                  : 'text-gray-400 border-transparent hover:text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              <Truck className="h-4 w-4" /> Camiones
+              <span className="text-[9px] bg-white text-gray-500 font-bold px-1.5 py-0.5 rounded-full border border-gray-200">
+                {trucks.filter(t => t.active).length}
               </span>
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] bg-orange-50 text-orange-700 font-bold px-2 py-0.5 rounded-md border border-orange-200">
-                  {trucks.filter(t => t.active).length}/{trucks.length}
+            </button>
+            <button
+              onClick={() => setSidebarTab('alertas')}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-3 text-xs font-bold transition border-b-2 ${
+                sidebarTab === 'alertas'
+                  ? 'text-red-600 border-red-500 bg-red-50/50'
+                  : 'text-gray-400 border-transparent hover:text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              <AlertCircle className="h-4 w-4" /> Sin asignar
+              {alertas.length > 0 && (
+                <span className="text-[9px] bg-red-100 text-red-700 font-bold px-1.5 py-0.5 rounded-full">
+                  {alertas.length}
                 </span>
-                <button
-                  onClick={() => setMostrarAgregarCamion(v => !v)}
-                  title="Agregar camión"
-                  className="w-5 h-5 flex items-center justify-center rounded-md bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-700 transition text-sm font-bold leading-none"
-                >
-                  +
-                </button>
-              </div>
+              )}
+            </button>
+          </div>
+
+          {sidebarTab === 'camiones' && (
+          <div className="flex-1 flex flex-col min-h-0">
+          <div className="p-4 border-b border-gray-100 space-y-3 flex-shrink-0">
+            <div className="flex items-center justify-end gap-1.5">
+              <button
+                onClick={() => setMostrarCargarPrueba(v => !v)}
+                title="Cargar pedidos de prueba (sin depender de SAP)"
+                className="flex items-center gap-1 text-[10px] font-bold text-purple-600 bg-purple-50 border border-purple-200 hover:bg-purple-100 transition rounded-md px-2 py-1"
+              >
+                <FlaskConical className="h-3 w-3" /> Prueba
+              </button>
+              <button
+                onClick={() => setMostrarAgregarCamion(v => !v)}
+                title="Agregar camión"
+                className="flex items-center gap-1 text-[10px] font-bold text-orange-600 bg-orange-50 border border-orange-200 hover:bg-orange-100 transition rounded-md px-2 py-1"
+              >
+                + Agregar camión
+              </button>
             </div>
+
+            {mostrarCargarPrueba && (
+              <div className="bg-purple-50 border border-purple-200 rounded-lg p-2.5 space-y-2">
+                <p className="text-[10px] text-purple-700">
+                  Carga pedidos con destinos reales del Excel de SAP, sin depender de la conexión a SAP. Borra las rutas de hoy.
+                </p>
+                <div className="flex gap-1.5">
+                  <input
+                    type="number"
+                    min="1"
+                    value={nPruebaPedidos}
+                    onChange={e => setNPruebaPedidos(e.target.value)}
+                    className="w-20 px-2.5 py-1.5 bg-white border border-purple-200 rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-purple-200"
+                  />
+                  <button
+                    onClick={cargarPrueba}
+                    disabled={cargandoPrueba}
+                    className="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs py-1.5 rounded-md transition disabled:opacity-40"
+                  >
+                    {cargandoPrueba ? 'Cargando…' : `Cargar ${nPruebaPedidos} pedidos`}
+                  </button>
+                  <button
+                    onClick={() => setMostrarCargarPrueba(false)}
+                    className="px-3 bg-white border border-gray-200 text-gray-500 font-bold text-xs py-1.5 rounded-md hover:bg-gray-100 transition"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
 
             {mostrarAgregarCamion && (
               <div className="bg-gray-50 border border-gray-200 rounded-lg p-2.5 space-y-2">
@@ -397,7 +506,7 @@ export default function DispatcherPanel() {
           </div>
 
           {/* Truck List */}
-          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+          <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
             {visibleTrucks.map(truck => {
               const expanded = expandedTruck === truck.id;
               const tOrders = ordersOf(truck.id);
@@ -460,7 +569,14 @@ export default function DispatcherPanel() {
                         
                         return (
                           <div className="bg-white p-2 rounded-lg border border-gray-200 flex flex-col gap-2">
-                            <span className="text-[10px] font-bold text-gray-400 uppercase">Estado: {r.estado}</span>
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-bold text-gray-400 uppercase">Estado: {r.estado}</span>
+                              {r.hora_salida && (
+                                <span className="text-[10px] font-bold text-emerald-600 flex items-center gap-1">
+                                  <Play className="w-3 h-3" /> Salió {r.hora_salida}
+                                </span>
+                              )}
+                            </div>
                             <div className="grid grid-cols-3 gap-1">
                               <button 
                                 onClick={() => changeTruckState(truck.id, 'Cargando')}
@@ -520,13 +636,13 @@ export default function DispatcherPanel() {
               );
             })}
           </div>
+          </div>
+          )}
 
-          {/* Alertas reales (calculadas en vivo desde la BD, no una lista fija) */}
-          <div className="border-t border-gray-200 p-3 space-y-2 flex-shrink-0 max-h-[320px] overflow-y-auto">
-            <div className="flex items-center gap-1.5 text-red-600 mb-1.5">
-              <AlertCircle className="h-4 w-4" />
-              <span className="text-xs font-bold uppercase tracking-wider">Sin asignar ({alertas.length})</span>
-            </div>
+          {/* ── PESTAÑA: SIN ASIGNAR ── (calculada en vivo desde la BD, no una
+              lista fija) */}
+          {sidebarTab === 'alertas' && (
+          <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-red-50/20">
             {alertas.length === 0 && (
               <p className="text-xs text-gray-400 italic">Sin alertas pendientes.</p>
             )}
@@ -568,7 +684,9 @@ export default function DispatcherPanel() {
                       {sugerencias?.error && (
                         <p className="text-[11px] text-red-500">{sugerencias.error}</p>
                       )}
-                      {sugerencias?.opciones?.map(o => (
+                      {sugerencias?.opciones?.map(o => {
+                        const { placa, chofer } = truckLabel(o.camion);
+                        return (
                         <div
                           key={o.ruta_id}
                           className={`bg-white border rounded-lg p-2.5 flex items-center justify-between gap-2 ${
@@ -578,8 +696,8 @@ export default function DispatcherPanel() {
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-1.5">
                               <Truck className={`w-3.5 h-3.5 flex-shrink-0 ${o.factible ? 'text-green-600' : 'text-red-500'}`} />
-                              <span className="text-[12px] font-bold text-gray-800">{o.camion}</span>
-                              <span className="text-[10px] text-gray-400">· {o.chofer}</span>
+                              <span className="text-[12px] font-bold text-gray-800">{placa}</span>
+                              <span className="text-[10px] text-gray-400">· {chofer || o.chofer}</span>
                             </div>
                             <div className="flex items-center gap-2 mt-0.5 text-[10px] text-gray-500">
                               <span className="flex items-center gap-0.5"><Clock className="w-3 h-3" /> Llega ~{o.eta_estimada}</span>
@@ -604,13 +722,15 @@ export default function DispatcherPanel() {
                             {asignando === o.ruta_id ? '...' : o.factible ? 'Asignar' : 'Forzar'}
                           </button>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
               );
             })}
           </div>
+          )}
         </aside>
 
         {/* ─── MAP AREA ─── */}
@@ -670,8 +790,9 @@ export default function DispatcherPanel() {
 
               {/* Routes — borde blanco debajo + línea de color encima para efecto "tubo" limpio */}
               {routesGenerated && trucks.filter(t => t.active).map(t => {
-                const pts = routePts(t.id);
-                if (!pts.length) return null;
+                const stops = ordersOf(t.id).filter(o => o.lat && o.lng);
+                if (!stops.length) return null;
+                const pts = stops.map(o => [o.lat, o.lng]);
                 const positions = osrmRoutes[t.id] || [CEDIS, ...pts, CEDIS];
                 return (
                   <React.Fragment key={`r-${t.id}`}>
@@ -679,13 +800,21 @@ export default function DispatcherPanel() {
                     <Polyline positions={positions} pathOptions={{ color: '#fff', weight: 8, opacity: 0.9 }} />
                     {/* Línea de color encima */}
                     <Polyline positions={positions} pathOptions={{ color: t.color, weight: 4, opacity: 1, lineCap: 'round', lineJoin: 'round' }} />
-                    {pts.map((p, i) => (
-                      <Marker key={`s-${t.id}-${i}`} position={p} icon={L.divIcon({
+                    {stops.map((o, i) => (
+                      <Marker key={`s-${t.id}-${i}`} position={[o.lat, o.lng]} icon={L.divIcon({
                         className: 'custom-div-icon',
                         html: `<div style="background:${t.color};width:24px;height:24px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:900;box-shadow:0 2px 6px rgba(0,0,0,0.35);">${i + 1}</div>`,
                         iconSize: [24, 24],
                         iconAnchor: [12, 12]
-                      })} />
+                      })}>
+                        {/* Distingue paradas superpuestas de distintos camiones: cada
+                            ruta numera desde 1, así que varios círculos "1" cercanos
+                            son normales — el tooltip aclara a qué camión pertenece. */}
+                        <Popup>
+                          <b>{t.id}</b> — Parada {i + 1}<br />
+                          <span style={{ fontSize: 11, color: '#64748b' }}>#{o.doc_num} {o.card_name}</span>
+                        </Popup>
+                      </Marker>
                     ))}
                   </React.Fragment>
                 );
@@ -863,7 +992,7 @@ export default function DispatcherPanel() {
             </div>
             <div className="px-5 py-4">
               <p className="text-sm text-gray-600">
-                ¿Meterlo de todos modos a <span className="font-bold text-gray-800">{confirmacion.opcion.camion}</span>?
+                ¿Meterlo de todos modos a <span className="font-bold text-gray-800">{truckLabel(confirmacion.opcion.camion).placa}</span>?
               </p>
             </div>
             <div className="px-5 pb-5 flex gap-2 justify-end">

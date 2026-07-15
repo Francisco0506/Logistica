@@ -4,6 +4,7 @@ from datetime import date, datetime
 from .models import Remision, Ruta, Destino
 from .optimizer import solve_vrp, ESTADOS_RUTA_CONGELADOS, sugerir_camiones_para_remision, asignar_manualmente, CAPACIDAD_CAMION_KG_DEFAULT
 from .sync import sync_from_sap
+from .test_data import cargar_pedidos_prueba
 
 api = NinjaAPI(title="Laben Routing API", version="1.0.0")
 
@@ -48,6 +49,7 @@ class RutaOut(Schema):
     chofer: str
     estado: str
     pedidos_count: int
+    hora_salida: Optional[str] = None
 
 # 1. Obtener todas las remisiones
 @api.get("/dispatcher/remisiones", response=List[RemisionOut])
@@ -83,6 +85,18 @@ def sync_sap(request, fecha: date):
     res = sync_from_sap(fecha)
     return res
 
+# 2b. Cargar pedidos de prueba (solo para probar el optimizador sin depender
+# de SAP) con destinos reales ya importados. ADVERTENCIA: borra las rutas que
+# hubiera ese día, incluidas las ya despachadas — el frontend debe confirmar
+# con el usuario antes de llamar esto.
+class CargarPruebaIn(Schema):
+    fecha: date
+    n: int = 80
+
+@api.post("/dispatcher/pedidos/cargar-prueba")
+def cargar_prueba_endpoint(request, payload: CargarPruebaIn):
+    return cargar_pedidos_prueba(payload.fecha, payload.n)
+
 # 3. Optimizar Rutas usando OR-Tools
 class GenerarRutasIn(Schema):
     fecha: date
@@ -117,7 +131,10 @@ def get_rutas(request, fecha: date):
             "camion": r.camion,
             "chofer": r.chofer,
             "estado": r.estado,
-            "pedidos_count": r.remisiones.count()
+            "pedidos_count": r.remisiones.count(),
+            # Hora real en que el despachador dio "Salida" (botón En_Ruta), no
+            # una hora teórica: null hasta que el camión de verdad se despache.
+            "hora_salida": r.hora_salida.strftime("%I:%M %p") if r.hora_salida else None,
         })
     return result
 

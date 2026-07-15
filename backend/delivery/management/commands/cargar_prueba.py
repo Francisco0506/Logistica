@@ -1,10 +1,8 @@
-import random
 from datetime import date
 
 from django.core.management.base import BaseCommand
-from django.db.models import Q
 
-from delivery.models import Destino, Remision, Ruta
+from delivery.test_data import cargar_pedidos_prueba
 
 
 class Command(BaseCommand):
@@ -27,46 +25,8 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         fecha = date.fromisoformat(options["fecha"])
-        n = options["n"]
-
-        # Nunca mezclar con el mock hardcodeado de sync.py (load_mock_data usa
-        # direcciones "Calle Falsa #..." y card_code "C-19XX") aunque haya
-        # quedado pegado en la tabla Destino de una sincronizacion vieja.
-        destinos = Destino.objects.exclude(street__startswith="Calle Falsa")
-        if options["solo_locales"]:
-            destinos = destinos.filter(
-                Q(latitude__range=(25.3, 26.0)) & Q(longitude__range=(-100.8, -100.0))
-            )
-        destinos = list(destinos)
-
-        if not destinos:
-            self.stderr.write("No hay destinos importados todavía. Corre primero la importación del Excel de SAP.")
-            return
-
-        random.seed(fecha.toordinal())  # reproducible: misma fecha -> mismos pedidos
-        random.shuffle(destinos)
-
-        Ruta.objects.filter(fecha=fecha).delete()
-        Remision.objects.filter(doc_date=fecha, slp_name="PRUEBA_TEMPORAL").delete()
-
-        base_doc_entry = 8_500_000
-        for i in range(n):
-            d = destinos[i % len(destinos)]
-            doc = base_doc_entry + i
-            Remision.objects.update_or_create(
-                doc_entry=doc,
-                defaults={
-                    "doc_num": doc,
-                    "card_code": d.card_code,
-                    "card_name": d.ship_to_code or "Cliente de prueba",
-                    "doc_date": fecha,
-                    "doc_total": random.randint(3000, 40000),
-                    "slp_code": "99",
-                    "slp_name": "PRUEBA_TEMPORAL",
-                    "destino": d,
-                    "peso_kg": round(random.uniform(20, 200), 1),
-                    "estado": "Pendiente",
-                },
-            )
-
-        self.stdout.write(self.style.SUCCESS(f"{n} pedidos de prueba cargados para {fecha}."))
+        resultado = cargar_pedidos_prueba(fecha, options["n"], options["solo_locales"])
+        if resultado["status"] == "error":
+            self.stderr.write(resultado["message"])
+        else:
+            self.stdout.write(self.style.SUCCESS(resultado["message"]))
