@@ -26,9 +26,12 @@ def sync_from_sap(fecha: date):
     db_password = os.getenv("SAP_DB_PASSWORD")
     db_port = os.getenv("SAP_DB_PORT", "1433")
 
-    # Si no están las credenciales configuradas, hacer Mock con datos de prueba realistas
+    # Si no están las credenciales configuradas, no inventar pedidos: reportarlo
+    # tal cual. Para probar el optimizador sin SAP, usar "Cargar pedidos de
+    # prueba" (cargar_pedidos_prueba en test_data.py), que usa destinos reales
+    # ya importados en vez de datos inventados.
     if not HAS_PYODBC or not db_host or not db_password or "your_sap" in db_password:
-        return load_mock_data(fecha)
+        return {"status": "warning", "message": "SAP B1 no está configurado. Usa 'Cargar pedidos de prueba' para probar sin SAP."}
 
     conn_str = f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={db_host},{db_port};DATABASE={db_name};UID={db_user};PWD={db_password}"
 
@@ -178,70 +181,4 @@ def sync_from_sap(fecha: date):
         return {"status": "success", "message": f"Sincronizados {imported_count} pedidos reales desde SAP B1."}
         
     except Exception as e:
-        return load_mock_data(fecha, error_msg=str(e))
-
-@transaction.atomic
-def load_mock_data(fecha: date, error_msg=None):
-    """
-    Carga de datos simulados realistas para desarrollo.
-    Es idempotente: si ya hay datos para esta fecha, no vuelve a crearlos.
-    """
-    if Remision.objects.filter(doc_date=fecha).exists():
-        msg = f"Pedidos ya sincronizados para el {fecha}."
-        if error_msg:
-            msg += f" (Nota: Falló la conexión real con SAP B1: {error_msg})"
-        return {"status": "success", "message": msg}
-        
-    mock_orders = [
-      { "id": 1901, "client": "Pollo Loco Santa Catarina", "total": 14000, "pos": [25.698, -100.495] },
-      { "id": 1902, "client": "Pizza Hut Valle", "total": 21000, "pos": [25.681, -100.452] },
-      { "id": 1903, "client": "Soriana Híper Lincoln", "total": 65000, "pos": [25.712, -100.458] },
-      { "id": 1904, "client": "OXXO García Centro", "total": 8000, "pos": [25.701, -100.515] },
-      { "id": 1905, "client": "Taquería La Mexicana", "total": 11000, "pos": [25.688, -100.432] },
-      { "id": 1906, "client": "HEB San Pedro", "total": 48000, "pos": [25.658, -100.412] },
-      { "id": 1907, "client": "Costco Valle Oriente", "total": 82000, "pos": [25.661, -100.421] },
-      { "id": 1908, "client": "Walmart Lincoln", "total": 52000, "pos": [25.735, -100.435] },
-      { "id": 1909, "client": "Comedor Caterpillar", "total": 31000, "pos": [25.708, -100.518] },
-      { "id": 1910, "client": "Lonchería Don Pepe", "total": 7000, "pos": [25.705, -100.512] },
-      { "id": 1911, "client": "Restaurante El Jonuco", "total": 26000, "pos": [25.722, -100.548] },
-      { "id": 1912, "client": "Tacos Primo Centro", "total": 15000, "pos": [25.672, -100.342] },
-      { "id": 1913, "client": "Hotel MS Milenium", "total": 39000, "pos": [25.679, -100.352] },
-      { "id": 1914, "client": "Comedor Industrial Nemak", "total": 58000, "pos": [25.715, -100.535] }
-    ]
-    
-    imported_count = 0
-    for idx, item in enumerate(mock_orders):
-        # Crear Destino
-        destino, _ = Destino.objects.get_or_create(
-            card_code=f"C-{item['id']}",
-            ship_to_code=item["client"],
-            defaults={
-                "street": f"Calle Falsa #{item['id']}",
-                "city": "Santa Catarina",
-                "latitude": item["pos"][0],
-                "longitude": item["pos"][1]
-            }
-        )
-        
-        # Crear Remisión
-        Remision.objects.update_or_create(
-            doc_entry=item["id"],
-            defaults={
-                "doc_num": item["id"],
-                "card_code": f"C-{item['id']}",
-                "card_name": item["client"],
-                "doc_date": fecha,
-                "doc_total": item["total"],
-                "slp_code": "1",
-                "slp_name": "Vendedor Local",
-                "destino": destino,
-                "estado": "Pendiente"
-            }
-        )
-        imported_count += 1
-        
-    msg = f"Sincronizados {imported_count} pedidos simulados de prueba."
-    if error_msg:
-        msg += f" (Nota: Falló la conexión real con SAP B1: {error_msg})"
-        
-    return {"status": "warning" if error_msg else "success", "message": msg}
+        return {"status": "error", "message": f"Falló la conexión con SAP B1: {e}"}

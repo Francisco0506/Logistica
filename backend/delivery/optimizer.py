@@ -9,8 +9,8 @@ from .routing_service import build_distance_time_matrices
 # ==========================================
 # 1. CONSTANTES DE TIEMPO Y CONFIGURACIÓN
 # ==========================================
-VELOCIDAD_PROMEDIO_KMH = 30.0  # Solo se usa si OSRM no responde (respaldo Haversine)
-TIEMPO_DESCARGA_MINUTOS = 15   # Tiempo de servicio por cliente
+VELOCIDAD_PROMEDIO_KMH = 40.0  # Solo se usa si OSRM no responde (respaldo Haversine)
+TIEMPO_DESCARGA_MINUTOS = 12   # Tiempo de servicio por cliente (medido con GPS real: promedio 12.5 min, mediana 8.2 min en una semana de reparto)
 HORA_CERO = datetime.strptime("07:00", "%H:%M") # Hora a la que arranca el CEDIS
 MINUTOS_TURNO_MAXIMO = 6 * 60  # Límite de 6 horas por turno de chofer
 PESO_ESTIMADO_KG = 150  # Fallback SOLO cuando SAP no trae peso real de línea (ver sync.py)
