@@ -4,9 +4,14 @@ cualquier geocodificación de respaldo. Centralizado aquí para no duplicar la
 URL del servidor OSRM ni el parámetro de exclusión de autopistas entre archivos.
 """
 import math
+import os
 import requests
 
-OSRM_BASE = "https://router.project-osrm.org"
+# Por default usa el servidor público (bueno para desarrollo/pruebas chicas),
+# pero se puede apuntar a un OSRM propio (Docker) poniendo OSRM_BASE en el .env
+# — ver docker/README.md. El propio quita el límite de 100 paradas y puede
+# evitar casetas de verdad.
+OSRM_BASE = os.getenv("OSRM_BASE", "https://router.project-osrm.org").rstrip("/")
 # El servidor demo de OSRM no tiene datos de costo de peaje, pero excluir "motorway"
 # evita en la práctica la gran mayoría de casetas de cuota en México, que corren
 # sobre autopistas de cuota clasificadas como motorway en OpenStreetMap.

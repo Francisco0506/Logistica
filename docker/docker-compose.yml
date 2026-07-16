@@ -1,0 +1,54 @@
+# Infraestructura local de Logistica (Laben).
+#   docker compose up -d db      -> levanta PostgreSQL
+#   docker compose up -d osrm    -> levanta el servidor de rutas (requiere haber
+#                                   corrido antes docker/osrm/prepare para bajar
+#                                   y procesar el mapa)
+#
+# Estos archivos SÍ van a GitHub. Las imágenes NO: se descargan solas la primera
+# vez. En otra máquina basta instalar Docker, bajar el repo y correr estos mismos
+# comandos.
+
+services:
+  # ─────────────────────────────────────────────────────────────
+  # Base de datos PostgreSQL (producción). Si no está corriendo,
+  # el backend cae solo a SQLite (ver core/settings.py). Las
+  # credenciales coinciden con los defaults de settings.py, así que
+  # funciona sin configurar ningún .env.
+  # ─────────────────────────────────────────────────────────────
+  db:
+    image: postgres:16
+    container_name: logistica-db
+    environment:
+      POSTGRES_DB: laben_routing
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────────────────────────
+  # Servidor de rutas OSRM (calles reales, sin depender del público).
+  # OJO: --max-table-size 10000 quita el límite de 100 paradas que
+  # trae OSRM por defecto (el mismo que hace fallar al servidor
+  # público). El puerto local es 5001 porque el 5000 suele estar
+  # ocupado. Requiere haber procesado el mapa antes (ver prepare).
+  # ─────────────────────────────────────────────────────────────
+  osrm:
+    image: osrm/osrm-backend:latest
+    container_name: logistica-osrm
+    command: osrm-routed --algorithm mld --max-table-size 10000 /data/mexico-latest.osrm
+    volumes:
+      - ./osrm/data:/data
+    ports:
+      - "5001:5000"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

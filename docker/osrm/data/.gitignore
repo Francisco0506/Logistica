@@ -1,0 +1,4 @@
+# Los archivos del mapa son enormes (cientos de MB) y se generan localmente
+# con prepare.sh / prepare.ps1 — NUNCA se suben a git. Cada máquina los procesa.
+*.pbf
+*.osrm*
