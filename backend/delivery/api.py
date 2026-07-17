@@ -5,17 +5,21 @@ from .models import Remision, Ruta, Destino
 from .optimizer import solve_vrp, ESTADOS_RUTA_CONGELADOS, sugerir_camiones_para_remision, asignar_manualmente, CAPACIDAD_CAMION_KG_DEFAULT
 from .sync import sync_from_sap
 from .test_data import cargar_pedidos_prueba
+from .samsara_service import get_ubicaciones_isuzu
 
 api = NinjaAPI(title="Laben Routing API", version="1.0.0")
 
 # Capacidades promedio en KG por camión y coordenadas de salida del CEDIS.
 # Únicas en todo el backend (frontend/src/config/fleet.js mantiene su propia
 # copia de CEDIS solo para centrar el mapa, no para el cálculo de rutas).
+# Orden = mismo orden que FLEET/ID_TO_PLATE en fleet.js (T-001..T-008 = los 8
+# camiones ISUZU de reparto reales: 012, 013, 015, 016, 017, 023, 024, 027).
 # VALOR PROVISIONAL: se asume la capacidad del camión más chico de la flota
-# (~3 toneladas de caja) para los 5 camiones, para no arriesgar sobrecarga
-# real en los camiones que en verdad cargan menos. Actualizar en cuanto se
-# confirmen las capacidades reales por camión (tarjeta de circulación).
-CAPACIDADES_CAMION_KG = [3000, 3000, 3000, 3000, 3000]
+# (~3 toneladas de caja) para los 8, para no arriesgar sobrecarga real en los
+# que en verdad cargan menos. Actualizar en cuanto se confirmen las
+# capacidades reales por modelo (tarjeta de circulación) — el ELF 600 y el
+# ELF 100/200 no cargan lo mismo.
+CAPACIDADES_CAMION_KG = [3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000]
 DEPOT_COORDS = (25.693214524592616, -100.48167993202988)
 
 # Transiciones válidas del flujo de despacho: no se puede saltar pasos
@@ -137,6 +141,23 @@ def get_rutas(request, fecha: date):
             "hora_salida": r.hora_salida.strftime("%I:%M %p") if r.hora_salida else None,
         })
     return result
+
+# 4b. Ubicación en vivo de los camiones ISUZU de reparto (GPS real vía Samsara).
+# Solo lectura: si Samsara no está configurado o falla, regresa lista vacía en
+# vez de romper el dispatcher.
+class CamionGPSOut(Schema):
+    placa: str
+    nombre_samsara: str
+    lat: float
+    lng: float
+    velocidad_kmh: float
+    rumbo: Optional[float] = None
+    ultima_actualizacion: Optional[str] = None
+    direccion: str = ""
+
+@api.get("/dispatcher/camiones/gps", response=List[CamionGPSOut])
+def get_camiones_gps(request):
+    return get_ubicaciones_isuzu()
 
 # 5. Actualizar estado de despacho de una ruta
 class RutaEstadoIn(Schema):

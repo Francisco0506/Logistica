@@ -100,6 +100,17 @@ export async function updateRutaEstado(rutaId, estado, { signal } = {}) {
 }
 
 /**
+ * Ubicación en vivo (GPS real vía Samsara) de los camiones ISUZU de reparto.
+ * Si Samsara no está configurado o no responde, el backend regresa [] en vez
+ * de fallar, así que el dispatcher sigue funcionando sin el layer en vivo.
+ */
+export async function getCamionesGPS({ signal } = {}) {
+  const res = await fetch(`${BASE}/camiones/gps`, { signal });
+  if (!res.ok) throw new Error(`Camiones GPS failed: ${res.status}`);
+  return res.json();
+}
+
+/**
  * Para un pedido que quedó sin asignar, calcula en qué camión conviene meterlo
  * (menor tiempo agregado) y si cabe limpio en turno/peso/ventana de horario.
  * @param {number} remisionId

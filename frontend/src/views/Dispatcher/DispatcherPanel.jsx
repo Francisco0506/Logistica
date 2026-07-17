@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { Truck, RefreshCw, Sliders, Search, Compass, AlertCircle, Eye, Package, FileText, Download, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, MapPin, User, Clock, Play, Check, Loader, Menu, X, FlaskConical } from 'lucide-react';
 import { CEDIS, FLEET, DRIVERS, ID_TO_PLATE } from '../../config/fleet';
-import { syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado, getSugerencias, asignarManual, cargarPruebaPedidos } from '../../services/api';
+import { syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado, getSugerencias, asignarManual, cargarPruebaPedidos, getCamionesGPS } from '../../services/api';
 
 // Cada cuánto se refresca la vista para traer lo más nuevo (pedidos nuevos de
 // SAP, cambios de estado de otros usuarios) sin que el dispatcher tenga que
@@ -28,6 +28,20 @@ const createTruckIcon = (color, isActive) =>
     html: `<div style="background:${isActive ? color : '#cbd5e1'};width:30px;height:30px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 8px rgba(0,0,0,.25)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M14 18V6a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h1"/><path d="M14 9h4l4 4v4a1 1 0 0 1-1 1h-1"/><circle cx="7.5" cy="18.5" r="2.5"/><circle cx="17.5" cy="18.5" r="2.5"/></svg></div>`,
     iconSize: [30, 30],
     iconAnchor: [15, 15],
+  });
+
+// Marcador de ubicación GPS real (Samsara), distinto del de la flota del
+// dispatcher: verde con un puntito "en vivo" para no confundirlo con las
+// posiciones fijas/manuales de `trucks`.
+const createGPSIcon = (moving) =>
+  L.divIcon({
+    className: 'custom-div-icon',
+    html: `<div style="position:relative;background:#16a34a;width:26px;height:26px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 8px rgba(0,0,0,.3)">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M14 18V6a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h1"/><path d="M14 9h4l4 4v4a1 1 0 0 1-1 1h-1"/><circle cx="7.5" cy="18.5" r="2.5"/><circle cx="17.5" cy="18.5" r="2.5"/></svg>
+      ${moving ? '<div style="position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%;background:#22c55e;border:2px solid #fff"></div>' : ''}
+    </div>`,
+    iconSize: [26, 26],
+    iconAnchor: [13, 13],
   });
 
 // Fecha dinámica del sistema, en hora LOCAL (no UTC: toISOString() se
@@ -88,6 +102,7 @@ export default function DispatcherPanel() {
   const [mostrarCargarPrueba, setMostrarCargarPrueba] = useState(false);
   const [nPruebaPedidos, setNPruebaPedidos] = useState(80);
   const [cargandoPrueba, setCargandoPrueba] = useState(false);
+  const [camionesGPS, setCamionesGPS]   = useState([]); // ubicación en vivo real (Samsara), independiente de `trucks`
 
   const PALETA_COLORES_CAMION = ['#F27A18', '#D92525', '#3b82f6', '#10b981', '#8b5cf6', '#ec4899', '#eab308', '#06b6d4'];
 
@@ -205,6 +220,15 @@ export default function DispatcherPanel() {
       if (e.name === 'AbortError') return; // StrictMode unmount / refresh cancelado — ignore
       console.error('Backend error:', e);
       setSyncStatus('Sin conexión con el backend');
+    }
+
+    // Aparte del try/catch principal: si Samsara falla, no debe tumbar el
+    // resto del dispatcher (pedidos/rutas siguen funcionando sin GPS en vivo).
+    try {
+      const gpsData = await getCamionesGPS({ signal });
+      setCamionesGPS(gpsData);
+    } catch (e) {
+      if (e.name !== 'AbortError') console.error('Camiones GPS error:', e);
     }
   };
 
@@ -777,6 +801,18 @@ export default function DispatcherPanel() {
               })}>
                 <Popup><b>CEDIS Laben</b><br /><span style={{ fontSize: 11, color: '#64748b' }}>Salida de Embarques</span></Popup>
               </Marker>
+
+              {/* Ubicación GPS real (Samsara) de los camiones ISUZU de reparto */}
+              {camionesGPS.map(c => (
+                <Marker key={`gps-${c.placa}`} position={[c.lat, c.lng]} icon={createGPSIcon(c.velocidad_kmh > 2)}>
+                  <Popup>
+                    <b>{c.nombre_samsara}</b> — {c.placa} <span style={{ color: '#16a34a' }}>● GPS real</span><br />
+                    <span style={{ fontSize: 11, color: '#64748b' }}>
+                      {c.velocidad_kmh > 2 ? `${c.velocidad_kmh} km/h` : 'Detenido'} · {c.direccion}
+                    </span>
+                  </Popup>
+                </Marker>
+              ))}
 
               {/* Trucks */}
               {trucks.map(t => (
