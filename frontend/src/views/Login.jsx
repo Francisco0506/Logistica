@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Truck, Shield, Layout, Lock, User } from 'lucide-react';
+import LabenLogo from '../components/LabenLogo';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -28,16 +29,10 @@ export default function Login() {
 
       <div className="w-full max-w-lg bg-white rounded-3xl border border-slate-200 shadow-2xl p-8 md:p-10 space-y-8">
         
-        {/* Isotipo Logo Laben Food Service */}
+        {/* Logo oficial Laben Food Service */}
         <div className="flex flex-col items-center text-center space-y-3">
-          <svg width="60" height="50" viewBox="0 0 100 80" className="drop-shadow-md">
-            <path d="M 10,20 L 50,45 L 90,20 L 75,10 L 50,25 L 25,10 Z" fill="#F27A18" />
-            <path d="M 10,40 L 50,65 L 90,40 L 80,32 L 50,52 L 20,32 Z" fill="#D92525" />
-          </svg>
-          <div>
-            <h1 className="text-3xl font-black text-slate-800 tracking-tight leading-none">LABEN</h1>
-            <p className="text-xs text-slate-400 font-bold tracking-widest uppercase mt-2">Food Service · Ruteo Inteligente</p>
-          </div>
+          <LabenLogo variant="vertical" />
+          <p className="text-[10px] text-slate-400 font-bold tracking-widest uppercase">Ruteo Inteligente</p>
         </div>
 
         {/* Formulario */}

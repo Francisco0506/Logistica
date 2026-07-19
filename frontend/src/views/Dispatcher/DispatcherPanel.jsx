@@ -3,7 +3,8 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { Truck, RefreshCw, Sliders, Search, Compass, AlertCircle, Eye, Package, FileText, Download, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, MapPin, User, Clock, Play, Check, Loader, Menu, X, FlaskConical } from 'lucide-react';
-import { CEDIS, FLEET, DRIVERS, ID_TO_PLATE } from '../../config/fleet';
+import { CEDIS, FLEET, ID_TO_PLATE } from '../../config/fleet';
+import LabenLogo from '../../components/LabenLogo';
 import { syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado, getSugerencias, asignarManual, cargarPruebaPedidos, getCamionesGPS } from '../../services/api';
 
 // Cada cuánto se refresca la vista para traer lo más nuevo (pedidos nuevos de
@@ -22,17 +23,9 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-const createTruckIcon = (color, isActive) =>
-  L.divIcon({
-    className: 'custom-div-icon',
-    html: `<div style="background:${isActive ? color : '#cbd5e1'};width:30px;height:30px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 8px rgba(0,0,0,.25)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M14 18V6a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h1"/><path d="M14 9h4l4 4v4a1 1 0 0 1-1 1h-1"/><circle cx="7.5" cy="18.5" r="2.5"/><circle cx="17.5" cy="18.5" r="2.5"/></svg></div>`,
-    iconSize: [30, 30],
-    iconAnchor: [15, 15],
-  });
-
-// Marcador de ubicación GPS real (Samsara), distinto del de la flota del
-// dispatcher: verde con un puntito "en vivo" para no confundirlo con las
-// posiciones fijas/manuales de `trucks`.
+// Marcador de ubicación GPS real (Samsara): verde con un puntito "en vivo".
+// Es el ÚNICO marcador de camión en el mapa (los de posiciones falsas junto
+// al CEDIS se eliminaron).
 const createGPSIcon = (moving) =>
   L.divIcon({
     className: 'custom-div-icon',
@@ -103,6 +96,10 @@ export default function DispatcherPanel() {
   const [nPruebaPedidos, setNPruebaPedidos] = useState(80);
   const [cargandoPrueba, setCargandoPrueba] = useState(false);
   const [camionesGPS, setCamionesGPS]   = useState([]); // ubicación en vivo real (Samsara), independiente de `trucks`
+  // Turno del chofer (horas) para la próxima optimización. Default 6h; se
+  // amplía (7h, 8h) cuando los pedidos del día no caben con el turno normal —
+  // una de las tres salidas junto con activar otro camión o asignar manual.
+  const [horasTurno, setHorasTurno]     = useState(6);
 
   const PALETA_COLORES_CAMION = ['#F27A18', '#D92525', '#3b82f6', '#10b981', '#8b5cf6', '#ec4899', '#eab308', '#06b6d4'];
 
@@ -111,7 +108,7 @@ export default function DispatcherPanel() {
     const color = PALETA_COLORES_CAMION[trucks.length % PALETA_COLORES_CAMION.length];
     setTrucks(prev => [
       ...prev,
-      { id: nuevaPlaca.trim(), driver: nuevoChofer.trim(), route: 'Sin ruta asignada', pos: [CEDIS[0], CEDIS[1]], color, active: true },
+      { id: nuevaPlaca.trim(), driver: nuevoChofer.trim(), route: 'Sin ruta asignada', color, active: true },
     ]);
     setNuevaPlaca('');
     setNuevoChofer('');
@@ -314,10 +311,16 @@ export default function DispatcherPanel() {
   };
 
   // ── Filters ──
-  const visibleTrucks = trucks.filter(t =>
-    t.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    t.driver.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Orden FIJO del panel: ranking de uso real (FLEET ya viene ordenada por km
+  // de GPS Samsara de los últimos 60 días — los que más salen, arriba).
+  // Camiones agregados a mano van al final.
+  const FLEET_RANK = Object.fromEntries(FLEET.map((t, i) => [t.id, i]));
+  const visibleTrucks = trucks
+    .filter(t =>
+      t.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      t.driver.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+    .sort((a, b) => (FLEET_RANK[a.id] ?? 99) - (FLEET_RANK[b.id] ?? 99));
 
   const visibleOrders = orders.filter(o => {
     if (o.truck) { const t = trucks.find(x => x.id === o.truck); if (!t?.active) return false; }
@@ -340,7 +343,7 @@ export default function DispatcherPanel() {
     const n = trucks.filter(t => t.active).length;
     if (!n) { alert('Activa al menos un camión.'); setIsOptimizing(false); return; }
     try {
-      const data = await generarRutas(fecha, n);
+      const data = await generarRutas(fecha, n, horasTurno);
       if (data.status === 'success') await fetchData();
       else alert(data.message);
     } catch { alert('Error del optimizador.'); }
@@ -365,14 +368,8 @@ export default function DispatcherPanel() {
           >
             {isPanelOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </button>
-          <svg width="38" height="30" viewBox="0 0 100 80">
-            <path d="M10,20 L50,45 L90,20 L75,10 L50,25 L25,10Z" fill="#F27A18" />
-            <path d="M10,40 L50,65 L90,40 L80,32 L50,52 L20,32Z" fill="#D92525" />
-          </svg>
-          <div>
-            <h1 className="text-xl font-black text-gray-900 tracking-tight leading-none">LABEN</h1>
-            <p className="text-[9px] text-gray-400 font-bold tracking-[.2em] uppercase">Food Service · Despacho</p>
-          </div>
+          <LabenLogo variant="horizontal" />
+          <span className="text-[9px] text-gray-300 font-bold tracking-[.2em] uppercase self-end pb-0.5">· Despacho</span>
         </div>
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1">
@@ -506,13 +503,35 @@ export default function DispatcherPanel() {
               </div>
             )}
 
+            {/* Turno del chofer para la próxima optimización. 6h es el normal;
+                ampliarlo es una de las salidas cuando los pedidos no caben. */}
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] font-bold text-gray-400 uppercase flex items-center gap-1">
+                <Clock className="h-3 w-3" /> Turno chofer
+              </span>
+              <select
+                value={horasTurno}
+                onChange={e => setHorasTurno(Number(e.target.value))}
+                className={`bg-white border rounded-md px-2 py-1 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-orange-200 ${horasTurno > 6 ? 'border-amber-400 text-amber-700' : 'border-gray-200 text-gray-700'}`}
+              >
+                {[6, 6.5, 7, 7.5, 8].map(h => (
+                  <option key={h} value={h}>{h} horas{h === 6 ? ' (normal)' : ''}</option>
+                ))}
+              </select>
+            </div>
+            {horasTurno > 6 && (
+              <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
+                Turno ampliado a {horasTurno}h: las rutas podrán ser más largas de lo normal. Confírmalo con los choferes.
+              </p>
+            )}
+
             <button
               onClick={optimize}
               disabled={isOptimizing}
               className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-bold py-2.5 rounded-lg shadow transition-all text-xs disabled:opacity-60"
             >
               <RefreshCw className={`h-3.5 w-3.5 ${isOptimizing ? 'animate-spin' : ''}`} />
-              {isOptimizing ? 'Optimizando…' : 'Optimizar Rutas'}
+              {isOptimizing ? 'Optimizando…' : `Optimizar Rutas (turno ${horasTurno}h)`}
             </button>
           </div>
 
@@ -545,8 +564,20 @@ export default function DispatcherPanel() {
                   >
                     <Truck className="h-4 w-4 flex-shrink-0" style={{ color: truck.active ? truck.color : '#94a3b8' }} />
                     <div className="flex-1 min-w-0">
-                      <div className="font-extrabold text-gray-800 text-[13px] tracking-wide">{truck.id}</div>
-                      <div className="text-[10px] text-gray-400 font-medium truncate">{truck.driver} · {truck.route}</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-extrabold text-gray-800 text-[13px] tracking-wide">{truck.id}</span>
+                        {truck.capacidadKg && (
+                          <span
+                            title={`${truck.modelo}: puede cargar hasta ${truck.capacidadKg.toLocaleString()} kg (estimado por modelo, confirmar con tarjeta de circulación)`}
+                            className="text-[9px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded-md flex-shrink-0"
+                          >
+                            {(truck.capacidadKg / 1000).toLocaleString('es-MX', { maximumFractionDigits: 1 })} ton
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-gray-400 font-medium truncate">
+                        {truck.modelo ? `${truck.modelo} · ` : ''}{truck.driver || 'Sin chofer'} · {truck.route}
+                      </div>
                     </div>
 
                     {/* Order count badge */}
@@ -574,16 +605,15 @@ export default function DispatcherPanel() {
                   {/* Expanded detail */}
                   {expanded && truck.active && (
                     <div className="border-t border-gray-100 bg-gray-50/60 px-4 py-3 space-y-3 text-xs">
-                      {/* Driver select */}
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-bold text-gray-400 uppercase">Chofer</span>
-                        <select
+                      {/* Chofer: texto libre — no hay roster fijo de choferes */}
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-bold text-gray-400 uppercase flex-shrink-0">Chofer</span>
+                        <input
                           value={truck.driver}
                           onChange={e => changeDriver(truck.id, e.target.value)}
-                          className="bg-white border border-gray-200 rounded px-2 py-0.5 text-xs font-semibold focus:outline-none"
-                        >
-                          {DRIVERS.map(d => <option key={d}>{d}</option>)}
-                        </select>
+                          placeholder="Sin chofer"
+                          className="w-36 bg-white border border-gray-200 rounded px-2 py-0.5 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-orange-200"
+                        />
                       </div>
 
                       {/* Dispatch Controls */}
@@ -669,6 +699,47 @@ export default function DispatcherPanel() {
           <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-red-50/20">
             {alertas.length === 0 && (
               <p className="text-xs text-gray-400 italic">Sin alertas pendientes.</p>
+            )}
+
+            {/* Opciones para meter los pedidos que no cupieron: más camión,
+                más turno, o asignación manual (la lista de abajo). */}
+            {alertas.some(a => a.motivo.startsWith('Pendiente')) && (
+              <div className="bg-white border border-orange-200 rounded-xl p-3 space-y-2 shadow-sm">
+                <p className="text-[11px] font-bold text-gray-700">
+                  ¿No caben todos los pedidos? Tienes 3 opciones:
+                </p>
+                <div className="space-y-1.5">
+                  <button
+                    onClick={() => { setSidebarTab('camiones'); setMostrarAgregarCamion(true); }}
+                    className="w-full text-left flex items-center gap-2 bg-orange-50 border border-orange-200 hover:bg-orange-100 rounded-lg px-2.5 py-2 transition"
+                  >
+                    <Truck className="w-3.5 h-3.5 text-orange-600 flex-shrink-0" />
+                    <span className="text-[11px] text-gray-700"><b>1. Activa o agrega otro camión</b> y vuelve a optimizar.</span>
+                  </button>
+                  <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
+                    <Clock className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+                    <span className="text-[11px] text-gray-700 flex-1"><b>2. Amplía el turno</b> de los choferes:</span>
+                    <select
+                      value={horasTurno}
+                      onChange={e => setHorasTurno(Number(e.target.value))}
+                      className="bg-white border border-amber-300 rounded px-1.5 py-0.5 text-[11px] font-bold focus:outline-none"
+                    >
+                      {[6, 6.5, 7, 7.5, 8].map(h => <option key={h} value={h}>{h}h</option>)}
+                    </select>
+                    <button
+                      onClick={optimize}
+                      disabled={isOptimizing}
+                      className="text-[10px] font-bold text-white bg-amber-500 hover:bg-amber-600 rounded px-2 py-1 transition disabled:opacity-50"
+                    >
+                      {isOptimizing ? '…' : 'Re-optimizar'}
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-2">
+                    <AlertCircle className="w-3.5 h-3.5 text-gray-500 flex-shrink-0" />
+                    <span className="text-[11px] text-gray-700"><b>3. Asígnalos a mano</b> abajo: cada pedido te sugiere en qué camión cabe mejor.</span>
+                  </div>
+                </div>
+              </div>
             )}
             {alertas.map(a => {
               const abierta = alertaAbierta === a.id;
@@ -814,15 +885,10 @@ export default function DispatcherPanel() {
                 </Marker>
               ))}
 
-              {/* Trucks */}
-              {trucks.map(t => (
-                <Marker key={t.id} position={t.pos} icon={createTruckIcon(t.color, t.active)}>
-                  <Popup>
-                    <b>{t.id}</b> — {t.driver}<br />
-                    <span style={{ fontSize: 11, color: '#64748b' }}>{t.route}</span>
-                  </Popup>
-                </Marker>
-              ))}
+              {/* Los camiones en el mapa son SOLO los verdes de GPS real
+                  (Samsara, arriba). Antes había marcadores de colores con
+                  posiciones falsas junto al CEDIS — se quitaron: la única
+                  posición de camión que se muestra es la real. */}
 
               {/* Routes — borde blanco debajo + línea de color encima para efecto "tubo" limpio */}
               {routesGenerated && trucks.filter(t => t.active).map(t => {

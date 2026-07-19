@@ -42,12 +42,14 @@ export async function getRutas(fecha, { signal } = {}) {
  * Lanza el optimizador de rutas (OR-Tools).
  * @param {string} fecha
  * @param {number} numCamiones
+ * @param {number} horasTurno — turno del chofer en horas (default 6). Se puede
+ *   ampliar (7, 8) cuando los pedidos del día no caben con el turno normal.
  */
-export async function generarRutas(fecha, numCamiones, { signal } = {}) {
+export async function generarRutas(fecha, numCamiones, horasTurno = 6, { signal } = {}) {
   const res = await fetch(`${BASE}/rutas/generar`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fecha, numero_camiones: numCamiones }),
+    body: JSON.stringify({ fecha, numero_camiones: numCamiones, horas_turno: horasTurno }),
     signal,
   });
   if (!res.ok) throw new Error(`Generar rutas failed: ${res.status}`);
