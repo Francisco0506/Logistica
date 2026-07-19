@@ -60,6 +60,12 @@ def cargar_pedidos_prueba(fecha, n, solo_locales=True):
                 "destino": d,
                 "peso_kg": round(random.uniform(20, 200), 1),
                 "estado": "Pendiente",
+                # Los folios de prueba se reciclan entre fechas: hay que soltar
+                # la ruta/secuencia/ETA de la corrida anterior o el pedido queda
+                # pegado a una ruta de otro día (con su ETA vieja).
+                "ruta": None,
+                "secuencia_ruta": None,
+                "eta": None,
             },
         )
 

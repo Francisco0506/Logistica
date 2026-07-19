@@ -31,13 +31,17 @@ export const ID_TO_PLATE = {
 // ver docs/uso-flota-samsara.md): los que más salen hasta arriba. Así el panel
 // muestra primero los camiones que de verdad trabajan, y el optimizador los
 // usa en ese mismo orden. 015 y 012 (últimos) llevan 2 meses sin operar.
+// `activo: false` = los que casi no salen (ver días trabajados en 30 días:
+// 024 salió 1 día, 015 tres días con 9 km, 012 ninguno). Arrancan apagados
+// para no meterlos en la optimización por default — se activan con un clic
+// desde el panel el día que se ocupen.
 export const FLEET = [
-  { id: 'RA7475A', samsara: '027', modelo: 'ELF 600', capacidadKg: 5500, driver: '', route: 'Sin ruta asignada', color: '#06b6d4' },
-  { id: 'PP4873A', samsara: '023', modelo: 'ELF 400/500', capacidadKg: 3800, driver: '', route: 'Sin ruta asignada', color: '#ec4899' },
-  { id: 'PR6889B', samsara: '017', modelo: 'ELF 600', capacidadKg: 5500, driver: '', route: 'Sin ruta asignada', color: '#8b5cf6' },
-  { id: 'RJ97892', samsara: '016', modelo: 'ELF 100/200', capacidadKg: 2000, driver: '', route: 'Sin ruta asignada', color: '#10b981' },
-  { id: 'RJ37663', samsara: '013', modelo: 'ELF 100/200', capacidadKg: 2000, driver: '', route: 'Sin ruta asignada', color: '#D92525' },
-  { id: 'PP4872A', samsara: '024', modelo: 'ELF 400/500', capacidadKg: 3800, driver: '', route: 'Sin ruta asignada', color: '#eab308' },
-  { id: 'RJ57620', samsara: '015', modelo: 'ELF 100/200', capacidadKg: 2000, driver: '', route: 'Sin ruta asignada', color: '#3b82f6' },
-  { id: 'RH83800', samsara: '012', modelo: 'ELF 400/500', capacidadKg: 3800, driver: '', route: 'Sin ruta asignada', color: '#F27A18' },
+  { id: 'RA7475A', samsara: '027', modelo: 'ELF 600', capacidadKg: 5500, activo: true, driver: '', route: 'Sin ruta asignada', color: '#06b6d4' },
+  { id: 'PP4873A', samsara: '023', modelo: 'ELF 400/500', capacidadKg: 3800, activo: true, driver: '', route: 'Sin ruta asignada', color: '#ec4899' },
+  { id: 'PR6889B', samsara: '017', modelo: 'ELF 600', capacidadKg: 5500, activo: true, driver: '', route: 'Sin ruta asignada', color: '#8b5cf6' },
+  { id: 'RJ97892', samsara: '016', modelo: 'ELF 100/200', capacidadKg: 2000, activo: true, driver: '', route: 'Sin ruta asignada', color: '#10b981' },
+  { id: 'RJ37663', samsara: '013', modelo: 'ELF 100/200', capacidadKg: 2000, activo: true, driver: '', route: 'Sin ruta asignada', color: '#D92525' },
+  { id: 'PP4872A', samsara: '024', modelo: 'ELF 400/500', capacidadKg: 3800, activo: false, driver: '', route: 'Sin ruta asignada', color: '#eab308' },
+  { id: 'RJ57620', samsara: '015', modelo: 'ELF 100/200', capacidadKg: 2000, activo: false, driver: '', route: 'Sin ruta asignada', color: '#3b82f6' },
+  { id: 'RH83800', samsara: '012', modelo: 'ELF 400/500', capacidadKg: 3800, activo: false, driver: '', route: 'Sin ruta asignada', color: '#F27A18' },
 ];

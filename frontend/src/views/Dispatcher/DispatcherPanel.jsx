@@ -67,7 +67,9 @@ function MapResizeHandler({ isPanelOpen }) {
 
 // ── Component ──
 export default function DispatcherPanel() {
-  const [trucks, setTrucks]             = useState(FLEET.map(t => ({ ...t, active: true })));
+  // `activo` viene de fleet.js: los camiones que casi no salen (024, 015, 012)
+  // arrancan apagados; se prenden con un clic cuando se ocupen.
+  const [trucks, setTrucks]             = useState(FLEET.map(t => ({ ...t, active: t.activo !== false })));
   const [routesGenerated, setRoutesGenerated] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [searchQuery, setSearchQuery]   = useState('');
@@ -99,7 +101,7 @@ export default function DispatcherPanel() {
   // Turno del chofer (horas) para la próxima optimización. Default 6h; se
   // amplía (7h, 8h) cuando los pedidos del día no caben con el turno normal —
   // una de las tres salidas junto con activar otro camión o asignar manual.
-  const [horasTurno, setHorasTurno]     = useState(6);
+  const [horasTurno, setHorasTurno]     = useState(6.5);
 
   const PALETA_COLORES_CAMION = ['#F27A18', '#D92525', '#3b82f6', '#10b981', '#8b5cf6', '#ec4899', '#eab308', '#06b6d4'];
 
@@ -512,14 +514,14 @@ export default function DispatcherPanel() {
               <select
                 value={horasTurno}
                 onChange={e => setHorasTurno(Number(e.target.value))}
-                className={`bg-white border rounded-md px-2 py-1 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-orange-200 ${horasTurno > 6 ? 'border-amber-400 text-amber-700' : 'border-gray-200 text-gray-700'}`}
+                className={`bg-white border rounded-md px-2 py-1 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-orange-200 ${horasTurno > 6.5 ? 'border-amber-400 text-amber-700' : 'border-gray-200 text-gray-700'}`}
               >
                 {[6, 6.5, 7, 7.5, 8].map(h => (
-                  <option key={h} value={h}>{h} horas{h === 6 ? ' (normal)' : ''}</option>
+                  <option key={h} value={h}>{h} horas{h === 6.5 ? ' (lo normal)' : ''}</option>
                 ))}
               </select>
             </div>
-            {horasTurno > 6 && (
+            {horasTurno > 6.5 && (
               <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
                 Turno ampliado a {horasTurno}h: las rutas podrán ser más largas de lo normal. Confírmalo con los choferes.
               </p>

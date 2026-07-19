@@ -132,6 +132,66 @@ Lectura: el sábado NO es día flojo en número de camiones (salen 4, como
 cualquier día), pero sí en volumen (~40-55 paradas totales vs ~60-77 entre
 semana). La flota diaria realista es de 4 camiones + 1 de refuerzo.
 
+## Calibración del optimizador (1 mes GPS, SOLO los 5 camiones que operan)
+
+Se excluyen 024/015/012 porque casi no salen y ensuciaban los promedios.
+
+| Camión | Días | Sale | Regresa | Jornada | Paradas/día | Descarga |
+|--------|-----:|------|---------|--------:|------------:|---------:|
+| 013 | 12 | 11:08 | 17:11 | 6.0 h | 11.9 | 12.3 min |
+| 016 | 21 | 10:10 | 16:04 | 5.9 h | 18.0 | 10.8 min |
+| 017 | 25 | 10:40 | 16:40 | 6.0 h | 11.8 | 12.9 min |
+| 023 | 25 | 10:12 | 17:59 | 7.9 h | 17.9 | 11.5 min |
+| 027 | 24 | 09:36 | 17:00 | 7.4 h | 16.6 | 11.5 min |
+
+**Promedios de flota:**
+
+| Métrica | Valor | Mediana | P75 |
+|---------|-------|---------|-----|
+| Hora de salida del CEDIS | **10:16** | 09:53 | — |
+| Hora de regreso | **16:58** | — | — |
+| Horas repartiendo (jornada) | **6.71 h** | 6.43 h | 8.07 h |
+| Paradas/día (= pedidos por ruta) | **15.5** | 15 | 20 (máx 38) |
+| Descarga por parada | **11.7 min** | 9.2 min | 14.5 min |
+| Velocidad en movimiento | **42.3 km/h** | 39.0 km/h | — |
+
+### Qué se cambió en el optimizador con estos números
+
+| Constante | Antes | Ahora | Motivo |
+|-----------|-------|-------|--------|
+| `HORA_CERO` | 07:00 | **10:00** | Los camiones no salen a las 7; salida real 10:16 (mediana 09:53). Antes las ETAs del plan nacían 3 h adelantadas. |
+| `MINUTOS_TURNO_MAXIMO` | 6 h | **6.5 h** | Jornada real mediana 6.43 h. Ampliable a 8 h desde el panel. |
+| `VELOCIDAD_PROMEDIO_KMH` | 43 | **42** | Medido 42.3 (solo respaldo si OSRM cae). |
+| `TIEMPO_DESCARGA_MINUTOS` | 12 | **12** (sin cambio) | Confirmado: real 11.7 min promedio. |
+
+Verificado tras el cambio: con 80 pedidos y 5 camiones, las rutas salen de 15
+paradas con ETAs de 10:15 AM a 2:46 PM — coincide con la operación real
+(mediana 15 paradas/día).
+
+Nota sobre ventanas: de los 195 destinos, 97 cierran antes de las 14:00 y solo
+5 cierran antes de las 11:00 — de esos, 4 tienen la hora mal capturada en SAP
+(ej. "08:00 - 06:00", les falta el PM). El único con ventana temprana genuina
+es Narciso Cafetería (07:00-09:00), imposible de atender si el camión sale a
+las 10:00.
+
+## Caso 023 (PP4873A) — sábado 18-jul: no regresó al CEDIS
+
+Cronología por GPS:
+
+- 00:51 – 10:50: parado en el CEDIS (toda la mañana)
+- **10:51: salió del CEDIS**
+- 10:55 – 11:03: parada de 8 min en Carretera Saltillo–Monterrey
+- 11:34 en adelante: llega al Periférico (General Escobedo, a 21 km del CEDIS)
+- **11:56 – 13:25 (89 min) y 13:28 – 17:44 (255 min): parado en el mismo punto**
+- 18:31 – 19:42: sigue ahí (71 min más)
+- 21:18 – 23:29: se mueve a Monterrey/García y ahí pernocta
+- **Nunca regresó al CEDIS el sábado.** El domingo 19-jul seguía en García
+  (última posición 15:30, Morelos, García NLE).
+
+En total: ~7 horas detenido en un mismo punto del Periférico y pernocta fuera.
+No es patrón de reparto (no hay paradas múltiples). Pendiente confirmar con
+operaciones qué pasó (¿taller?, ¿el chofer se lleva la unidad a casa?).
+
 ## Fichas para confirmar capacidades (tarjeta de circulación / VIN)
 
 | Camión | Placa | Modelo | Año | VIN |

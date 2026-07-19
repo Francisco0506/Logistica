@@ -117,10 +117,11 @@ def cargar_prueba_endpoint(request, payload: CargarPruebaIn):
 class GenerarRutasIn(Schema):
     fecha: date
     numero_camiones: int
-    # Turno del chofer en horas para esta corrida. Default 6h; el despachador
-    # puede ampliarlo (7h, 8h) cuando los pedidos no caben con el turno normal.
-    # Acotado a 4-12h para evitar valores absurdos por error de captura.
-    horas_turno: float = 6.0
+    # Turno del chofer en horas para esta corrida. Default 6.5h = la jornada
+    # real medida con GPS (mediana 6.4 h); el despachador puede ampliarlo
+    # (7h, 8h) cuando los pedidos no caben. Acotado a 4-12h para evitar
+    # valores absurdos por error de captura.
+    horas_turno: float = 6.5
 
 @api.post("/dispatcher/rutas/generar")
 def generar_rutas(request, payload: GenerarRutasIn):

@@ -8,10 +8,21 @@ from .routing_service import build_distance_time_matrices
 # ==========================================
 # 1. CONSTANTES DE TIEMPO Y CONFIGURACIÓN
 # ==========================================
-VELOCIDAD_PROMEDIO_KMH = 43.0  # Solo se usa si OSRM no responde (respaldo Haversine) — medido con 1 mes de GPS real (Samsara), solo camiones ISUZU: promedio 43.4 km/h, mediana 40.0 km/h
-TIEMPO_DESCARGA_MINUTOS = 12   # Tiempo de servicio por cliente — medido con 1 mes de GPS real (Samsara), solo camiones ISUZU: promedio 11.8 min, mediana 8.2 min, P75 13.5 min (1896 paradas)
-HORA_CERO = datetime.strptime("07:00", "%H:%M") # Hora a la que arranca el CEDIS
-MINUTOS_TURNO_MAXIMO = 6 * 60  # Límite de 6 horas por turno de chofer
+# ── Constantes medidas con 1 mes de GPS real (Samsara), SOLO los 5 camiones
+# que de verdad operan (013, 016, 017, 023, 027 — se excluyen 024/015/012 que
+# casi no salen y ensuciaban los promedios). Ver docs/uso-flota-samsara.md.
+VELOCIDAD_PROMEDIO_KMH = 42.0  # Solo se usa si OSRM no responde (respaldo Haversine) — real: promedio 42.3 km/h, mediana 39.0
+TIEMPO_DESCARGA_MINUTOS = 12   # Tiempo de servicio por cliente — real: promedio 11.7 min, mediana 9.2, P75 14.5 (1662 paradas medidas)
+# Hora base del plan. Los camiones NO salen a las 7:00: la salida real del
+# CEDIS promedia 10:16 (mediana 09:53) porque antes hay que cargar. Se usa
+# 10:00 para que las ETAs del plan nazcan realistas; al dar "Salida" se
+# recalculan igual desde la hora real (ver recalcular_etas_desde_salida).
+HORA_CERO = datetime.strptime("10:00", "%H:%M")
+MINUTOS_TURNO_MAXIMO = int(6.5 * 60)  # Jornada real repartiendo: promedio 6.7 h, mediana 6.4 h, P75 8.1 h. El despachador puede ampliarla por corrida desde el panel.
+# Referencia operativa (no es restricción): paradas reales por camión al día
+# = mediana 15, P75 20, máximo observado 38 (ese día fueron 12.9 h de jornada).
+# El límite de turno + el tiempo de descarga ya acotan las paradas por ruta.
+PARADAS_TIPICAS_POR_RUTA = 15
 PESO_ESTIMADO_KG = 150  # Fallback SOLO cuando SAP no trae peso real de línea (ver sync.py)
 INTERVALO_SALIDA_MINUTOS = 30  # No todos los camiones salen a la misma hora: salidas cada 30 min
 CAPACIDAD_CAMION_KG_DEFAULT = 3000  # Ruta no guarda la capacidad real del camión asignado; ver api.py:CAPACIDADES_CAMION_KG
