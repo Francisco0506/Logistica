@@ -10,8 +10,8 @@
 
 services:
   # ─────────────────────────────────────────────────────────────
-  # Base de datos PostgreSQL (producción). Si no está corriendo,
-  # el backend cae solo a SQLite (ver core/settings.py). Las
+  # Base de datos PostgreSQL: la ÚNICA base del backend. Si no está
+  # corriendo, el backend truena al arrancar con un mensaje claro. Las
   # credenciales coinciden con los defaults de settings.py, así que
   # funciona sin configurar ningún .env.
   # ─────────────────────────────────────────────────────────────

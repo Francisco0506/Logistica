@@ -87,7 +87,11 @@ DB_PASSWORD = os.getenv('DB_PASSWORD', 'postgres')
 DB_HOST = os.getenv('DB_HOST', 'localhost')
 DB_PORT = os.getenv('DB_PORT', '5432')
 
-USE_POSTGRES = False
+# PostgreSQL es la ÚNICA base de datos. Antes había un fallback silencioso a
+# SQLite si Postgres no respondía en 2s al arrancar; se quitó porque generaba
+# una segunda fuente de verdad con datos viejos (pedidos/rutas fantasma en el
+# panel) sin que nadie se diera cuenta. Si Postgres no está disponible, mejor
+# tronar aquí con instrucciones claras que trabajar contra datos equivocados.
 try:
     conn = psycopg2.connect(
         dbname=DB_NAME,
@@ -95,36 +99,25 @@ try:
         password=DB_PASSWORD,
         host=DB_HOST,
         port=DB_PORT,
-        connect_timeout=2
+        connect_timeout=5
     )
     conn.close()
-    USE_POSTGRES = True
-except Exception:
-    pass
+except Exception as e:
+    raise RuntimeError(
+        f"PostgreSQL no está disponible en {DB_HOST}:{DB_PORT} ({e}). "
+        "Levántalo con: cd docker && docker compose up -d db"
+    )
 
-if USE_POSTGRES:
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': DB_NAME,
-            'USER': DB_USER,
-            'PASSWORD': DB_PASSWORD,
-            'HOST': DB_HOST,
-            'PORT': DB_PORT,
-        }
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': DB_NAME,
+        'USER': DB_USER,
+        'PASSWORD': DB_PASSWORD,
+        'HOST': DB_HOST,
+        'PORT': DB_PORT,
     }
-    print("DATABASE: Connected to PostgreSQL")
-else:
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
-            'OPTIONS': {
-                'timeout': 20,
-            }
-        }
-    }
-    print("DATABASE: PostgreSQL not available. Using SQLite fallback.")
+}
 
 CORS_ALLOW_ALL_ORIGINS = True  # For development only
 

@@ -3,7 +3,9 @@ django-ninja>=1.0.1
 django-cors-headers>=4.3.1
 psycopg2-binary>=2.9.9
 ortools>=9.8.3296
-apscheduler>=3.10.4
 python-dotenv>=1.0.1
 requests>=2.31.0
 openpyxl>=3.1.2
+# Opcional: solo para la conexion real a SAP B1 (SQL Server). sync.py funciona
+# sin el (reporta "SAP no configurado"). Instalar cuando sistemas de acceso:
+# pyodbc>=5.0

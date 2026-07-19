@@ -1,9 +1,8 @@
-import math
 from datetime import datetime, timedelta
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
 from django.db import transaction
-from .models import Ruta, Remision, Destino
+from .models import Ruta, Remision
 from .routing_service import build_distance_time_matrices
 
 # ==========================================
@@ -23,7 +22,7 @@ CAPACIDAD_CAMION_KG_DEFAULT = 3000  # Ruta no guarda la capacidad real del cami�
 ESTADOS_RUTA_CONGELADOS = ['Cargando', 'Listo', 'En_Ruta', 'Finalizada']
 
 
-def _ventana_en_minutos(destino):
+def _ventana_en_minutos(destino, minutos_turno=MINUTOS_TURNO_MAXIMO):
     """
     Convierte la ventana de recibo real del Ship-To (ini_recibo_1/fin_recibo_1)
     a minutos desde HORA_CERO, SIN recortar al turno del chofer. Si el destino
@@ -48,12 +47,12 @@ def _ventana_en_minutos(destino):
             # una ventana de 0 minutos por un dato corrupto: se ignora la
             # ventana y se usa el turno completo, igual que si no tuviera
             # ventana configurada en SAP.
-            return (0, MINUTOS_TURNO_MAXIMO)
+            return (0, minutos_turno)
         return (ini_min, fin_min)
-    return (0, MINUTOS_TURNO_MAXIMO)
+    return (0, minutos_turno)
 
 
-def _ventana_recortada_a_turno(ini_min, fin_min):
+def _ventana_recortada_a_turno(ini_min, fin_min, minutos_turno=MINUTOS_TURNO_MAXIMO):
     """
     Recorta una ventana real al turno máximo del chofer, para usarla como
     restricción dura de OR-Tools (que exige ini <= fin). Un cliente que abre
@@ -61,15 +60,15 @@ def _ventana_recortada_a_turno(ini_min, fin_min):
     minuto al final del turno: en la práctica, inalcanzable, y el solver lo
     deja fuera de esa ruta en vez de reventar con una ventana inválida.
     """
-    ini_cap = min(ini_min, MINUTOS_TURNO_MAXIMO)
-    fin_cap = max(ini_cap, min(fin_min, MINUTOS_TURNO_MAXIMO))
+    ini_cap = min(ini_min, minutos_turno)
+    fin_cap = max(ini_cap, min(fin_min, minutos_turno))
     return (ini_cap, fin_cap)
 
 
 # ==========================================
 # 2. CONSTRUCCIÓN DEL MODELO (MATRICES)
 # ==========================================
-def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords):
+def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords, minutos_turno=MINUTOS_TURNO_MAXIMO):
     """
     Construye las matrices de distancia/tiempo (por calle real, evitando
     autopistas de cuota vía OSRM) y las demandas/ventanas horarias.
@@ -104,7 +103,7 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords):
     # Nodo 0 es el CEDIS
     locations = [depot_coords]
     demands = [0]
-    time_windows = [(0, MINUTOS_TURNO_MAXIMO)]
+    time_windows = [(0, minutos_turno)]
     remisiones_validas = []  # una entrada por nodo: lista de remisiones de esa parada
 
     for remisiones_del_destino in grupos_por_destino.values():
@@ -114,7 +113,7 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords):
             (r.peso_kg if r.peso_kg else PESO_ESTIMADO_KG) for r in remisiones_del_destino
         )
         demands.append(int(peso_parada))
-        time_windows.append(_ventana_recortada_a_turno(*_ventana_en_minutos(destino)))
+        time_windows.append(_ventana_recortada_a_turno(*_ventana_en_minutos(destino, minutos_turno), minutos_turno))
         remisiones_validas.append(remisiones_del_destino)
 
     if len(locations) <= 1:
@@ -149,12 +148,18 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords):
 # ==========================================
 # 3. SOLUCIONADOR PRINCIPAL (OR-TOOLS)
 # ==========================================
-def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords):
+def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords, horas_turno=None):
     """
     Resuelve el problema de ruteo de vehículos usando OR-Tools (VRPTW) sobre
     distancias/tiempos reales de calle (OSRM, evitando autopistas de cuota).
     Nunca destruye rutas ya despachadas (Cargando/Listo/En_Ruta/Finalizada).
+
+    `horas_turno`: duración del turno de cada chofer para ESTA corrida (default
+    6h). El despachador puede ampliarlo (ej. 7h) cuando los pedidos del día no
+    caben en las rutas con el turno normal — es una de las tres salidas junto
+    con activar otro camión o asignar manualmente.
     """
+    minutos_turno = int(horas_turno * 60) if horas_turno else MINUTOS_TURNO_MAXIMO
     # Los camiones ya despachados hoy (Cargando/Listo/En_Ruta/Finalizada) no
     # están disponibles para rutas NUEVAS: ya salieron con su propia carga. Si
     # no se restan aquí, el solver intenta crear una ruta nueva por cada
@@ -172,7 +177,7 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords):
             "message": "Todos los camiones activos ya están despachados hoy. Agrega otro camión o espera a que alguno termine su ruta.",
         }
 
-    data = build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords)
+    data = build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords, minutos_turno)
     if not data:
         return {"status": "error", "message": "No hay remisiones válidas para optimizar en esta fecha."}
 
@@ -197,7 +202,7 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords):
     # Tope global de la dimensión: el camión que sale más tarde también necesita
     # su turno completo de MINUTOS_TURNO_MAXIMO a partir de su propia salida.
     ultimo_inicio = max(data['vehicle_starts']) if data['vehicle_starts'] else 0
-    tope_global_dimension = ultimo_inicio + MINUTOS_TURNO_MAXIMO
+    tope_global_dimension = ultimo_inicio + minutos_turno
 
     time_dimension_name = 'Time'
     routing.AddDimension(
@@ -229,9 +234,9 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords):
         end_index = routing.End(vehicle_id)
         start_min = data['vehicle_starts'][vehicle_id]
         time_dimension.CumulVar(start_index).SetRange(start_min, start_min)
-        # Cada camión debe regresar antes de que se le acabe SU turno de 6h,
+        # Cada camión debe regresar antes de que se le acabe SU turno,
         # sin importar a qué hora haya salido.
-        time_dimension.CumulVar(end_index).SetMax(start_min + MINUTOS_TURNO_MAXIMO)
+        time_dimension.CumulVar(end_index).SetMax(start_min + minutos_turno)
 
     def demand_callback(from_index):
         from_node = manager.IndexToNode(from_index)
@@ -379,6 +384,51 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords):
             "pedidos_no_asignados": pedidos_no_asignados,
             "pedidos_sin_geo": pedidos_sin_geo,
         }
+
+
+def recalcular_etas_desde_salida(ruta, depot_coords, salida_dt=None):
+    """
+    Recalcula las ETAs de una ruta a partir de la hora REAL de salida (cuando
+    el despachador presiona "Salida"), no la hora teórica del plan.
+
+    Motivo: el optimizador puede correr a las 8:00 pero la carga del camión
+    termina a las 10:00 — sin esto, todas las ETAs prometidas quedan ~2 horas
+    adelantadas respecto a la realidad. Se recorre la secuencia real de la
+    ruta (CEDIS → paradas en orden) con tiempos de OSRM + descarga.
+
+    Regresa cuántos pedidos se actualizaron.
+    """
+    remisiones = [
+        r for r in ruta.remisiones.filter(destino__isnull=False)
+        .select_related('destino').order_by('secuencia_ruta')
+        if r.destino.latitude is not None and r.destino.longitude is not None
+    ]
+    if not remisiones:
+        return 0
+    salida_dt = salida_dt or datetime.now()
+
+    # Paradas únicas en orden: documentos consecutivos del mismo destino
+    # comparten parada (el camión entra una sola vez).
+    paradas = []
+    for r in remisiones:
+        if paradas and paradas[-1][0] == r.destino_id:
+            paradas[-1][1].append(r)
+        else:
+            paradas.append((r.destino_id, [r], (r.destino.latitude, r.destino.longitude)))
+
+    locations = [depot_coords] + [p[2] for p in paradas]
+    _, time_matrix, _ = build_distance_time_matrices(locations, VELOCIDAD_PROMEDIO_KMH)
+
+    t = salida_dt
+    actualizadas = []
+    for i, (_, rems, _) in enumerate(paradas):
+        t += timedelta(minutes=time_matrix[i][i + 1])
+        for r in rems:
+            r.eta = t.strftime("%I:%M %p")
+            actualizadas.append(r)
+        t += timedelta(minutes=TIEMPO_DESCARGA_MINUTOS)
+    Remision.objects.bulk_update(actualizadas, ['eta'])
+    return len(actualizadas)
 
 
 # ==========================================

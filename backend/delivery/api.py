@@ -1,8 +1,8 @@
 from ninja import NinjaAPI, Schema
 from typing import List, Optional
 from datetime import date, datetime
-from .models import Remision, Ruta, Destino
-from .optimizer import solve_vrp, ESTADOS_RUTA_CONGELADOS, sugerir_camiones_para_remision, asignar_manualmente, CAPACIDAD_CAMION_KG_DEFAULT
+from .models import Remision, Ruta
+from .optimizer import solve_vrp, sugerir_camiones_para_remision, asignar_manualmente, recalcular_etas_desde_salida, CAPACIDAD_CAMION_KG_DEFAULT
 from .sync import sync_from_sap
 from .test_data import cargar_pedidos_prueba
 from .samsara_service import get_ubicaciones_isuzu
@@ -14,12 +14,24 @@ api = NinjaAPI(title="Laben Routing API", version="1.0.0")
 # copia de CEDIS solo para centrar el mapa, no para el cálculo de rutas).
 # Orden = mismo orden que FLEET/ID_TO_PLATE en fleet.js (T-001..T-008 = los 8
 # camiones ISUZU de reparto reales: 012, 013, 015, 016, 017, 023, 024, 027).
-# VALOR PROVISIONAL: se asume la capacidad del camión más chico de la flota
-# (~3 toneladas de caja) para los 8, para no arriesgar sobrecarga real en los
-# que en verdad cargan menos. Actualizar en cuanto se confirmen las
-# capacidades reales por modelo (tarjeta de circulación) — el ELF 600 y el
-# ELF 100/200 no cargan lo mismo.
-CAPACIDADES_CAMION_KG = [3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000]
+# Capacidad estimada por MODELO según ficha técnica de Isuzu México (carga
+# útil aprox.): ELF 100/200 ≈ 2,000 kg · ELF 400/500 ≈ 3,800 kg · ELF 600 ≈
+# 5,500 kg. ESTIMADOS pendientes de confirmar contra la tarjeta de circulación
+# de cada unidad — al confirmarlos solo se actualiza esta lista (y fleet.js,
+# que muestra el mismo dato en el panel).
+# Orden = ranking de uso real (km GPS Samsara 60 días, ver
+# docs/uso-flota-samsara.md): el optimizador usa primero los camiones que de
+# verdad operan (015 y 012, al final, llevan 2 meses parados).
+CAPACIDADES_CAMION_KG = [
+    5500,  # T-001 = 027 RA7475A  ELF 600     2022  (el más usado)
+    3800,  # T-002 = 023 PP4873A  ELF 400/500 2020
+    5500,  # T-003 = 017 PR6889B  ELF 600     2017
+    2000,  # T-004 = 016 RJ97892  ELF 100/200 2016
+    2000,  # T-005 = 013 RJ37663  ELF 100/200 2015
+    3800,  # T-006 = 024 PP4872A  ELF 400/500 2018  (parado desde 14-jul)
+    2000,  # T-007 = 015 RJ57620  ELF 100/200 2016  (2 meses sin operar)
+    3800,  # T-008 = 012 RH83800  ELF 400/500 2014  (2 meses sin operar)
+]
 DEPOT_COORDS = (25.693214524592616, -100.48167993202988)
 
 # Transiciones válidas del flujo de despacho: no se puede saltar pasos
@@ -105,9 +117,14 @@ def cargar_prueba_endpoint(request, payload: CargarPruebaIn):
 class GenerarRutasIn(Schema):
     fecha: date
     numero_camiones: int
+    # Turno del chofer en horas para esta corrida. Default 6h; el despachador
+    # puede ampliarlo (7h, 8h) cuando los pedidos no caben con el turno normal.
+    # Acotado a 4-12h para evitar valores absurdos por error de captura.
+    horas_turno: float = 6.0
 
 @api.post("/dispatcher/rutas/generar")
 def generar_rutas(request, payload: GenerarRutasIn):
+    horas_turno = min(12.0, max(4.0, payload.horas_turno))
     # Si piden más camiones de los que hay capacidad configurada (ej. se agregó
     # un 6to camión desde el panel), se completa con el valor conservador por
     # default en vez de tronar — hasta que se confirme su capacidad real.
@@ -120,7 +137,8 @@ def generar_rutas(request, payload: GenerarRutasIn):
         fecha=payload.fecha,
         num_vehicles=payload.numero_camiones,
         vehicle_capacities=vehicle_capacities,
-        depot_coords=DEPOT_COORDS
+        depot_coords=DEPOT_COORDS,
+        horas_turno=horas_turno,
     )
     return res
 
@@ -184,6 +202,15 @@ def update_ruta_estado(request, ruta_id: int, payload: RutaEstadoIn):
 
     if payload.estado == 'En_Ruta':
         ruta.remisiones.update(estado='En_Camino')
+        # La carga puede tardar horas: el plan del optimizador asumía una hora
+        # de salida teórica. Al dar "Salida" se recalculan TODAS las ETAs de la
+        # ruta desde la hora real de este momento, para que lo prometido a los
+        # clientes/vendedoras corresponda a la realidad.
+        n = recalcular_etas_desde_salida(ruta, DEPOT_COORDS)
+        return {
+            "status": "success",
+            "message": f"Camión en ruta. ETAs recalculadas desde la hora real de salida ({n} pedidos).",
+        }
     elif payload.estado == 'Finalizada':
         ruta.remisiones.update(estado='Entregado')
 
