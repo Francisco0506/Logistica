@@ -35,13 +35,18 @@ export const ID_TO_PLATE = {
 // 024 salió 1 día, 015 tres días con 9 km, 012 ninguno). Arrancan apagados
 // para no meterlos en la optimización por default — se activan con un clic
 // desde el panel el día que se ocupen.
+// `modelo`/`capacidadKg` salen del modelo EXACTO de cada unidad, sacado del VIN
+// que reporta Samsara (NLR = ELF 100, NKR = ELF 200, NPR = ELF 400/500,
+// NQR = ELF 600) contra la ficha técnica de Isuzu México. `maxParadas` es el
+// récord real de entregas en un día medido con GPS: es el tope práctico
+// mientras SAP no mande el peso real de los pedidos. Ver docs/flota.md.
 export const FLEET = [
-  { id: 'RA7475A', samsara: '027', modelo: 'ELF 600', capacidadKg: 5500, activo: true, driver: '', route: 'Sin ruta asignada', color: '#06b6d4' },
-  { id: 'PP4873A', samsara: '023', modelo: 'ELF 400/500', capacidadKg: 3800, activo: true, driver: '', route: 'Sin ruta asignada', color: '#ec4899' },
-  { id: 'PR6889B', samsara: '017', modelo: 'ELF 600', capacidadKg: 5500, activo: true, driver: '', route: 'Sin ruta asignada', color: '#8b5cf6' },
-  { id: 'RJ97892', samsara: '016', modelo: 'ELF 100/200', capacidadKg: 2000, activo: true, driver: '', route: 'Sin ruta asignada', color: '#10b981' },
-  { id: 'RJ37663', samsara: '013', modelo: 'ELF 100/200', capacidadKg: 2000, activo: true, driver: '', route: 'Sin ruta asignada', color: '#D92525' },
-  { id: 'PP4872A', samsara: '024', modelo: 'ELF 400/500', capacidadKg: 3800, activo: false, driver: '', route: 'Sin ruta asignada', color: '#eab308' },
-  { id: 'RJ57620', samsara: '015', modelo: 'ELF 100/200', capacidadKg: 2000, activo: false, driver: '', route: 'Sin ruta asignada', color: '#3b82f6' },
-  { id: 'RH83800', samsara: '012', modelo: 'ELF 400/500', capacidadKg: 3800, activo: false, driver: '', route: 'Sin ruta asignada', color: '#F27A18' },
+  { id: 'RA7475A', samsara: '027', modelo: 'ELF 600', capacidadKg: 6000, maxParadas: 29, activo: true, driver: '', route: 'Sin ruta asignada', color: '#06b6d4' },
+  { id: 'PP4873A', samsara: '023', modelo: 'ELF 400/500', capacidadKg: 3500, maxParadas: 30, activo: true, driver: '', route: 'Sin ruta asignada', color: '#ec4899' },
+  { id: 'PR6889B', samsara: '017', modelo: 'ELF 600', capacidadKg: 6000, maxParadas: 24, activo: true, driver: '', route: 'Sin ruta asignada', color: '#8b5cf6' },
+  { id: 'RJ97892', samsara: '016', modelo: 'ELF 200', capacidadKg: 2000, maxParadas: 29, activo: true, driver: '', route: 'Sin ruta asignada', color: '#10b981' },
+  { id: 'RJ37663', samsara: '013', modelo: 'ELF 100', capacidadKg: 1500, maxParadas: 19, activo: true, driver: '', route: 'Sin ruta asignada', color: '#D92525' },
+  { id: 'PP4872A', samsara: '024', modelo: 'ELF 400/500', capacidadKg: 3500, maxParadas: 25, activo: false, driver: '', route: 'Sin ruta asignada', color: '#eab308' },
+  { id: 'RJ57620', samsara: '015', modelo: 'ELF 200', capacidadKg: 2000, maxParadas: 25, activo: false, driver: '', route: 'Sin ruta asignada', color: '#3b82f6' },
+  { id: 'RH83800', samsara: '012', modelo: 'ELF 400/500', capacidadKg: 3500, maxParadas: 25, activo: false, driver: '', route: 'Sin ruta asignada', color: '#F27A18' },
 ];

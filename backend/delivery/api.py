@@ -2,7 +2,11 @@ from ninja import NinjaAPI, Schema
 from typing import List, Optional
 from datetime import date, datetime
 from .models import Remision, Ruta
-from .optimizer import solve_vrp, sugerir_camiones_para_remision, asignar_manualmente, recalcular_etas_desde_salida, CAPACIDAD_CAMION_KG_DEFAULT
+from .optimizer import (
+    solve_vrp, sugerir_camiones_para_remision, asignar_manualmente,
+    recalcular_etas_desde_salida, CAPACIDAD_CAMION_KG_DEFAULT,
+    MAX_PARADAS_POR_RUTA_DEFAULT,
+)
 from .sync import sync_from_sap
 from .test_data import cargar_pedidos_prueba
 from .samsara_service import get_ubicaciones_isuzu
@@ -14,23 +18,42 @@ api = NinjaAPI(title="Laben Routing API", version="1.0.0")
 # copia de CEDIS solo para centrar el mapa, no para el cálculo de rutas).
 # Orden = mismo orden que FLEET/ID_TO_PLATE en fleet.js (T-001..T-008 = los 8
 # camiones ISUZU de reparto reales: 012, 013, 015, 016, 017, 023, 024, 027).
-# Capacidad estimada por MODELO según ficha técnica de Isuzu México (carga
-# útil aprox.): ELF 100/200 ≈ 2,000 kg · ELF 400/500 ≈ 3,800 kg · ELF 600 ≈
-# 5,500 kg. ESTIMADOS pendientes de confirmar contra la tarjeta de circulación
-# de cada unidad — al confirmarlos solo se actualiza esta lista (y fleet.js,
-# que muestra el mismo dato en el panel).
-# Orden = ranking de uso real (km GPS Samsara 60 días, ver
-# docs/uso-flota-samsara.md): el optimizador usa primero los camiones que de
-# verdad operan (015 y 012, al final, llevan 2 meses parados).
+# Capacidad de carga útil por camión, según la ficha técnica de Isuzu México
+# para el modelo EXACTO de cada unidad. El modelo sale del VIN que reporta
+# Samsara (en los VIN no se usa la letra Q, por eso NQR aparece como "N1R"):
+#   NLR -> ELF 100         = 1,500 kg
+#   NKR -> ELF 200         = 2,000 kg
+#   NPR -> ELF 400/500     = 3,500 kg (rango 3,000-5,000; se toma el bajo para
+#                            no arriesgar sobrecarga hasta confirmar la caja)
+#   NQR -> ELF 600         = 6,000 kg
+# Pendiente afinar con la tarjeta de circulación de cada unidad — al hacerlo se
+# actualiza esta lista y FLEET en frontend/src/config/fleet.js (mismo orden).
+# Orden = ranking de uso real (km GPS Samsara 60 días, ver docs/flota.md): el
+# optimizador usa primero los camiones que de verdad operan.
 CAPACIDADES_CAMION_KG = [
-    5500,  # T-001 = 027 RA7475A  ELF 600     2022  (el más usado)
-    3800,  # T-002 = 023 PP4873A  ELF 400/500 2020
-    5500,  # T-003 = 017 PR6889B  ELF 600     2017
-    2000,  # T-004 = 016 RJ97892  ELF 100/200 2016
-    2000,  # T-005 = 013 RJ37663  ELF 100/200 2015
-    3800,  # T-006 = 024 PP4872A  ELF 400/500 2018  (parado desde 14-jul)
-    2000,  # T-007 = 015 RJ57620  ELF 100/200 2016  (2 meses sin operar)
-    3800,  # T-008 = 012 RH83800  ELF 400/500 2014  (2 meses sin operar)
+    6000,  # T-001 = 027 RA7475A  NQR / ELF 600     2022  (el más usado)
+    3500,  # T-002 = 023 PP4873A  NPR / ELF 400/500 2020
+    6000,  # T-003 = 017 PR6889B  NQR / ELF 600     2017
+    2000,  # T-004 = 016 RJ97892  NKR / ELF 200     2016
+    1500,  # T-005 = 013 RJ37663  NLR / ELF 100     2015
+    3500,  # T-006 = 024 PP4872A  NPR / ELF 400/500 2018  (parado desde 14-jul)
+    2000,  # T-007 = 015 RJ57620  NKR / ELF 200     2016  (2 meses sin operar)
+    3500,  # T-008 = 012 RH83800  NPR / ELF 400/500 2014  (2 meses sin operar)
+]
+
+# Tope de paradas por ruta, medido con GPS: es el máximo de entregas que cada
+# camión ha hecho realmente en un día. Sirve de tope práctico mientras SAP no
+# mande el peso real de cada pedido (sin SAP, la restricción de kilos usa un
+# peso estimado y no es confiable; las paradas sí están medidas).
+MAX_PARADAS_POR_CAMION = [
+    29,  # T-001 = 027 (promedio 16.6/día)
+    30,  # T-002 = 023 (promedio 17.9/día; llegó a 38 en una jornada de 12.9 h)
+    24,  # T-003 = 017 (promedio 11.8/día)
+    29,  # T-004 = 016 (promedio 18.0/día)
+    19,  # T-005 = 013 (promedio 11.9/día)
+    25,  # T-006 = 024 (sin datos suficientes: se usa el típico de su tamaño)
+    25,  # T-007 = 015 (sin datos)
+    25,  # T-008 = 012 (sin datos)
 ]
 DEPOT_COORDS = (25.693214524592616, -100.48167993202988)
 
@@ -117,15 +140,25 @@ def cargar_prueba_endpoint(request, payload: CargarPruebaIn):
 class GenerarRutasIn(Schema):
     fecha: date
     numero_camiones: int
-    # Turno del chofer en horas para esta corrida. Default 6.5h = la jornada
-    # real medida con GPS (mediana 6.4 h); el despachador puede ampliarlo
-    # (7h, 8h) cuando los pedidos no caben. Acotado a 4-12h para evitar
-    # valores absurdos por error de captura.
-    horas_turno: float = 6.5
+    # Turno del chofer en horas para esta corrida. Default 6h (turno oficial);
+    # el despachador puede ampliarlo (6.5h, 7h, 8h) cuando los pedidos no
+    # caben — la jornada real medida con GPS llega a 6.7h promedio. Acotado a
+    # 4-12h para evitar valores absurdos por error de captura.
+    horas_turno: float = 6.0
+    # Hora a la que sale el PRIMER camión ("HH:MM"). Default 09:00 = lo medido
+    # con GPS (el primer camión de cada día sale 09:06 en promedio, 09:08 de
+    # mediana). No es cosmética: las ventanas de recibo de los clientes se
+    # miden desde aquí, y 97 de 195 destinos cierran antes de las 14:00, así
+    # que ponerla más tarde de lo real tira pedidos que sí caben.
+    hora_salida: str = "09:00"
 
 @api.post("/dispatcher/rutas/generar")
 def generar_rutas(request, payload: GenerarRutasIn):
     horas_turno = min(12.0, max(4.0, payload.horas_turno))
+    try:
+        datetime.strptime(payload.hora_salida, "%H:%M")
+    except ValueError:
+        return {"status": "error", "message": "Hora de salida inválida. Usa el formato HH:MM (ej. 09:30)."}
     # Si piden más camiones de los que hay capacidad configurada (ej. se agregó
     # un 6to camión desde el panel), se completa con el valor conservador por
     # default en vez de tronar — hasta que se confirme su capacidad real.
@@ -133,13 +166,19 @@ def generar_rutas(request, payload: GenerarRutasIn):
         CAPACIDADES_CAMION_KG[i] if i < len(CAPACIDADES_CAMION_KG) else CAPACIDAD_CAMION_KG_DEFAULT
         for i in range(payload.numero_camiones)
     ]
+    max_paradas = [
+        MAX_PARADAS_POR_CAMION[i] if i < len(MAX_PARADAS_POR_CAMION) else MAX_PARADAS_POR_RUTA_DEFAULT
+        for i in range(payload.numero_camiones)
+    ]
 
     res = solve_vrp(
         fecha=payload.fecha,
         num_vehicles=payload.numero_camiones,
         vehicle_capacities=vehicle_capacities,
+        max_paradas=max_paradas,
         depot_coords=DEPOT_COORDS,
         horas_turno=horas_turno,
+        hora_salida=payload.hora_salida,
     )
     return res
 

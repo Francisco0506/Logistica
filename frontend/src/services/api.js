@@ -44,6 +44,8 @@ export async function getRutas(fecha, { signal } = {}) {
  * @param {number} numCamiones
  * @param {number} horasTurno — turno del chofer en horas (default 6). Se puede
  *   ampliar (7, 8) cuando los pedidos del día no caben con el turno normal.
+ * La hora de salida no se manda: el backend usa la salida real medida con GPS,
+ * y las ETAs se recalculan con la hora verdadera al despachar el camión.
  */
 export async function generarRutas(fecha, numCamiones, horasTurno = 6, { signal } = {}) {
   const res = await fetch(`${BASE}/rutas/generar`, {

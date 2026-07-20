@@ -101,7 +101,7 @@ export default function DispatcherPanel() {
   // Turno del chofer (horas) para la próxima optimización. Default 6h; se
   // amplía (7h, 8h) cuando los pedidos del día no caben con el turno normal —
   // una de las tres salidas junto con activar otro camión o asignar manual.
-  const [horasTurno, setHorasTurno]     = useState(6.5);
+  const [horasTurno, setHorasTurno]     = useState(6);
 
   const PALETA_COLORES_CAMION = ['#F27A18', '#D92525', '#3b82f6', '#10b981', '#8b5cf6', '#ec4899', '#eab308', '#06b6d4'];
 
@@ -505,8 +505,10 @@ export default function DispatcherPanel() {
               </div>
             )}
 
-            {/* Turno del chofer para la próxima optimización. 6h es el normal;
-                ampliarlo es una de las salidas cuando los pedidos no caben. */}
+            {/* Turno del chofer para la próxima optimización. 6h es el normal.
+                La hora de salida no se captura: el plan usa la salida real
+                medida con GPS (09:00) y las ETAs se recalculan solas con la
+                hora verdadera cuando el despachador da "Salida". */}
             <div className="flex items-center justify-between gap-2">
               <span className="text-[10px] font-bold text-gray-400 uppercase flex items-center gap-1">
                 <Clock className="h-3 w-3" /> Turno chofer
@@ -514,14 +516,14 @@ export default function DispatcherPanel() {
               <select
                 value={horasTurno}
                 onChange={e => setHorasTurno(Number(e.target.value))}
-                className={`bg-white border rounded-md px-2 py-1 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-orange-200 ${horasTurno > 6.5 ? 'border-amber-400 text-amber-700' : 'border-gray-200 text-gray-700'}`}
+                className={`bg-white border rounded-md px-2 py-1 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-orange-200 ${horasTurno > 6 ? 'border-amber-400 text-amber-700' : 'border-gray-200 text-gray-700'}`}
               >
                 {[6, 6.5, 7, 7.5, 8].map(h => (
-                  <option key={h} value={h}>{h} horas{h === 6.5 ? ' (lo normal)' : ''}</option>
+                  <option key={h} value={h}>{h} horas{h === 6 ? ' (normal)' : ''}</option>
                 ))}
               </select>
             </div>
-            {horasTurno > 6.5 && (
+            {horasTurno > 6 && (
               <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
                 Turno ampliado a {horasTurno}h: las rutas podrán ser más largas de lo normal. Confírmalo con los choferes.
               </p>
@@ -570,10 +572,10 @@ export default function DispatcherPanel() {
                         <span className="font-extrabold text-gray-800 text-[13px] tracking-wide">{truck.id}</span>
                         {truck.capacidadKg && (
                           <span
-                            title={`${truck.modelo}: puede cargar hasta ${truck.capacidadKg.toLocaleString()} kg (estimado por modelo, confirmar con tarjeta de circulación)`}
+                            title={`${truck.modelo}: carga hasta ${truck.capacidadKg.toLocaleString()} kg y ha hecho hasta ${truck.maxParadas} entregas en un día`}
                             className="text-[9px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded-md flex-shrink-0"
                           >
-                            {(truck.capacidadKg / 1000).toLocaleString('es-MX', { maximumFractionDigits: 1 })} ton
+                            {(truck.capacidadKg / 1000).toLocaleString('es-MX', { maximumFractionDigits: 1 })} ton · {truck.maxParadas} ped.
                           </span>
                         )}
                       </div>
@@ -708,7 +710,7 @@ export default function DispatcherPanel() {
             {alertas.some(a => a.motivo.startsWith('Pendiente')) && (
               <div className="bg-white border border-orange-200 rounded-xl p-3 space-y-2 shadow-sm">
                 <p className="text-[11px] font-bold text-gray-700">
-                  ¿No caben todos los pedidos? Tienes 3 opciones:
+                  ¿No caben todos los pedidos? Esto es lo que sirve:
                 </p>
                 <div className="space-y-1.5">
                   <button
@@ -718,28 +720,19 @@ export default function DispatcherPanel() {
                     <Truck className="w-3.5 h-3.5 text-orange-600 flex-shrink-0" />
                     <span className="text-[11px] text-gray-700"><b>1. Activa o agrega otro camión</b> y vuelve a optimizar.</span>
                   </button>
-                  <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
-                    <Clock className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
-                    <span className="text-[11px] text-gray-700 flex-1"><b>2. Amplía el turno</b> de los choferes:</span>
-                    <select
-                      value={horasTurno}
-                      onChange={e => setHorasTurno(Number(e.target.value))}
-                      className="bg-white border border-amber-300 rounded px-1.5 py-0.5 text-[11px] font-bold focus:outline-none"
-                    >
-                      {[6, 6.5, 7, 7.5, 8].map(h => <option key={h} value={h}>{h}h</option>)}
-                    </select>
-                    <button
-                      onClick={optimize}
-                      disabled={isOptimizing}
-                      className="text-[10px] font-bold text-white bg-amber-500 hover:bg-amber-600 rounded px-2 py-1 transition disabled:opacity-50"
-                    >
-                      {isOptimizing ? '…' : 'Re-optimizar'}
-                    </button>
-                  </div>
                   <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-2">
                     <AlertCircle className="w-3.5 h-3.5 text-gray-500 flex-shrink-0" />
-                    <span className="text-[11px] text-gray-700"><b>3. Asígnalos a mano</b> abajo: cada pedido te sugiere en qué camión cabe mejor.</span>
+                    <span className="text-[11px] text-gray-700"><b>2. Asígnalos a mano</b> abajo: cada pedido te sugiere en qué camión cabe mejor.</span>
                   </div>
+                  {/* Medido con datos reales: cargar más rápido (salir 1 h antes)
+                      mete ~5 pedidos más; ampliar el turno casi no mueve la
+                      aguja porque los clientes cierran a hora fija. */}
+                  <p className="text-[10px] text-gray-500 leading-snug bg-emerald-50 border border-emerald-100 rounded-lg px-2.5 py-2">
+                    <b className="text-emerald-700">Lo que más ayudaría:</b> cargar más rápido en el CEDIS.
+                    Cada hora que los camiones salgan más temprano caben ~5 pedidos más.
+                    Alargar el turno casi no sirve: el límite no es la jornada del chofer,
+                    es que 97 de 195 clientes cierran antes de las 2 PM.
+                  </p>
                 </div>
               </div>
             )}
