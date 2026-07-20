@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { Truck, RefreshCw, Sliders, Search, Compass, AlertCircle, Eye, Package, FileText, Download, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, MapPin, User, Clock, Play, Check, Loader, Menu, X, FlaskConical } from 'lucide-react';
+import { Truck, RefreshCw, Sliders, Search, Compass, AlertCircle, Eye, Package, FileText, Download, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, MapPin, User, Clock, Play, Check, Loader, Menu, X, FlaskConical, LogOut } from 'lucide-react';
 import { CEDIS, FLEET, ID_TO_PLATE } from '../../config/fleet';
 import LabenLogo from '../../components/LabenLogo';
 import { syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado, getSugerencias, asignarManual, cargarPruebaPedidos, getCamionesGPS } from '../../services/api';
@@ -67,6 +68,7 @@ function MapResizeHandler({ isPanelOpen }) {
 
 // ── Component ──
 export default function DispatcherPanel() {
+  const navigate = useNavigate();
   // `activo` viene de fleet.js: los camiones que casi no salen (024, 015, 012)
   // arrancan apagados; se prenden con un clic cuando se ocupen.
   const [trucks, setTrucks]             = useState(FLEET.map(t => ({ ...t, active: t.activo !== false })));
@@ -78,6 +80,8 @@ export default function DispatcherPanel() {
   const [orders, setOrders]             = useState([]);
   const [rutas, setRutas]               = useState([]);
   const [syncStatus, setSyncStatus]     = useState('Conectando…');
+  const [syncStatusTipo, setSyncStatusTipo] = useState('cargando'); // 'ok' | 'warning' | 'error' | 'cargando' — para el pill de estado real de SAP
+  const [selectedDate, setSelectedDate] = useState(getToday()); // día que se está viendo/sincronizando; por default hoy
   const [orderFilter, setOrderFilter]   = useState('todos');
   const [orderSearch, setOrderSearch]   = useState('');
   const [activeTab, setActiveTab]       = useState('pedidos');
@@ -124,11 +128,11 @@ export default function DispatcherPanel() {
     const n = Number(nPruebaPedidos);
     if (!n || n < 1) return;
     if (!window.confirm(
-      `Esto va a borrar todas las rutas de hoy (incluidas las ya despachadas) y crear ${n} pedidos de prueba. ¿Continuar?`
+      `Esto va a borrar todas las rutas de ${selectedDate} (incluidas las ya despachadas) y crear ${n} pedidos de prueba. ¿Continuar?`
     )) return;
     setCargandoPrueba(true);
     try {
-      const data = await cargarPruebaPedidos(getToday(), n);
+      const data = await cargarPruebaPedidos(selectedDate, n);
       if (data.status === 'success') {
         setMostrarCargarPrueba(false);
         await fetchData();
@@ -198,13 +202,16 @@ export default function DispatcherPanel() {
     // sin que el dispatcher tenga que recargar la página manualmente.
     const interval = setInterval(() => fetchData(controller.signal), REFRESH_INTERVAL_MS);
     return () => { controller.abort(); clearInterval(interval); };
-  }, []);
+  }, [selectedDate]);
 
   const fetchData = async (signal) => {
-    const fecha = getToday();
+    const fecha = selectedDate;
     try {
       const syncData = await syncSAP(fecha, { signal });
       setSyncStatus(syncData.message);
+      // status del backend: 'success' = SAP conectó y trajo pedidos reales,
+      // 'warning' = SAP no configurado (usa datos de prueba), 'error' = falló la conexión.
+      setSyncStatusTipo(syncData.status === 'success' ? 'ok' : syncData.status === 'warning' ? 'warning' : 'error');
 
       const remData = await getRemisiones(fecha, { signal });
       setOrders(remData.map(o => ({ ...o, truck: ID_TO_PLATE[o.truck] || o.truck || null })));
@@ -219,6 +226,7 @@ export default function DispatcherPanel() {
       if (e.name === 'AbortError') return; // StrictMode unmount / refresh cancelado — ignore
       console.error('Backend error:', e);
       setSyncStatus('Sin conexión con el backend');
+      setSyncStatusTipo('error');
     }
 
     // Aparte del try/catch principal: si Samsara falla, no debe tumbar el
@@ -341,7 +349,7 @@ export default function DispatcherPanel() {
   const optimize = async () => {
     setIsOptimizing(true);
     setRoutesGenerated(false);
-    const fecha = getToday();
+    const fecha = selectedDate;
     const n = trucks.filter(t => t.active).length;
     if (!n) { alert('Activa al menos un camión.'); setIsOptimizing(false); return; }
     try {
@@ -374,24 +382,62 @@ export default function DispatcherPanel() {
           <span className="text-[9px] text-gray-300 font-bold tracking-[.2em] uppercase self-end pb-0.5">· Despacho</span>
         </div>
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="text-[10px] font-bold text-emerald-700 uppercase">SAP B1</span>
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={e => setSelectedDate(e.target.value)}
+            title="Día que se está viendo/sincronizando"
+            className="text-xs font-semibold text-gray-700 bg-gray-100 border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-orange-200"
+          />
+          <div
+            title={syncStatus}
+            className={`flex items-center gap-2 rounded-lg px-3 py-1 border ${
+              syncStatusTipo === 'ok' ? 'bg-emerald-50 border-emerald-200' :
+              syncStatusTipo === 'warning' ? 'bg-amber-50 border-amber-200' :
+              syncStatusTipo === 'error' ? 'bg-red-50 border-red-200' :
+              'bg-gray-100 border-gray-200'
+            }`}
+          >
+            <span className={`w-2 h-2 rounded-full ${
+              syncStatusTipo === 'ok' ? 'bg-emerald-500 animate-pulse' :
+              syncStatusTipo === 'warning' ? 'bg-amber-500' :
+              syncStatusTipo === 'error' ? 'bg-red-500' :
+              'bg-gray-400 animate-pulse'
+            }`} />
+            <span className={`text-[10px] font-bold uppercase ${
+              syncStatusTipo === 'ok' ? 'text-emerald-700' :
+              syncStatusTipo === 'warning' ? 'text-amber-700' :
+              syncStatusTipo === 'error' ? 'text-red-700' :
+              'text-gray-500'
+            }`}>
+              {syncStatusTipo === 'ok' ? 'SAP B1' : syncStatusTipo === 'warning' ? 'Sin SAP · prueba' : syncStatusTipo === 'error' ? 'SAP falló' : 'Conectando…'}
+            </span>
           </div>
           <div className="flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-1.5">
             <User className="h-3.5 w-3.5 text-gray-500" />
             <span className="text-xs font-bold text-gray-700">Norberto</span>
           </div>
+          <button
+            onClick={() => navigate('/')}
+            title="Cerrar sesión — las rutas y pedidos quedan guardados en el servidor, no se pierden"
+            className="flex items-center gap-1.5 text-xs font-bold text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg px-2.5 py-1.5 transition"
+          >
+            <LogOut className="h-3.5 w-3.5" /> Salir
+          </button>
         </div>
       </header>
 
       {/* ═══ BODY ═══ */}
       <div className="flex-1 flex min-h-0 relative">
 
-        {/* ─── LEFT SIDEBAR ─── */}
-        <aside className={`relative w-[340px] bg-white border-r border-gray-200 flex flex-col flex-shrink-0 transition-all duration-300 z-10 ${isPanelOpen ? 'ml-0' : '-ml-[340px]'}`}>
+        {/* ─── LEFT SIDEBAR ───
+            Ancho dinámico: 340px normal, más ancho en la pestaña "Pedidos"
+            porque la tabla tiene 7 columnas y se sentía amontonada a 340px. */}
+        <aside className={`relative bg-white border-r border-gray-200 flex flex-col flex-shrink-0 transition-all duration-300 z-10 ${
+          isPanelOpen ? 'ml-0' : (sidebarTab === 'pedidos' ? '-ml-[640px]' : '-ml-[340px]')
+        } ${sidebarTab === 'pedidos' ? 'w-[640px]' : 'w-[340px]'}`}>
 
-          {/* ── PESTAÑAS DEL SIDEBAR: Camiones / Sin asignar ── */}
+          {/* ── PESTAÑAS DEL SIDEBAR: Camiones / Sin asignar / Pedidos del Día ── */}
           <div className="flex items-stretch border-b border-gray-200 flex-shrink-0">
             <button
               onClick={() => setSidebarTab('camiones')}
@@ -420,6 +466,16 @@ export default function DispatcherPanel() {
                   {alertas.length}
                 </span>
               )}
+            </button>
+            <button
+              onClick={() => setSidebarTab('pedidos')}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-3 text-xs font-bold transition border-b-2 ${
+                sidebarTab === 'pedidos'
+                  ? 'text-orange-600 border-orange-500 bg-orange-50/50'
+                  : 'text-gray-400 border-transparent hover:text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              <Package className="h-4 w-4" /> Pedidos
             </button>
           </div>
 
@@ -821,6 +877,156 @@ export default function DispatcherPanel() {
             })}
           </div>
           )}
+
+          {/* ── PESTAÑA: PEDIDOS DEL DÍA / MANIFIESTO ── (antes vivía como
+              franja fija de 340px bajo el mapa; se movió aquí para tener
+              toda la altura de la pantalla y no sentirse amontonada). */}
+          {sidebarTab === 'pedidos' && (
+          <div className="flex-1 flex flex-col min-h-0">
+
+            {/* Sub-tabs: Pedidos / Manifiesto */}
+            <div className="flex items-center gap-1 px-3 pt-3 pb-0 flex-shrink-0">
+              <button
+                onClick={() => setActiveTab('pedidos')}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-t-lg text-xs font-bold transition ${activeTab === 'pedidos' ? 'bg-white border border-b-0 border-gray-200 text-orange-600' : 'text-gray-400 hover:text-gray-600'}`}
+              >
+                <Package className="h-3.5 w-3.5" /> Pedidos del Día
+              </button>
+              <button
+                onClick={() => setActiveTab('manifiesto')}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-t-lg text-xs font-bold transition ${activeTab === 'manifiesto' ? 'bg-white border border-b-0 border-gray-200 text-orange-600' : 'text-gray-400 hover:text-gray-600'}`}
+              >
+                <FileText className="h-3.5 w-3.5" /> Manifiesto
+              </button>
+
+              {activeTab === 'pedidos' && (
+                <div className="ml-auto relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+                  <input
+                    value={orderSearch}
+                    onChange={e => setOrderSearch(e.target.value)}
+                    className="pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium w-40 focus:outline-none focus:ring-2 focus:ring-orange-200"
+                    placeholder="Buscar…"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* ── TAB: PEDIDOS ── */}
+            {activeTab === 'pedidos' && (
+              <div className="flex-1 flex flex-col min-h-0 px-3 pb-3">
+                <div className="flex gap-3 border-b border-gray-200 text-[11px] font-bold mb-2 flex-shrink-0 flex-wrap">
+                  {['todos', 'pendiente', 'asignado', 'en_camino', 'entregado'].map(f => (
+                    <button
+                      key={f}
+                      onClick={() => setOrderFilter(f)}
+                      className={`pb-2 capitalize transition border-b-2 ${orderFilter === f ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                    >{f.replace('_', ' ')}</button>
+                  ))}
+                </div>
+                <div className="flex-1 overflow-auto rounded-lg border border-gray-200">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-gray-50 border-b border-gray-200 text-[10px] font-bold text-gray-400 uppercase sticky top-0">
+                      <tr>
+                        <th className="px-3 py-2">ID</th>
+                        <th className="px-3 py-2">Cliente</th>
+                        <th className="px-3 py-2">Placa</th>
+                        <th className="px-3 py-2">Dirección</th>
+                        <th className="px-3 py-2">Estado</th>
+                        <th className="px-3 py-2 text-center">📍</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
+                      {visibleOrders.map(o => (
+                        <tr key={o.id} className="hover:bg-gray-50/60 transition">
+                          <td className="px-3 py-2 font-mono font-bold text-gray-800">#{o.doc_num}</td>
+                          <td className="px-3 py-2 font-semibold">{o.card_name}</td>
+                          <td className="px-3 py-2">
+                            {o.truck ? (
+                              <span className="inline-flex items-center gap-1.5 font-bold">
+                                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colorOf(o.truck) }} />
+                                {o.truck}
+                              </span>
+                            ) : <span className="text-gray-400 italic text-[10px]">—</span>}
+                          </td>
+                          <td className="px-3 py-2 text-gray-500 truncate max-w-[140px]" title={o.address}>{o.address || 'Sin dirección'}</td>
+                          <td className="px-3 py-2">
+                            <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
+                              o.estado === 'Entregado' ? 'bg-emerald-50 text-emerald-700' :
+                              o.estado === 'En_Camino' ? 'bg-blue-50 text-blue-700' :
+                              o.estado === 'Asignado'  ? 'bg-orange-50 text-orange-700' :
+                              'bg-gray-100 text-gray-500'
+                            }`}>{o.estado?.replace('_', ' ')}</span>
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            {o.lat && o.lng ? (
+                              <button onClick={() => focus([o.lat, o.lng])} className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-orange-600 transition">
+                                <Eye className="h-3.5 w-3.5" />
+                              </button>
+                            ) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                      {!visibleOrders.length && (
+                        <tr><td colSpan="6" className="text-center py-8 text-gray-400 italic">Sin pedidos.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* ── TAB: MANIFIESTO DE CARGA ── */}
+            {activeTab === 'manifiesto' && (
+              <div className="flex-1 overflow-auto px-3 py-3">
+                <p className="text-[11px] text-gray-400 mb-3 font-medium">
+                  Orden de carga <b>LIFO</b> — lo primero que se carga en almacén es lo último que se entrega en ruta.
+                </p>
+                <div className="grid grid-cols-1 gap-3">
+                  {trucks.filter(t => t.active).map(truck => {
+                    const tOrders = ordersOf(truck.id);
+                    const loadSeq = [...tOrders].reverse();
+
+                    return (
+                      <div key={truck.id} className="border border-gray-200 rounded-xl overflow-hidden bg-white">
+                        <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100" style={{ borderLeft: `4px solid ${truck.color}` }}>
+                          <div className="flex-1">
+                            <div className="font-extrabold text-gray-800 text-sm">{truck.id}</div>
+                            <div className="text-[10px] text-gray-400 font-medium">{truck.driver}</div>
+                          </div>
+                          <span className="text-[9px] font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded">{tOrders.length} pedidos</span>
+                        </div>
+
+                        <div className="px-3 py-2 space-y-1.5 max-h-[160px] overflow-y-auto">
+                          {loadSeq.length > 0 ? loadSeq.map((o, i) => (
+                            <div key={o.id} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2 text-xs">
+                              <span className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0" style={{ backgroundColor: truck.color }}>{i + 1}</span>
+                              <div className="flex-1 min-w-0">
+                                <div className="font-bold text-gray-700 text-[11px] truncate">{o.card_name}</div>
+                              </div>
+                              <span className="font-bold text-gray-800 text-[11px] flex-shrink-0">${o.doc_total?.toLocaleString()}</span>
+                            </div>
+                          )) : (
+                            <p className="text-[10px] text-gray-400 italic text-center py-4">Sin pedidos asignados.</p>
+                          )}
+                        </div>
+
+                        <div className="px-3 pb-3 pt-1">
+                          <button
+                            onClick={() => alert(`Imprimiendo manifiesto: ${truck.id}`)}
+                            className="w-full flex items-center justify-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold py-2 rounded-lg text-[11px] transition border border-gray-200"
+                          >
+                            <Download className="h-3 w-3" /> Descargar Guía
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+          )}
         </aside>
 
         {/* ─── MAP AREA ─── */}
@@ -917,161 +1123,6 @@ export default function DispatcherPanel() {
                 );
               })}
             </MapContainer>
-          </div>
-
-          {/* ═══ BOTTOM PANEL ═══ */}
-          <div className="h-[340px] flex flex-col border-t border-gray-200 bg-white flex-shrink-0">
-
-            {/* Tab bar */}
-            <div className="flex items-center gap-1 px-5 pt-3 pb-0 flex-shrink-0">
-              <button
-                onClick={() => setActiveTab('pedidos')}
-                className={`flex items-center gap-1.5 px-4 py-2 rounded-t-lg text-xs font-bold transition ${activeTab === 'pedidos' ? 'bg-white border border-b-0 border-gray-200 text-orange-600' : 'text-gray-400 hover:text-gray-600'}`}
-              >
-                <Package className="h-3.5 w-3.5" /> Pedidos del Día
-              </button>
-              <button
-                onClick={() => setActiveTab('manifiesto')}
-                className={`flex items-center gap-1.5 px-4 py-2 rounded-t-lg text-xs font-bold transition ${activeTab === 'manifiesto' ? 'bg-white border border-b-0 border-gray-200 text-orange-600' : 'text-gray-400 hover:text-gray-600'}`}
-              >
-                <FileText className="h-3.5 w-3.5" /> Manifiesto de Carga
-              </button>
-
-              {/* Search (pedidos only) */}
-              {activeTab === 'pedidos' && (
-                <div className="ml-auto relative">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
-                  <input
-                    value={orderSearch}
-                    onChange={e => setOrderSearch(e.target.value)}
-                    className="pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium w-56 focus:outline-none focus:ring-2 focus:ring-orange-200"
-                    placeholder="Buscar pedido…"
-                  />
-                </div>
-              )}
-            </div>
-
-            {/* ── TAB: PEDIDOS ── */}
-            {activeTab === 'pedidos' && (
-              <div className="flex-1 flex flex-col min-h-0 px-5 pb-3">
-                {/* Status filter */}
-                <div className="flex gap-4 border-b border-gray-200 text-[11px] font-bold mb-2 flex-shrink-0">
-                  {['todos', 'pendiente', 'asignado', 'en_camino', 'entregado'].map(f => (
-                    <button
-                      key={f}
-                      onClick={() => setOrderFilter(f)}
-                      className={`pb-2 capitalize transition border-b-2 ${orderFilter === f ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-                    >{f.replace('_', ' ')}</button>
-                  ))}
-                </div>
-                {/* Table */}
-                <div className="flex-1 overflow-auto rounded-lg border border-gray-200">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-gray-50 border-b border-gray-200 text-[10px] font-bold text-gray-400 uppercase sticky top-0">
-                      <tr>
-                        <th className="px-3 py-2">ID</th>
-                        <th className="px-3 py-2">Cliente</th>
-                        <th className="px-3 py-2">Placa</th>
-                        <th className="px-3 py-2">ID Dirección</th>
-                        <th className="px-3 py-2">Dirección</th>
-                        <th className="px-3 py-2">Estado</th>
-                        <th className="px-3 py-2 text-center">📍</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
-                      {visibleOrders.map(o => (
-                        <tr key={o.id} className="hover:bg-gray-50/60 transition">
-                          <td className="px-3 py-2 font-mono font-bold text-gray-800">#{o.doc_num}</td>
-                          <td className="px-3 py-2 font-semibold">{o.card_name}</td>
-                          <td className="px-3 py-2">
-                            {o.truck ? (
-                              <span className="inline-flex items-center gap-1.5 font-bold">
-                                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colorOf(o.truck) }} />
-                                {o.truck}
-                              </span>
-                            ) : <span className="text-gray-400 italic text-[10px]">—</span>}
-                          </td>
-                          <td className="px-3 py-2 font-mono font-bold text-gray-600">{o.ship_to_code}</td>
-                          <td className="px-3 py-2 text-gray-500 truncate max-w-[180px]" title={o.address}>{o.address || 'Sin dirección'}</td>
-                          <td className="px-3 py-2">
-                            <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
-                              o.estado === 'Entregado' ? 'bg-emerald-50 text-emerald-700' :
-                              o.estado === 'En_Camino' ? 'bg-blue-50 text-blue-700' :
-                              o.estado === 'Asignado'  ? 'bg-orange-50 text-orange-700' :
-                              'bg-gray-100 text-gray-500'
-                            }`}>{o.estado?.replace('_', ' ')}</span>
-                          </td>
-                          <td className="px-3 py-2 text-center">
-                            {o.lat && o.lng ? (
-                              <button onClick={() => focus([o.lat, o.lng])} className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-orange-600 transition">
-                                <Eye className="h-3.5 w-3.5" />
-                              </button>
-                            ) : '—'}
-                          </td>
-                        </tr>
-                      ))}
-                      {!visibleOrders.length && (
-                        <tr><td colSpan="7" className="text-center py-8 text-gray-400 italic">Sin pedidos.</td></tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* ── TAB: MANIFIESTO DE CARGA ── */}
-            {activeTab === 'manifiesto' && (
-              <div className="flex-1 overflow-auto px-5 py-3">
-                <p className="text-[11px] text-gray-400 mb-3 font-medium">
-                  Orden de carga <b>LIFO</b> — lo primero que se carga en almacén es lo último que se entrega en ruta.
-                </p>
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {trucks.filter(t => t.active).map(truck => {
-                    const tOrders = ordersOf(truck.id);
-                    // LIFO: reverse the delivery sequence for loading order
-                    const loadSeq = [...tOrders].reverse();
-
-                    return (
-                      <div key={truck.id} className="border border-gray-200 rounded-xl overflow-hidden bg-white">
-                        {/* Truck header */}
-                        <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100" style={{ borderLeft: `4px solid ${truck.color}` }}>
-                          <div className="flex-1">
-                            <div className="font-extrabold text-gray-800 text-sm">{truck.id}</div>
-                            <div className="text-[10px] text-gray-400 font-medium">{truck.driver}</div>
-                          </div>
-                          <span className="text-[9px] font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded">{tOrders.length} pedidos</span>
-                        </div>
-
-                        {/* Loading sequence */}
-                        <div className="px-3 py-2 space-y-1.5 max-h-[160px] overflow-y-auto">
-                          {loadSeq.length > 0 ? loadSeq.map((o, i) => (
-                            <div key={o.id} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2 text-xs">
-                              <span className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0" style={{ backgroundColor: truck.color }}>{i + 1}</span>
-                              <div className="flex-1 min-w-0">
-                                <div className="font-bold text-gray-700 text-[11px] truncate">{o.card_name}</div>
-                              </div>
-                              <span className="font-bold text-gray-800 text-[11px] flex-shrink-0">${o.doc_total?.toLocaleString()}</span>
-                            </div>
-                          )) : (
-                            <p className="text-[10px] text-gray-400 italic text-center py-4">Sin pedidos asignados.</p>
-                          )}
-                        </div>
-
-                        {/* Download */}
-                        <div className="px-3 pb-3 pt-1">
-                          <button
-                            onClick={() => alert(`Imprimiendo manifiesto: ${truck.id}`)}
-                            className="w-full flex items-center justify-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold py-2 rounded-lg text-[11px] transition border border-gray-200"
-                          >
-                            <Download className="h-3 w-3" /> Descargar Guía
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
           </div>
         </div>
       </div>

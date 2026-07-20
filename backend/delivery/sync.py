@@ -2,7 +2,6 @@ import os
 from datetime import date
 from django.db import transaction
 from .models import Remision, Destino
-from .routing_service import geocode_address
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -33,7 +32,12 @@ def sync_from_sap(fecha: date):
     if not HAS_PYODBC or not db_host or not db_password or "your_sap" in db_password:
         return {"status": "warning", "message": "SAP B1 no está configurado. Usa 'Cargar pedidos de prueba' para probar sin SAP."}
 
-    conn_str = f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={db_host},{db_port};DATABASE={db_name};UID={db_user};PWD={db_password}"
+    # El driver varía por versión de SQL Server: SQL Server 2012 (la base de
+    # pruebas) no soporta "ODBC Driver 17", solo el Native Client 11.0 que
+    # instala junto con SSMS/SQL Server. Configurable porque producción puede
+    # correr una versión distinta.
+    odbc_driver = os.getenv("SAP_ODBC_DRIVER", "ODBC Driver 17 for SQL Server")
+    conn_str = f"DRIVER={{{odbc_driver}}};SERVER={db_host},{db_port};DATABASE={db_name};UID={db_user};PWD={db_password}"
 
     # Nombres de los UDF (campos definidos por el usuario) en SAP B1 que guardan
     # latitud/longitud y ventanas de horario del Ship-To. Se configuran por .env
@@ -53,9 +57,12 @@ def sync_from_sap(fecha: date):
         "ent_vie": os.getenv("SAP_UDF_ENT_VIE", "U_EntVie"),
         "ent_sab": os.getenv("SAP_UDF_ENT_SAB", "U_EntSab"),
     }
-    udf_contacto = os.getenv("SAP_UDF_CONTACTO", "U_Contacto")
-    udf_telefono = os.getenv("SAP_UDF_TELEFONO", "U_Telefono")
-    udf_referencias = os.getenv("SAP_UDF_REFERENCIAS", "U_Referencias")
+    # A diferencia de lat/long y ventanas de horario, estos UDF no existen (aún)
+    # en CRD1 de la base de pruebas — por eso el default es vacío en vez de un
+    # nombre adivinado, y solo se piden si se configuran explícitamente en .env.
+    udf_contacto = os.getenv("SAP_UDF_CONTACTO", "")
+    udf_telefono = os.getenv("SAP_UDF_TELEFONO", "")
+    udf_referencias = os.getenv("SAP_UDF_REFERENCIAS", "")
 
     has_geo_udf = bool(udf_lat and udf_lng)
     has_window_udf = bool(udf_ini1 and udf_fin1)
@@ -68,7 +75,12 @@ def sync_from_sap(fecha: date):
     extra_cols += f", A.{udf_ini2} AS UdfIni2, A.{udf_fin2} AS UdfFin2"
     for campo, udf in udf_dias.items():
         extra_cols += f", A.{udf} AS Udf_{campo}"
-    extra_cols += f", A.{udf_contacto} AS UdfContacto, A.{udf_telefono} AS UdfTelefono, A.{udf_referencias} AS UdfReferencias"
+    if udf_contacto:
+        extra_cols += f", A.{udf_contacto} AS UdfContacto"
+    if udf_telefono:
+        extra_cols += f", A.{udf_telefono} AS UdfTelefono"
+    if udf_referencias:
+        extra_cols += f", A.{udf_referencias} AS UdfReferencias"
 
     try:
         conn = pyodbc.connect(conn_str, timeout=5)
@@ -107,7 +119,7 @@ def sync_from_sap(fecha: date):
                 ) AS PesoTotalKg
                 {extra_cols}
             FROM ORDR O
-            INNER JOIN RDR12 A ON O.DocEntry = A.DocEntry AND A.AdresType = 'S'
+            INNER JOIN CRD1 A ON O.CardCode = A.CardCode AND O.ShipToCode = A.Address AND A.AdresType = 'S'
             WHERE O.DocStatus = 'O' AND O.DocDueDate = ?
         """
         cursor.execute(query, str(fecha))
@@ -146,16 +158,11 @@ def sync_from_sap(fecha: date):
             if has_geo_udf and getattr(row, "UdfLat", None) and getattr(row, "UdfLng", None):
                 destino.latitude = row.UdfLat
                 destino.longitude = row.UdfLng
-            elif not destino.latitude or not destino.longitude:
-                # No hay UDF de geolocalización o SAP no trae el dato: en vez de
-                # inventar una coordenada, se intenta geocodificar la dirección real
-                # (calle/ciudad) contra un servicio real (Nominatim/OSM). Esto es lo
-                # que garantiza que todo pedido con dirección capturada en SAP termine
-                # con coordenada real. Solo si ni siquiera hay texto de dirección
-                # capturado en SAP se deja en None y se reporta como alerta genuina.
-                geo = geocode_address(row.Street, row.City)
-                if geo:
-                    destino.latitude, destino.longitude = geo
+            # Si SAP no trae lat/long, NO se geocodifica contra ningún servicio
+            # externo (eso mandaría la dirección del cliente a un tercero sin
+            # avisar). Se deja sin coordenada y el panel lo marca como alerta
+            # ("Sin georreferencia en SAP B1", ver api.py) hasta que Carlos
+            # llene U_Latitud/U_Longitud en CRD1.
 
             destino.save()
 
