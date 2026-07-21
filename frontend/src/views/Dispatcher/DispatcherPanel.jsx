@@ -15,6 +15,11 @@ const REFRESH_INTERVAL_MS = 45_000;
 // La ruta que dibuja el mapa evita autopistas de cuota (mismo criterio que el
 // optimizador en el backend), para no cruzar casetas visualmente ni en la práctica.
 const OSRM_EXCLUDE = 'motorway';
+// Servidor OSRM propio (Docker), igual que OSRM_BASE en el backend — reemplaza
+// al público (que no soporta excluir autopistas y tiene límite de paradas).
+// Configurable con VITE_OSRM_BASE por si el dispatcher se abre desde otra
+// máquina donde el OSRM local no sea accesible en localhost.
+const OSRM_BASE = import.meta.env.VITE_OSRM_BASE || 'http://localhost:5001';
 
 // ── Leaflet defaults ──
 delete L.Icon.Default.prototype._getIconUrl;
@@ -159,11 +164,10 @@ export default function DispatcherPanel() {
         }
         const allPoints = [CEDIS, ...pts, CEDIS];
         const coordsStr = allPoints.map(p => `${p[1]},${p[0]}`).join(';');
-        const baseUrl = `https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=full&geometries=geojson`;
-        // El servidor público de OSRM no soporta excluir autopistas en su perfil
-        // por defecto (responde 400 "Exclude flag combination is not supported").
-        // Se intenta igual por si algún día se apunta a un servidor propio, y si
-        // falla se reintenta sin exclude — mejor calles reales que nada.
+        const baseUrl = `${OSRM_BASE}/route/v1/driving/${coordsStr}?overview=full&geometries=geojson`;
+        // El servidor propio sí soporta excluir autopistas. Se intenta primero
+        // con exclude y, si falla (ej. quedó apuntando al público de respaldo),
+        // se reintenta sin exclude — mejor calles reales que nada.
         for (const url of [`${baseUrl}&exclude=${OSRM_EXCLUDE}`, baseUrl]) {
           try {
             const res = await fetch(url);

@@ -64,11 +64,15 @@ def _ventana_en_minutos(destino, minutos_turno=MINUTOS_TURNO_MAXIMO, hora_cero=N
     if destino.ini_recibo_1 and destino.fin_recibo_1:
         ini = destino.ini_recibo_1
         fin = destino.fin_recibo_1
-        ini_min = (ini.hour * 60 + ini.minute) - (hora_cero.hour * 60 + hora_cero.minute)
-        fin_min = (fin.hour * 60 + fin.minute) - (hora_cero.hour * 60 + hora_cero.minute)
-        ini_min = max(0, ini_min)
-        fin_min = max(0, fin_min)
-        if fin_min < ini_min:
+        ini_raw = ini.hour * 60 + ini.minute
+        fin_raw = fin.hour * 60 + fin.minute
+        # "00:00" como hora de cierre casi siempre significa medianoche real
+        # (cierra al final del día, ej. un bar), no el inicio del día. Si no
+        # se corrige antes de comparar, un negocio con ventana amplia real
+        # (ej. 08:00-00:00) se confunde con un dato corrupto.
+        if fin_raw == 0:
+            fin_raw = 24 * 60
+        if fin_raw < ini_raw:
             # Dato inconsistente capturado en SAP (hora fin antes que hora
             # inicio, ej. "08:00-06:00" — probablemente un cierre vespertino
             # mal capturado sin PM). No tiene sentido bloquear al cliente con
@@ -76,6 +80,9 @@ def _ventana_en_minutos(destino, minutos_turno=MINUTOS_TURNO_MAXIMO, hora_cero=N
             # ventana y se usa el turno completo, igual que si no tuviera
             # ventana configurada en SAP.
             return (0, minutos_turno)
+        hora_cero_raw = hora_cero.hour * 60 + hora_cero.minute
+        ini_min = max(0, ini_raw - hora_cero_raw)
+        fin_min = max(0, fin_raw - hora_cero_raw)
         return (ini_min, fin_min)
     return (0, minutos_turno)
 

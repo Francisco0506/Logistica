@@ -166,7 +166,13 @@ def sync_from_sap(fecha: date):
 
             destino.save()
 
-            # Crear o actualizar Remision
+            # Crear o actualizar Remision. "estado" NO va en defaults a propósito:
+            # el auto-sync del frontend llama esto cada 45s para TODOS los
+            # pedidos del día, no solo los nuevos. Si "estado" fuera parte de
+            # defaults, cada corrida regresaría a "Pendiente" hasta los pedidos
+            # que el optimizador ya había dejado "Asignado" segundos antes. El
+            # modelo ya trae default='Pendiente' para cuando el registro es
+            # nuevo; en un update simplemente no se toca el estado actual.
             Remision.objects.update_or_create(
                 doc_entry=row.DocEntry,
                 defaults={
@@ -179,7 +185,6 @@ def sync_from_sap(fecha: date):
                     "slp_name": row.SlpName or "Vendedor General",
                     "destino": destino,
                     "peso_kg": float(row.PesoTotalKg) if getattr(row, "PesoTotalKg", None) else None,
-                    "estado": "Pendiente"
                 }
             )
             imported_count += 1
