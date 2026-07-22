@@ -3,9 +3,12 @@
 Capturado el 2026-07-21 a partir de una duda de Francisco: *"estamos usando el
 mapa OSRM, ¿por qué no se usan los 42 km/h que tenemos medidos?"*.
 
-La duda es correcta y destapó un sesgo real en el plan. **Nada de esto está
-corregido todavía en el código** — el doc existe para no perder el hallazgo ni
-el razonamiento.
+La duda es correcta y destapó un sesgo real en el plan, más otras dos cosas al
+tirar del hilo.
+
+**Estado:** las secciones 6 y 8 (mensaje de error real y ETA desfasada) ya
+están corregidas. El factor de calibración del final **sigue pendiente** a
+propósito — ver por qué al final del doc.
 
 ---
 
@@ -121,7 +124,49 @@ En la calle: 50 min manejo + 12 descarga             ->  ~15 paradas
 
 El plan sale con 18, el chofer entrega 15 y se le hacen las 7 de la noche.
 
-## 6. Hallazgo aparte: el OSRM propio no está prendido
+## 6. Sin OSRM el sistema NO truena — y por eso es peligroso
+
+Vale la pena dejarlo escrito porque es contraintuitivo: si OSRM falla, el
+optimizador **no lanza ninguna excepción**. Se probaron las dos hipótesis de
+crash y las dos están cubiertas:
+
+- Coordenada imposible de rutear → OSRM no devuelve `null`, la pega a la
+  carretera más cercana. No hay `TypeError` al convertir la matriz.
+- Más de 100 coordenadas → HTTP 400, pero `requests` no levanta excepción con
+  un 400; el código lee el `code` del cuerpo, no encuentra `"Ok"` y devuelve
+  `None`.
+
+En los dos casos se cae al respaldo Haversine y **entrega rutas de aspecto
+completamente normal**, calculadas en línea recta. Si tronara sería mejor: se
+vería el error y se sabría desconfiar del plan.
+
+### Por qué la línea recta no se puede "calibrar"
+
+El error contra la calle real no es parejo:
+
+| Destino | Recta | Calle | Error |
+|---------|------:|------:|------:|
+| Escobedo | 19.4 km | 31.5 km | **−38%** |
+| Sta. Catarina | 3.1 km | 4.7 km | **−34%** |
+| Apodaca | 31.0 km | 40.3 km | −23% |
+| Guadalupe | 24.6 km | 30.0 km | −18% |
+| Centro MTY | 16.8 km | 19.7 km | −15% |
+
+Un sesgo parejo se arregla con un factor; éste no. Va de −15% a −38% según el
+rumbo, porque la recta se brinca el cerro, el río y los sentidos únicos. En
+línea recta Escobedo *parece* más cerca que Guadalupe (19.4 vs 24.6 km) cuando
+por calle es **más lejos** (31.5 vs 30.0). Lo que se distorsiona no es la
+distancia: es **qué paradas parecen cercanas entre sí**, o sea el orden de la
+ruta — lo único que el optimizador tiene que decidir.
+
+### Cuándo se cruzan las 100 paradas
+
+Los nodos son `1 CEDIS + destinos distintos` (remisiones al mismo cliente
+colapsan en un nodo). Con ~77 pedidos de día normal se va en ~78, raspando; en
+un día pico de 139 se cruza. Es decir: **el día más cargado, justo cuando más
+se ocupa el optimizador, es el día que se cae a línea recta.**
+
+## 7. Hallazgo aparte: el OSRM propio no está prendido
 
 En `backend/.env:11-13`, `OSRM_BASE` está comentado ("hasta que el mapa termine
 de procesarse") y `localhost:5001` no responde. Hoy todo corre contra el
@@ -129,6 +174,36 @@ de procesarse") y `localhost:5001` no responde. Hoy todo corre contra el
 `exclude=motorway` — o sea que tampoco se están evitando casetas: cae al
 segundo intento sin exclusión (`routing_service.py:51-61`, y el `fuente` que
 devuelve es `"osrm"`, no `"osrm_sin_casetas"`).
+
+## 8. La ETA estaba desfasada 12 minutos (CORREGIDO)
+
+Al trazar el ejemplo CEDIS → Guadalupe paso por paso salió que las dos rutas de
+código que calculan ETA **no coincidían**:
+
+| Momento | ETA que daba | Qué era en realidad |
+|---------|-------------|---------------------|
+| Plan (antes de salir) | 09:44 | llegada **+ descarga** |
+| Recálculo al dar "Salida" | 09:32 | llegada limpia |
+
+Mismo camión, misma parada, 12 minutos de diferencia según si el despachador ya
+había apretado "Salida". El motivo: en el plan el callback de tránsito lleva los
+12 min de descarga sumados a toda columna destino (`optimizer.py:159-163`),
+así que el acumulado de la dimensión `Time` es *fin de descarga*, no llegada.
+`recalcular_etas_desde_salida` en cambio pide la matriz cruda y suma la descarga
+**después** de fijar la ETA (`optimizer.py:480-489`).
+
+**Decisión (Francisco, 2026-07-21): la ETA es la hora de LLEGADA** — el camión
+toca la puerta a esa hora. Es lo que espera quien lee una ETA.
+
+Corregido restando `TIEMPO_DESCARGA_MINUTOS` al extraer la ETA del plan. La
+resta es válida aunque el camión llegue antes de que el cliente abra, porque la
+espera por ventana de recibo se acumula como slack en la parada **anterior**,
+no en la propia.
+
+Ojo con el número real: 30 km a los 42.3 km/h medidos son ~43 min de manejo, no
+32. La llegada real a Guadalupe sería ~09:43. O sea que corregir el desfase
+arregla la *consistencia*, pero la ETA sigue optimista hasta que se aplique el
+factor de la sección siguiente.
 
 ---
 

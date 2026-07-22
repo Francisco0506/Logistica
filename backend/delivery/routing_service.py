@@ -33,8 +33,17 @@ def haversine_distance(lat1, lon1, lat2, lon2):
 def osrm_table(locations):
     """
     Pide a OSRM la matriz real de distancias (metros) y tiempos (segundos) entre
-    todos los puntos. `locations` es una lista de (lat, lng). Regresa
-    (distance_matrix_m, duration_matrix_s) o None si falla.
+    todos los puntos. `locations` es una lista de (lat, lng).
+
+    Regresa ((distances, durations, evito_casetas), None) si funcionó, o
+    (None, motivo) si no — donde `motivo` distingue POR QUÉ falló, porque las
+    dos causas se arreglan de forma distinta:
+
+    - "demasiadas_paradas": el servidor respondió `TooBig`. El público demo
+      acepta máximo 100 coordenadas por consulta, así que un día con muchas
+      paradas se cae al respaldo de línea recta. Se quita apuntando a un OSRM
+      propio (OSRM_BASE en el .env, ver docker/README.md).
+    - "sin_respuesta": timeout, red caída o error inesperado.
 
     NOTA IMPORTANTE: el servidor público de demostración de OSRM
     (router.project-osrm.org) usa el perfil de coche por defecto, que NO tiene
@@ -48,6 +57,7 @@ def osrm_table(locations):
     """
     coords_str = ";".join(f"{lng},{lat}" for lat, lng in locations)
     url = f"{OSRM_BASE}/table/v1/driving/{coords_str}"
+    motivo = "sin_respuesta"
     for params, evito_casetas in (
         ({"annotations": "distance,duration", "exclude": OSRM_EXCLUDE}, True),
         ({"annotations": "distance,duration"}, False),
@@ -56,10 +66,14 @@ def osrm_table(locations):
             resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
             data = resp.json()
             if data.get("code") == "Ok":
-                return data["distances"], data["durations"], evito_casetas
+                return (data["distances"], data["durations"], evito_casetas), None
+            # OSRM sí contestó pero rechazó la petición (un 400 no levanta
+            # excepción en requests, así que hay que mirar el `code` del cuerpo).
+            if data.get("code") == "TooBig":
+                motivo = "demasiadas_paradas"
         except (requests.RequestException, KeyError, ValueError):
             continue
-    return None
+    return None, motivo
 
 
 def build_distance_time_matrices(locations, velocidad_kmh_fallback):
@@ -68,9 +82,17 @@ def build_distance_time_matrices(locations, velocidad_kmh_fallback):
     responde en absoluto, cae a Haversine en línea recta para no tronar el
     optimizador. Regresa (distance_matrix, time_matrix_min, fuente) donde
     fuente es "osrm_sin_casetas", "osrm" (calles reales pero sin garantía de
-    evitar casetas) o "haversine" (línea recta, respaldo último).
+    evitar casetas), "haversine_demasiadas_paradas" o "haversine_sin_respuesta"
+    (línea recta, respaldo último — ver osrm_table para la diferencia).
+
+    OJO: el respaldo NO truena, entrega rutas de aspecto normal calculadas en
+    línea recta. El error contra la calle real no es parejo (medido: -15% al
+    centro, -38% a Escobedo), así que no se puede corregir con un factor: lo
+    que se distorsiona es qué paradas PARECEN cercanas entre sí, y con eso el
+    orden de la ruta. Por eso la fuente se propaga hasta el mensaje que ve el
+    despachador en vez de fallar en silencio.
     """
-    osrm_result = osrm_table(locations)
+    osrm_result, motivo = osrm_table(locations)
     if osrm_result:
         distances_m, durations_s, evito_casetas = osrm_result
         distance_matrix = [[int(d) for d in row] for row in distances_m]
@@ -86,7 +108,7 @@ def build_distance_time_matrices(locations, velocidad_kmh_fallback):
             dist_km = haversine_distance(locations[i][0], locations[i][1], locations[j][0], locations[j][1])
             distance_matrix[i][j] = int(dist_km * 1000)
             time_matrix_min[i][j] = int((dist_km / velocidad_kmh_fallback) * 60)
-    return distance_matrix, time_matrix_min, "haversine"
+    return distance_matrix, time_matrix_min, f"haversine_{motivo}"
 
 
 def geocode_address(street, city, state="Nuevo Leon", country="Mexico"):

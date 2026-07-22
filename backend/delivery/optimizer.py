@@ -362,7 +362,19 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords, horas_turno
                 if node_index != 0:
                     nodos_visitados.add(node_index)
                     remisiones_parada = remisiones_validas[node_index - 1]
-                    eta_time = hora_cero + timedelta(minutes=minutos_desde_cero)
+                    # La ETA que se le promete al cliente es la hora de LLEGADA.
+                    # El acumulado de la dimensión Time trae ya la descarga de
+                    # esta misma parada (el callback de tránsito la lleva sumada,
+                    # ver build_data_model), así que hay que restarla: sin esto
+                    # se prometían 12 min más tarde de cuando el camión de verdad
+                    # toca la puerta, y además no cuadraba con la ETA que calcula
+                    # recalcular_etas_desde_salida, que sí da la llegada limpia
+                    # — el mismo pedido cambiaba de hora al apretar "Salida".
+                    # La espera por ventana de recibo se acumula en la parada
+                    # anterior (slack de la dimensión), así que la resta es válida
+                    # aunque el camión llegue antes de que el cliente abra.
+                    minutos_llegada = minutos_desde_cero - TIEMPO_DESCARGA_MINUTOS
+                    eta_time = hora_cero + timedelta(minutes=minutos_llegada)
                     for remision in remisiones_parada:
                         remision.eta = eta_time.strftime("%I:%M %p")
                     route_sequence.append(remisiones_parada)
@@ -429,9 +441,22 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords, horas_turno
         mensajes_fuente = {
             "osrm_sin_casetas": "Rutas generadas con distancias reales de calle, evitando autopistas de cuota.",
             "osrm": "Rutas generadas con distancias reales de calle. El servidor de ruteo no soportó evitar casetas en esta corrida.",
-            "haversine": "OSRM no respondió: rutas generadas en línea recta, sin garantía de evitar casetas.",
+            "haversine_demasiadas_paradas": (
+                "ATENCIÓN: hoy hay más paradas de las que acepta el servidor de ruteo público (máx. 100), "
+                "así que las rutas se calcularon EN LÍNEA RECTA y el orden de las paradas no es confiable. "
+                "Revísalas antes de despachar. Se corrige apuntando a un servidor OSRM propio."
+            ),
+            "haversine_sin_respuesta": (
+                "ATENCIÓN: el servidor de ruteo no respondió, así que las rutas se calcularon EN LÍNEA RECTA "
+                "y el orden de las paradas no es confiable. Revísalas antes de despachar."
+            ),
         }
-        message = mensajes_fuente[data['fuente_matriz']]
+        # .get() y no [] a propósito: un fuente nuevo no debe tumbar una corrida
+        # que ya generó rutas válidas y las acaba de guardar en la BD.
+        message = mensajes_fuente.get(
+            data['fuente_matriz'],
+            "Rutas generadas, pero no se pudo determinar la fuente de las distancias. Revísalas antes de despachar.",
+        )
         if pedidos_no_asignados:
             message += f" {len(pedidos_no_asignados)} pedido(s) no cupieron en ninguna ruta: {pedidos_no_asignados}."
         if pedidos_sin_geo:
