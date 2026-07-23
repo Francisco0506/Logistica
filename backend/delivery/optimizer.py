@@ -61,9 +61,10 @@ def _ventana_en_minutos(destino, minutos_turno=MINUTOS_TURNO_MAXIMO, hora_cero=N
     de OR-Tools debe recortarla con _ventana_recortada_a_turno().
     """
     hora_cero = hora_cero or HORA_CERO
-    if destino.ini_recibo_1 and destino.fin_recibo_1:
-        ini = destino.ini_recibo_1
-        fin = destino.fin_recibo_1
+
+    def _raw(ini, fin):
+        """(ini_min, fin_min) del día para un par ini/fin, o None si el dato
+        está corrupto (fin <= ini una vez corregida la medianoche)."""
         ini_raw = ini.hour * 60 + ini.minute
         fin_raw = fin.hour * 60 + fin.minute
         # "00:00" como hora de cierre casi siempre significa medianoche real
@@ -72,14 +73,37 @@ def _ventana_en_minutos(destino, minutos_turno=MINUTOS_TURNO_MAXIMO, hora_cero=N
         # (ej. 08:00-00:00) se confunde con un dato corrupto.
         if fin_raw == 0:
             fin_raw = 24 * 60
-        if fin_raw < ini_raw:
-            # Dato inconsistente capturado en SAP (hora fin antes que hora
-            # inicio, ej. "08:00-06:00" — probablemente un cierre vespertino
-            # mal capturado sin PM). No tiene sentido bloquear al cliente con
-            # una ventana de 0 minutos por un dato corrupto: se ignora la
-            # ventana y se usa el turno completo, igual que si no tuviera
-            # ventana configurada en SAP.
+        if fin_raw <= ini_raw:
+            # Dato inconsistente capturado en SAP (hora fin antes o igual que
+            # hora inicio, ej. "08:00-06:00" o "10:00-10:00" — probablemente
+            # un cierre vespertino mal capturado sin PM). No tiene sentido
+            # bloquear al cliente con una ventana de 0 minutos por un dato
+            # corrupto: se descarta este par en vez de usarlo.
+            return None
+        return ini_raw, fin_raw
+
+    if destino.ini_recibo_1 and destino.fin_recibo_1:
+        r1 = _raw(destino.ini_recibo_1, destino.fin_recibo_1)
+        if r1 is None:
+            # R1 corrupto: se ignora toda ventana y se usa el turno completo,
+            # igual que si no tuviera ventana configurada en SAP.
             return (0, minutos_turno)
+        ini_raw, fin_raw = r1
+
+        # Segundo turno (ej. cierra a mediodía y reabre en la tarde). SAP solo
+        # guarda un ini/fin por turno, sin marcar a qué día aplica, así que se
+        # trata como parte del mismo horario de recibo. OR-Tools solo admite
+        # UNA ventana continua por parada, así que se extiende el cierre hasta
+        # el fin del segundo turno en vez de representar el hueco de en medio
+        # — mejor sobrestimar cuándo recibe (raro que rechace un camión que sí
+        # llegó dentro de alguno de los dos turnos) que perder el turno
+        # completo por no leerlo, que es lo que pasaba antes.
+        if destino.ini_recibo_2 and destino.fin_recibo_2:
+            r2 = _raw(destino.ini_recibo_2, destino.fin_recibo_2)
+            if r2 is not None:
+                ini_raw = min(ini_raw, r2[0])
+                fin_raw = max(fin_raw, r2[1])
+
         hora_cero_raw = hora_cero.hour * 60 + hora_cero.minute
         ini_min = max(0, ini_raw - hora_cero_raw)
         fin_min = max(0, fin_raw - hora_cero_raw)
