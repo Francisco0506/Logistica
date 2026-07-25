@@ -80,6 +80,13 @@ export default function EstadoDespacho({ ruta, onCambiarEstado, cambiando }) {
       </div>
 
       <div className="p-2.5 space-y-2">
+        {/* Qué significa el paso en el que va, con palabras. El icono ayuda a
+            reconocerlo de reojo, pero no debe quedar a interpretación. */}
+        <p className="text-[11px] text-gray-500 text-center">
+          <b className="text-gray-700">{PASOS[indiceActual]?.etiqueta}:</b>{' '}
+          {PASOS[indiceActual]?.acabado.toLowerCase()}
+        </p>
+
         {ruta.hora_salida && (
           <div className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md px-2 py-1">
             <Truck className="w-3 h-3" /> Salió a las {ruta.hora_salida}

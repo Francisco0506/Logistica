@@ -18,6 +18,10 @@ import PreviewManifiesto from './components/PreviewManifiesto';
 // Cada cuánto se refresca la vista para traer lo más nuevo (pedidos nuevos de
 // SAP, cambios de estado de otros usuarios) sin recargar la página a mano.
 const REFRESH_INTERVAL_MS = 45_000;
+// El GPS va por su cuenta y más seguido: es lo único que se mueve solo en el
+// mapa. Samsara reporta cada pocos segundos, así que 15 s se ve fluido sin
+// castigar su límite de llamadas.
+const GPS_INTERVAL_MS = 15_000;
 // La ruta que dibuja el mapa evita autopistas de cuota, mismo criterio que el
 // optimizador del backend, para no cruzar casetas ni visual ni realmente.
 const OSRM_EXCLUDE = 'motorway';
@@ -75,6 +79,7 @@ export default function DispatcherPanel() {
   const [searchQuery, setSearchQuery]   = useState('');
   const [orderFilter, setOrderFilter]   = useState('todos');
   const [orderSearch, setOrderSearch]   = useState('');
+  const [camionFiltro, setCamionFiltro] = useState('todos');
   // Varios camiones abiertos a la vez. Antes solo cabía uno: comparar dos rutas
   // obligaba a cerrar una para abrir la otra, y volver a buscarla en la lista.
   const [expandedTrucks, setExpandedTrucks] = useState(() => new Set());
@@ -150,13 +155,23 @@ export default function DispatcherPanel() {
       setSyncStatusTipo('error');
     }
 
-    // Aparte: si Samsara falla no debe tumbar el resto del panel.
-    try {
-      setCamionesGPS(await getCamionesGPS({ signal }));
-    } catch (e) {
-      if (e.name !== 'AbortError') console.error('Camiones GPS error:', e);
-    }
   };
+
+  // ── Camiones en vivo (Samsara), en su propio ciclo ──
+  // Aparte del resto y más seguido: es lo ÚNICO que se mueve solo en el mapa, y
+  // antes viajaba junto con los pedidos cada 45 s, así que los camiones parecían
+  // congelados. También va aparte para que si Samsara falla no tumbe el panel.
+  useEffect(() => {
+    const controller = new AbortController();
+    const traerGPS = () => {
+      getCamionesGPS({ signal: controller.signal })
+        .then(setCamionesGPS)
+        .catch((e) => { if (e.name !== 'AbortError') console.error('Camiones GPS error:', e); });
+    };
+    traerGPS();
+    const interval = setInterval(traerGPS, GPS_INTERVAL_MS);
+    return () => { controller.abort(); clearInterval(interval); };
+  }, []);
 
   // ── Rutas dibujadas por calle (OSRM), cacheadas por firma de puntos ──
   useEffect(() => {
@@ -211,6 +226,8 @@ export default function DispatcherPanel() {
       const t = trucks.find((x) => x.id === o.truck);
       if (t && !t.active) return false;
     }
+    if (camionFiltro === 'sin_camion' && o.truck) return false;
+    if (camionFiltro !== 'todos' && camionFiltro !== 'sin_camion' && o.truck !== camionFiltro) return false;
     if (orderFilter !== 'todos' && o.estado?.toLowerCase() !== orderFilter) return false;
     if (orderSearch) {
       const q = orderSearch.toLowerCase();
@@ -368,12 +385,13 @@ export default function DispatcherPanel() {
         </section>
 
         {/* ═══ MAPA (izquierda, flotante) + OPERACIÓN (derecha) ═══ */}
-        <div className={mapaAncho ? 'space-y-5' : 'grid grid-cols-1 xl:grid-cols-2 gap-5 items-start'}>
+        {/* items-stretch (el default) a propósito: así la columna del mapa mide
+            lo mismo que la de camiones y el mapa crece para llenarla. Con
+            items-start el mapa se quedaba en su alto fijo y abajo quedaba una
+            franja en blanco del alto de la diferencia. */}
+        <div className={mapaAncho ? 'space-y-5' : 'grid grid-cols-1 xl:grid-cols-2 gap-5'}>
 
-          {/* El mapa NO va anclado: se queda pegado arriba mientras recorres la
-              columna de la derecha, y se despega solo cuando la página sigue
-              hacia abajo. Así no lo pierdes de vista sin que se coma la pantalla. */}
-          <div className={mapaAncho ? '' : 'xl:sticky xl:top-[76px]'}>
+          <div className={mapaAncho ? '' : 'flex flex-col min-h-0'}>
             <MapaRutas
               camionesActivos={camionesActivos}
               paradasDe={ordersOf}
@@ -383,18 +401,19 @@ export default function DispatcherPanel() {
               coordsEnfocadas={focusedCoords}
               onEnfocarCedis={() => focus(CEDIS)}
               mensajeEstado={syncStatus}
-              alto={mapaAncho ? 'h-[78vh]' : 'h-[72vh]'}
+              alto={mapaAncho ? 'h-[78vh]' : 'flex-1 min-h-[520px]'}
+              pantallaCompleta={mapaAncho}
               placasSeleccionadas={[...expandedTrucks]}
               onLimpiarSeleccion={() => setExpandedTrucks(new Set())}
               estadoRutaDe={(placa) => rutaDe(placa)?.estado}
               acciones={
                 <button
                   onClick={() => setMapaAncho((v) => !v)}
-                  title={mapaAncho ? 'Volver a dos columnas' : 'Ver el mapa a todo lo ancho'}
+                  title={mapaAncho ? 'Salir de pantalla completa (Esc)' : 'Ver el mapa en pantalla completa'}
                   className="bg-white/95 border border-gray-200 px-2.5 py-1.5 rounded-lg shadow-sm flex items-center gap-1.5 text-[11px] font-bold text-gray-700 hover:bg-gray-50 transition"
                 >
                   {mapaAncho ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-                  {mapaAncho ? 'Reducir' : 'Ampliar'}
+                  {mapaAncho ? 'Salir' : 'Pantalla completa'}
                 </button>
               }
             />
@@ -405,7 +424,7 @@ export default function DispatcherPanel() {
                 uno se hace viendo el mapa: "¿de quién es esta línea?".
                 Al hacer clic se aísla esa ruta, igual que abriendo la tarjeta. */}
             {routesGenerated && !!camionesActivos.length && (
-              <div className="mt-4 bg-white rounded-xl border border-gray-200 shadow-sm p-3">
+              <div className="mt-4 flex-shrink-0 bg-white rounded-xl border border-gray-200 shadow-sm p-3">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Rutas en el mapa</span>
                   {!!expandedTrucks.size && (
@@ -580,12 +599,6 @@ export default function DispatcherPanel() {
                     ))}
                   </div>
                 </div>
-                {horasTurno > 6 && (
-                  <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
-                    Turno ampliado a {horasTurno} h: las rutas podrán ser más largas de lo normal. Confírmalo con los choferes.
-                  </p>
-                )}
-
                 <button
                   onClick={optimize}
                   disabled={isOptimizing || !flotaCargada}
@@ -677,6 +690,8 @@ export default function DispatcherPanel() {
             filtro={orderFilter} onFiltro={setOrderFilter}
             busqueda={orderSearch} onBusqueda={setOrderSearch}
             colorDe={colorOf} onEnfocar={focus}
+            camiones={camionesActivos}
+            camionFiltro={camionFiltro} onCamionFiltro={setCamionFiltro}
           />
         </section>
 

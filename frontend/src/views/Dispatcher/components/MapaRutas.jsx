@@ -91,6 +91,7 @@ export default function MapaRutas({
   mensajeEstado,
   alto = 'h-[70vh]',
   acciones = null,
+  pantallaCompleta = false,
   placasSeleccionadas = [],
   onLimpiarSeleccion,
   estadoRutaDe = () => null,
@@ -109,7 +110,13 @@ export default function MapaRutas({
   );
 
   return (
-    <div className={`relative rounded-xl border border-gray-200 overflow-hidden bg-white shadow-sm ${alto}`}>
+    <div className={
+      pantallaCompleta
+        // Pantalla completa de verdad: encima de todo y del tamaño de la
+        // ventana, para revisar un día completo sin nada alrededor.
+        ? 'fixed inset-0 z-[2500] bg-white'
+        : `relative rounded-xl border border-gray-200 overflow-hidden bg-white shadow-sm ${alto}`
+    }>
       <div className="absolute top-3 right-3 z-[400] flex items-center gap-1.5">
         {acciones}
         <button
