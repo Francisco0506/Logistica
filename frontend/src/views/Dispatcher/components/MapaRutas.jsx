@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { Compass, X } from 'lucide-react';
+import { Compass, X, ZoomIn, ZoomOut, Maximize2, Minimize2 } from 'lucide-react';
 import { CEDIS } from '../../../config/fleet';
 
 // ── Iconos de Leaflet ──
@@ -51,6 +51,57 @@ function CentrarMapa({ coords }) {
   return null;
 }
 
+/**
+ * Los controles del mapa, encima de él.
+ *
+ * El zoom va con botones y NO con la rueda del ratón: la página se recorre
+ * hacia abajo, y un mapa que atrapa la rueda deja al usuario clavado en cuanto
+ * pasa el cursor por encima. Se puede seguir usando la rueda manteniendo Ctrl,
+ * que es el gesto que ya usa todo el mundo en mapas embebidos.
+ */
+function ControlesMapa({ onEnfocarCedis, pantallaCompleta, onTogglePantallaCompleta }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!pantallaCompleta) return;
+    const alPresionar = (e) => { if (e.key === 'Escape') onTogglePantallaCompleta(); };
+    window.addEventListener('keydown', alPresionar);
+    return () => window.removeEventListener('keydown', alPresionar);
+  }, [pantallaCompleta, onTogglePantallaCompleta]);
+
+  const boton = 'bg-white/95 border border-gray-200 shadow-sm hover:bg-gray-50 transition flex items-center justify-center text-gray-700';
+
+  return (
+    <div className="absolute top-3 right-3 z-[400] flex flex-col items-end gap-2">
+      <div className="flex items-center gap-1.5">
+        <button
+          onClick={onEnfocarCedis}
+          title="Centrar el mapa en el CEDIS"
+          className={`${boton} gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold`}
+        >
+          <Compass className="h-3.5 w-3.5 text-orange-500" /> CEDIS
+        </button>
+        <button
+          onClick={onTogglePantallaCompleta}
+          title={pantallaCompleta ? 'Salir de pantalla completa (Esc)' : 'Ver el mapa en pantalla completa'}
+          className={`${boton} w-8 h-8 rounded-lg`}
+        >
+          {pantallaCompleta ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+        </button>
+      </div>
+
+      <div className="flex flex-col rounded-lg overflow-hidden border border-gray-200 shadow-sm">
+        <button onClick={() => map.zoomIn()} title="Acercar" className={`${boton} w-8 h-8 border-0 border-b border-gray-200 rounded-none`}>
+          <ZoomIn className="h-4 w-4" />
+        </button>
+        <button onClick={() => map.zoomOut()} title="Alejar" className={`${boton} w-8 h-8 border-0 rounded-none`}>
+          <ZoomOut className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // Leaflet mide su contenedor UNA vez, al crearse, y se queda con esa medida.
 // Si la página todavía estaba acomodándose en ese momento (que es lo que pasa
 // con el mapa dentro de una rejilla y en posición flotante), se queda chico y
@@ -90,8 +141,8 @@ export default function MapaRutas({
   onEnfocarCedis,
   mensajeEstado,
   alto = 'h-[70vh]',
-  acciones = null,
   pantallaCompleta = false,
+  onTogglePantallaCompleta,
   placasSeleccionadas = [],
   onLimpiarSeleccion,
   estadoRutaDe = () => null,
@@ -117,16 +168,6 @@ export default function MapaRutas({
         ? 'fixed inset-0 z-[2500] bg-white'
         : `relative rounded-xl border border-gray-200 overflow-hidden bg-white shadow-sm ${alto}`
     }>
-      <div className="absolute top-3 right-3 z-[400] flex items-center gap-1.5">
-        {acciones}
-        <button
-          onClick={onEnfocarCedis}
-          className="bg-white/95 border border-gray-200 px-3 py-1.5 rounded-lg shadow-sm flex items-center gap-1.5 text-[11px] font-bold text-gray-700 hover:bg-gray-50 transition"
-        >
-          <Compass className="h-3.5 w-3.5 text-orange-600" /> CEDIS
-        </button>
-      </div>
-
       <div className="absolute top-3 left-3 z-[400] space-y-2 max-w-[320px]">
         {/* Qué se está viendo, y cómo volver a verlas todas. */}
         {hayFiltro && (
@@ -160,9 +201,24 @@ export default function MapaRutas({
         {mensajeEstado}
       </div>
 
-      <MapContainer center={CEDIS} zoom={13} className="w-full h-full" zoomControl={false}>
+      {/* scrollWheelZoom en false: la página se recorre hacia abajo, y un mapa
+          que atrapa la rueda deja al usuario clavado en cuanto pasa el cursor
+          por encima. Con Ctrl + rueda sí hace zoom, que es el gesto conocido, y
+          para lo demás están los botones. */}
+      <MapContainer
+        center={CEDIS}
+        zoom={13}
+        className="w-full h-full"
+        zoomControl={false}
+        scrollWheelZoom={false}
+      >
         <CentrarMapa coords={coordsEnfocadas} />
         <RecalcularTamano />
+        <ControlesMapa
+          onEnfocarCedis={onEnfocarCedis}
+          pantallaCompleta={pantallaCompleta}
+          onTogglePantallaCompleta={onTogglePantallaCompleta}
+        />
         <TileLayer
           attribution='&copy; <a href="https://carto.com">CARTO</a>'
           url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"

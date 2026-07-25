@@ -86,6 +86,10 @@ export default function Manifiesto({ camionesActivos, paradasDe, onVerPreview })
 
               <div className="px-3 py-2 space-y-1.5 max-h-[160px] overflow-y-auto">
                 {ordenDeCarga.length > 0 ? ordenDeCarga.map((o, i) => (
+                  // Aquí solo va lo que se ocupa para CARGAR: en qué orden sube
+                  // cada pedido, para quién es y cuánto pesa. El importe se
+                  // quitó — quien carga el camión no necesita saber cuánto
+                  // costó, y con 18 renglones cada dato de más estorba.
                   <div key={o.id} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2 text-xs">
                     <span
                       className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0"
@@ -93,17 +97,11 @@ export default function Manifiesto({ camionesActivos, paradasDe, onVerPreview })
                     >
                       {i + 1}
                     </span>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-bold text-gray-700 text-[11px] truncate">{o.card_name}</div>
-                      {o.ventana && (
-                        <div className="text-[9px] text-gray-400">Recibe {o.ventana}</div>
-                      )}
-                    </div>
-                    <span className="text-[10px] text-gray-400 flex-shrink-0">
-                      {o.peso_kg != null ? `${o.peso_kg} kg` : '—'}
+                    <span className="flex-1 min-w-0 font-bold text-gray-700 text-[11px] truncate" title={o.card_name}>
+                      {o.card_name}
                     </span>
-                    <span className="font-bold text-gray-800 text-[11px] flex-shrink-0">
-                      ${o.doc_total?.toLocaleString()}
+                    <span className="text-[10px] text-gray-400 flex-shrink-0 tabular-nums">
+                      {o.peso_kg != null ? `${o.peso_kg} kg` : '—'}
                     </span>
                   </div>
                 )) : (

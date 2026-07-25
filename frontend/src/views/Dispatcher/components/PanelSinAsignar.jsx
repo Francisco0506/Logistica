@@ -1,5 +1,5 @@
 import React from 'react';
-import { Truck, AlertCircle, ChevronDown, ChevronUp, Clock, Loader } from 'lucide-react';
+import { Truck, AlertCircle, ChevronDown, ChevronUp, Clock, Loader, RefreshCw, ShieldCheck } from 'lucide-react';
 
 /**
  * Los pedidos que no quedaron en ninguna ruta, con la sugerencia de a qué
@@ -19,6 +19,8 @@ export default function PanelSinAsignar({
   onAbrirAlerta,
   onAsignar,
   onIrAAgregarCamion,
+  onReoptimizar,
+  optimizando,
   etiquetaCamion,
 }) {
   const haySinAsignar = alertas.some((a) => a.motivo.startsWith('Pendiente'));
@@ -30,30 +32,60 @@ export default function PanelSinAsignar({
       )}
 
       {haySinAsignar && (
-        <div className="bg-white border border-orange-200 rounded-xl p-3 space-y-2 shadow-sm">
-          <p className="text-[11px] font-bold text-gray-700">¿No caben todos los pedidos? Esto es lo que sirve:</p>
-          <div className="space-y-1.5">
-            <button
-              onClick={onIrAAgregarCamion}
-              className="w-full text-left flex items-center gap-2 bg-orange-50 border border-orange-200 hover:bg-orange-100 rounded-lg px-2.5 py-2 transition"
-            >
-              <Truck className="w-3.5 h-3.5 text-orange-600 flex-shrink-0" />
-              <span className="text-[11px] text-gray-700"><b>1. Activa o agrega otro camión</b> y vuelve a optimizar.</span>
-            </button>
-            <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-2">
-              <AlertCircle className="w-3.5 h-3.5 text-gray-500 flex-shrink-0" />
-              <span className="text-[11px] text-gray-700"><b>2. Asígnalos a mano</b> abajo: cada pedido te dice en qué camión cabe mejor.</span>
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+          <div className="px-3 py-2.5 border-b border-gray-100">
+            <p className="text-[12px] font-bold text-gray-800">
+              {alertas.length} pedido{alertas.length === 1 ? '' : 's'} sin lugar en ninguna ruta
+            </p>
+            <p className="text-[10px] text-gray-500 mt-0.5">Tres formas de resolverlo, de la más rápida a la más lenta:</p>
+          </div>
+
+          <div className="p-3 space-y-2">
+            {/* Las dos acciones que se pueden disparar desde aquí mismo, sin ir
+                a buscar el botón a otra pestaña. */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={onReoptimizar}
+                disabled={optimizando}
+                className="flex flex-col items-center gap-1 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white rounded-lg px-2 py-2.5 transition"
+              >
+                <RefreshCw className={`w-4 h-4 ${optimizando ? 'animate-spin' : ''}`} />
+                <span className="text-[11px] font-bold">{optimizando ? 'Optimizando…' : 'Volver a optimizar'}</span>
+              </button>
+              <button
+                onClick={onIrAAgregarCamion}
+                className="flex flex-col items-center gap-1 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-lg px-2 py-2.5 transition"
+              >
+                <Truck className="w-4 h-4 text-gray-500" />
+                <span className="text-[11px] font-bold">Activar otro camión</span>
+              </button>
             </div>
-            {/* Medido con datos reales: salir 1 h antes mete ~5 pedidos más;
-                ampliar el turno casi no mueve la aguja, porque los clientes
-                cierran a hora fija sin importar cuánto trabaje el chofer. */}
-            <p className="text-[10px] text-gray-500 leading-snug bg-emerald-50 border border-emerald-100 rounded-lg px-2.5 py-2">
-              <b className="text-emerald-700">Lo que más ayudaría:</b> cargar más rápido en el CEDIS.
-              Cada hora que los camiones salgan más temprano caben ~5 pedidos más.
-              Alargar el turno casi no sirve: el límite no es la jornada del chofer,
-              es que 97 de 195 clientes cierran antes de las 14:00.
+
+            {/* Lo que más preocupa al re-optimizar es perder lo que ya se
+                despachó. No pasa, y hay que decirlo donde se toma la decisión. */}
+            <p className="text-[10px] text-gray-500 flex items-start gap-1.5 bg-gray-50 border border-gray-100 rounded-lg px-2.5 py-2">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0 mt-px" />
+              <span>
+                Re-optimizar <b>no toca las rutas que ya salieron</b> ni las que están cargando:
+                solo reacomoda las que siguen en borrador.
+              </span>
+            </p>
+
+            <p className="text-[10px] text-gray-500 flex items-start gap-1.5">
+              <AlertCircle className="w-3.5 h-3.5 text-gray-400 flex-shrink-0 mt-px" />
+              <span>O <b>asígnalos a mano</b> abajo: cada pedido dice en qué camión cabe mejor.</span>
             </p>
           </div>
+
+          {/* Medido con datos reales: salir 1 h antes mete ~5 pedidos más;
+              ampliar el turno casi no mueve la aguja, porque los clientes
+              cierran a hora fija sin importar cuánto trabaje el chofer. */}
+          <p className="text-[10px] text-gray-600 leading-snug bg-emerald-50 border-t border-emerald-100 px-3 py-2">
+            <b className="text-emerald-700">Lo que más ayudaría:</b> cargar más rápido en el CEDIS.
+            Cada hora que los camiones salgan más temprano caben ~5 pedidos más.
+            Alargar el turno casi no sirve: el límite no es la jornada del chofer,
+            es que 97 de 195 clientes cierran antes de las 14:00.
+          </p>
         </div>
       )}
 

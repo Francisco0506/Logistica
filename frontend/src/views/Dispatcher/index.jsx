@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Truck, RefreshCw, Search, AlertCircle, Package, FileText, Clock, Loader, FlaskConical, Maximize2, Minimize2, Plus } from 'lucide-react';
+import { Truck, RefreshCw, Search, AlertCircle, Package, FileText, Clock, Loader, FlaskConical, Plus, ChevronDown, ChevronUp } from 'lucide-react';
 import { CEDIS, PALETA_COLORES_CAMION } from '../../config/fleet';
 import {
   syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado,
@@ -80,6 +80,8 @@ export default function DispatcherPanel() {
   const [orderFilter, setOrderFilter]   = useState('todos');
   const [orderSearch, setOrderSearch]   = useState('');
   const [camionFiltro, setCamionFiltro] = useState('todos');
+  const [verPedidos, setVerPedidos]     = useState(true);
+  const [verManifiesto, setVerManifiesto] = useState(false); // cerrado al abrir: se ocupa al despachar, no todo el tiempo
   // Varios camiones abiertos a la vez. Antes solo cabía uno: comparar dos rutas
   // obligaba a cerrar una para abrir la otra, y volver a buscarla en la lista.
   const [expandedTrucks, setExpandedTrucks] = useState(() => new Set());
@@ -401,21 +403,12 @@ export default function DispatcherPanel() {
               coordsEnfocadas={focusedCoords}
               onEnfocarCedis={() => focus(CEDIS)}
               mensajeEstado={syncStatus}
-              alto={mapaAncho ? 'h-[78vh]' : 'flex-1 min-h-[520px]'}
+              alto={mapaAncho ? '' : 'flex-1 min-h-[520px]'}
               pantallaCompleta={mapaAncho}
+              onTogglePantallaCompleta={() => setMapaAncho((v) => !v)}
               placasSeleccionadas={[...expandedTrucks]}
               onLimpiarSeleccion={() => setExpandedTrucks(new Set())}
               estadoRutaDe={(placa) => rutaDe(placa)?.estado}
-              acciones={
-                <button
-                  onClick={() => setMapaAncho((v) => !v)}
-                  title={mapaAncho ? 'Salir de pantalla completa (Esc)' : 'Ver el mapa en pantalla completa'}
-                  className="bg-white/95 border border-gray-200 px-2.5 py-1.5 rounded-lg shadow-sm flex items-center gap-1.5 text-[11px] font-bold text-gray-700 hover:bg-gray-50 transition"
-                >
-                  {mapaAncho ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-                  {mapaAncho ? 'Salir' : 'Pantalla completa'}
-                </button>
-              }
             />
 
             {/* Leyenda: de quién es cada color, cuántas paradas trae y cómo va.
@@ -667,6 +660,8 @@ export default function DispatcherPanel() {
                 onAbrirAlerta={toggleAlerta}
                 onAsignar={handleAsignar}
                 onIrAAgregarCamion={() => { setSidebarTab('camiones'); setMostrarAgregarCamion(true); }}
+                onReoptimizar={optimize}
+                optimizando={isOptimizing}
                 etiquetaCamion={truckLabel}
               />
             )}
@@ -678,34 +673,50 @@ export default function DispatcherPanel() {
             uno hace sin pensarlo, en vez de tener que acordarse de que existe
             una pestaña y hacer clic. */}
         <section className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100">
+          {/* Se puede cerrar: son 80 renglones, y hay días en que no se ocupa
+              tenerlos abiertos ocupando toda la página. */}
+          <button
+            onClick={() => setVerPedidos((v) => !v)}
+            className="w-full flex items-center gap-2 px-4 py-3 border-b border-gray-100 hover:bg-gray-50 transition text-left"
+          >
             <Package className="h-4 w-4 text-orange-500" />
             <h2 className="text-sm font-bold text-gray-800">Pedidos del día</h2>
             <span className="text-[10px] font-bold text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
               {visibleOrders.length}
             </span>
-          </div>
-          <TablaPedidos
+            <span className="ml-auto text-gray-400">
+              {verPedidos ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </span>
+          </button>
+          {verPedidos && <TablaPedidos
             pedidos={visibleOrders}
             filtro={orderFilter} onFiltro={setOrderFilter}
             busqueda={orderSearch} onBusqueda={setOrderSearch}
             colorDe={colorOf} onEnfocar={focus}
             camiones={camionesActivos}
             camionFiltro={camionFiltro} onCamionFiltro={setCamionFiltro}
-          />
+          />}
         </section>
 
         {/* ═══ MÁS ABAJO: MANIFIESTO DE CARGA ═══ */}
         <section className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100">
+          <button
+            onClick={() => setVerManifiesto((v) => !v)}
+            className="w-full flex items-center gap-2 px-4 py-3 border-b border-gray-100 hover:bg-gray-50 transition text-left"
+          >
             <FileText className="h-4 w-4 text-orange-500" />
             <h2 className="text-sm font-bold text-gray-800">Manifiesto de carga</h2>
-          </div>
-          <Manifiesto
-            camionesActivos={camionesActivos}
-            paradasDe={ordersOf}
-            onVerPreview={setPreviewCamion}
-          />
+            <span className="ml-auto text-gray-400">
+              {verManifiesto ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </span>
+          </button>
+          {verManifiesto && (
+            <Manifiesto
+              camionesActivos={camionesActivos}
+              paradasDe={ordersOf}
+              onVerPreview={setPreviewCamion}
+            />
+          )}
         </section>
       </main>
 
