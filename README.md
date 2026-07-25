@@ -91,6 +91,7 @@ línea recta.
 
 | Documento | De qué trata |
 |-----------|-------------|
+| [`docs/bitacora-reestructura.md`](docs/bitacora-reestructura.md) | **Qué se hizo en la reestructura**, por qué y en qué rama quedó |
 | [`docs/como-funciona.md`](docs/como-funciona.md) | **Explicaciones en lenguaje llano**: los dos pesos, las horas, por qué se ven líneas rectas, qué mapa se usa, qué secretos están expuestos |
 | [`docs/pendientes.md`](docs/pendientes.md) | **Todo lo que falta**, por prioridad: choferes, datos de SAP, OSRM, seguridad |
 | [`docs/flota.md`](docs/flota.md) | Los 8 camiones medidos con GPS real: capacidades por VIN, cuántos operan de verdad, cómo se calibró el optimizador |
