@@ -13,12 +13,15 @@ import { Download, AlertCircle } from 'lucide-react';
  */
 export default function Manifiesto({ camionesActivos, paradasDe }) {
   return (
-    <div className="flex-1 overflow-auto px-3 py-3">
+    // Sin scroll propio: fluye con la página.
+    <div className="px-4 pb-4">
       <p className="text-[11px] text-gray-400 mb-3 font-medium">
         Orden de carga <b>LIFO</b> — lo primero que se carga en almacén es lo último que se entrega en ruta.
       </p>
 
-      <div className="grid grid-cols-1 gap-3">
+      {/* En pantallas anchas los camiones van de dos en dos: uno debajo de otro
+          obligaba a recorrer mucho para comparar dos manifiestos. */}
+      <div className="grid grid-cols-1 2xl:grid-cols-2 gap-3">
         {camionesActivos.map((camion) => {
           const pedidos = paradasDe(camion.id);
           const ordenDeCarga = [...pedidos].reverse();

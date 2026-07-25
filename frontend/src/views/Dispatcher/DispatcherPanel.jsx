@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Truck, RefreshCw, Search, AlertCircle, Package, FileText, ChevronLeft, ChevronRight, Clock, Loader, FlaskConical } from 'lucide-react';
+import { Truck, RefreshCw, Search, AlertCircle, Package, FileText, Clock, Loader, FlaskConical, Maximize2, Minimize2 } from 'lucide-react';
 import { CEDIS, PALETA_COLORES_CAMION } from '../../config/fleet';
 import {
   syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado,
@@ -64,10 +64,11 @@ export default function DispatcherPanel() {
   const [syncStatusTipo, setSyncStatusTipo] = useState('cargando');
 
   // ── Interfaz ──
-  const [isPanelOpen, setIsPanelOpen]   = useState(true);
-  // Cuatro pestañas al mismo nivel. Antes "Manifiesto" vivía como sub-pestaña
-  // dentro de "Pedidos", así que llegar a él costaba dos clics y no se veía
-  // que existiera hasta entrar.
+  // El mapa se puede ensanchar a toda la página cuando hace falta verlo grande.
+  const [mapaAncho, setMapaAncho]       = useState(false);
+  // Solo dos pestañas en la columna de operación: camiones y lo que no cupo.
+  // Los pedidos y el manifiesto ya no son pestañas — viven más abajo en la
+  // misma página, y se llega a ellos recorriendo, no clicando.
   const [sidebarTab, setSidebarTab]     = useState('camiones');
   const [searchQuery, setSearchQuery]   = useState('');
   const [orderFilter, setOrderFilter]   = useState('todos');
@@ -333,19 +334,12 @@ export default function DispatcherPanel() {
       return siguiente;
     });
 
-  // El panel se lleva casi la mitad de la pantalla en vez de una franja fija de
-  // 400 px: el mapa se estaba comiendo dos tercios y la información quedaba
-  // apretada en un rincón. Va en porcentaje para que aproveche pantallas
-  // grandes, con topes para que no se deforme en las chicas ni en las enormes.
-  const anchoPanel = sidebarTab === 'pedidos' || sidebarTab === 'manifiesto'
-    ? 'w-[52%] min-w-[560px] max-w-[900px]'
-    : 'w-[42%] min-w-[420px] max-w-[680px]';
-
   return (
-    <div className="flex flex-col h-screen w-full bg-gray-50 text-gray-800 overflow-hidden" style={{ fontFamily: "'Inter', sans-serif" }}>
+    // La página se recorre. Antes era una aplicación clavada a la pantalla
+    // (h-screen + overflow-hidden): no se podía bajar, y todo tenía que caber
+    // en el alto del monitor a costa de letra chica y scrolls internos.
+    <div className="min-h-screen w-full bg-gray-50 text-gray-800" style={{ fontFamily: "'Inter', sans-serif" }}>
       <HeaderDespacho
-        panelAbierto={isPanelOpen}
-        onTogglePanel={() => setIsPanelOpen((v) => !v)}
         fecha={selectedDate}
         onFecha={setSelectedDate}
         estadoSync={syncStatus}
@@ -353,43 +347,84 @@ export default function DispatcherPanel() {
         onSalir={() => navigate('/')}
       />
 
-      <div className="flex-1 flex min-h-0 relative">
-        <aside
-          className={`relative bg-white border-r border-gray-200 flex flex-col flex-shrink-0 transition-all duration-300 z-10 overflow-hidden ${
-            isPanelOpen ? anchoPanel : 'w-0 min-w-0'
-          }`}
-        >
-          {/* Pestañas — las cuatro al mismo nivel */}
-          <div className="flex items-stretch border-b border-gray-200 flex-shrink-0">
-            {[
-              { id: 'camiones', icono: Truck, texto: 'Camiones', badge: camionesActivos.length, color: 'orange' },
-              { id: 'alertas', icono: AlertCircle, texto: 'Sin asignar', badge: alertas.length || null, color: 'red' },
-              { id: 'pedidos', icono: Package, texto: 'Pedidos', badge: null, color: 'orange' },
-              { id: 'manifiesto', icono: FileText, texto: 'Manifiesto', badge: null, color: 'orange' },
-            ].map(({ id, icono: Icono, texto, badge, color }) => (
-              <button
-                key={id}
-                onClick={() => setSidebarTab(id)}
-                className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-3 text-xs font-bold transition border-b-2 whitespace-nowrap ${
-                  sidebarTab === id
-                    ? color === 'red' ? 'text-red-600 border-red-500 bg-red-50/50' : 'text-orange-600 border-orange-500 bg-orange-50/50'
-                    : 'text-gray-400 border-transparent hover:text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                <Icono className="h-4 w-4 flex-shrink-0" /> {texto}
-                {badge != null && (
-                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
-                    color === 'red' ? 'bg-red-100 text-red-700' : 'bg-white text-gray-500 border border-gray-200'
-                  }`}>{badge}</span>
-                )}
-              </button>
-            ))}
+      <main className="max-w-[1700px] mx-auto px-5 py-5 space-y-5">
+
+        {/* ═══ RESUMEN DEL DÍA ═══ */}
+        <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          {[
+            { etiqueta: 'Pedidos del día', valor: resumen.total, clase: 'text-gray-800' },
+            { etiqueta: 'En un camión', valor: resumen.asignados, clase: 'text-emerald-600' },
+            { etiqueta: 'Sin asignar', valor: resumen.sinAsignar, clase: resumen.sinAsignar ? 'text-red-600' : 'text-gray-300' },
+            { etiqueta: 'En la calle', valor: resumen.enCalle, clase: resumen.enCalle ? 'text-blue-600' : 'text-gray-300' },
+            { etiqueta: 'Camiones activos', valor: camionesActivos.length, clase: 'text-gray-800' },
+          ].map((m) => (
+            <div key={m.etiqueta} className="bg-white rounded-xl border border-gray-200 px-4 py-3 shadow-sm">
+              <div className={`text-2xl font-extrabold leading-none ${m.clase}`}>{m.valor}</div>
+              <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide mt-1.5">{m.etiqueta}</div>
+            </div>
+          ))}
+        </section>
+
+        {/* ═══ MAPA (izquierda, flotante) + OPERACIÓN (derecha) ═══ */}
+        <div className={mapaAncho ? 'space-y-5' : 'grid grid-cols-1 xl:grid-cols-2 gap-5 items-start'}>
+
+          {/* El mapa NO va anclado: se queda pegado arriba mientras recorres la
+              columna de la derecha, y se despega solo cuando la página sigue
+              hacia abajo. Así no lo pierdes de vista sin que se coma la pantalla. */}
+          <div className={mapaAncho ? '' : 'xl:sticky xl:top-[76px]'}>
+            <MapaRutas
+              camionesActivos={camionesActivos}
+              paradasDe={ordersOf}
+              rutasOsrm={osrmRoutes}
+              camionesGPS={camionesGPS}
+              rutasGeneradas={routesGenerated}
+              coordsEnfocadas={focusedCoords}
+              onEnfocarCedis={() => focus(CEDIS)}
+              mensajeEstado={syncStatus}
+              alto={mapaAncho ? 'h-[78vh]' : 'h-[72vh]'}
+              acciones={
+                <button
+                  onClick={() => setMapaAncho((v) => !v)}
+                  title={mapaAncho ? 'Volver a dos columnas' : 'Ver el mapa a todo lo ancho'}
+                  className="bg-white/95 border border-gray-200 px-2.5 py-1.5 rounded-lg shadow-sm flex items-center gap-1.5 text-[11px] font-bold text-gray-700 hover:bg-gray-50 transition"
+                >
+                  {mapaAncho ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+                  {mapaAncho ? 'Reducir' : 'Ampliar'}
+                </button>
+              }
+            />
           </div>
 
-          {/* ── CAMIONES ── */}
-          {sidebarTab === 'camiones' && (
-            <div className="flex-1 flex flex-col min-h-0">
-              <div className="p-4 border-b border-gray-100 space-y-3 flex-shrink-0">
+          {/* ── Columna de operación ── */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="flex items-stretch border-b border-gray-200">
+              {[
+                { id: 'camiones', icono: Truck, texto: 'Camiones', badge: camionesActivos.length, color: 'orange' },
+                { id: 'alertas', icono: AlertCircle, texto: 'Sin asignar', badge: alertas.length || null, color: 'red' },
+              ].map(({ id, icono: Icono, texto, badge, color }) => (
+                <button
+                  key={id}
+                  onClick={() => setSidebarTab(id)}
+                  className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-3 text-xs font-bold transition border-b-2 whitespace-nowrap ${
+                    sidebarTab === id
+                      ? color === 'red' ? 'text-red-600 border-red-500 bg-red-50/50' : 'text-orange-600 border-orange-500 bg-orange-50/50'
+                      : 'text-gray-400 border-transparent hover:text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  <Icono className="h-4 w-4 flex-shrink-0" /> {texto}
+                  {badge != null && (
+                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                      color === 'red' ? 'bg-red-100 text-red-700' : 'bg-white text-gray-500 border border-gray-200'
+                    }`}>{badge}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+
+            {/* ── CAMIONES ── */}
+            {sidebarTab === 'camiones' && (
+              <div>
+                <div className="p-4 border-b border-gray-100 space-y-3">
                 <div className="flex items-center justify-end gap-1.5">
                   <button
                     onClick={() => setMostrarCargarPrueba((v) => !v)}
@@ -497,119 +532,93 @@ export default function DispatcherPanel() {
                 </button>
               </div>
 
-              <div className="px-4 py-2 border-b border-gray-100 flex-shrink-0">
-                <div className="relative">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
-                  <input
-                    value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium focus:outline-none focus:ring-2 focus:ring-orange-200"
-                    placeholder="Buscar placa o chofer…"
-                  />
+                <div className="px-4 py-2 border-b border-gray-100">
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+                    <input
+                      value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium focus:outline-none focus:ring-2 focus:ring-orange-200"
+                      placeholder="Buscar placa o chofer…"
+                    />
+                  </div>
+                </div>
+
+                <div className="p-3 space-y-2.5">
+                  {!flotaCargada && (
+                    <p className="text-[11px] text-gray-400 italic flex items-center gap-1.5 py-2">
+                      <Loader className="w-3.5 h-3.5 animate-spin" /> Cargando la flota…
+                    </p>
+                  )}
+                  {flotaCargada && !visibleTrucks.length && (
+                    <p className="text-[11px] text-gray-400 italic py-2">
+                      {trucks.length ? 'Ningún camión coincide con la búsqueda.' : 'No se pudo cargar la flota del servidor.'}
+                    </p>
+                  )}
+                  {visibleTrucks.map((truck) => (
+                    <TarjetaCamion
+                      key={truck.id}
+                      camion={truck}
+                      ruta={rutaDe(truck.id)}
+                      paradas={ordersOf(truck.id)}
+                      abierto={expandedTrucks.has(truck.id)}
+                      cambiandoEstado={cambiandoEstado === truck.id}
+                      onAbrir={() => alternarCamion(truck.id)}
+                      onToggleActivo={() => toggleTruck(truck.id)}
+                      onCambiarChofer={(d) => changeDriver(truck.id, d)}
+                      onCambiarEstado={(estado) => changeTruckState(truck.id, estado)}
+                      onEnfocar={focus}
+                    />
+                  ))}
                 </div>
               </div>
+            )}
 
-              <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
-                {!flotaCargada && (
-                  <p className="text-[11px] text-gray-400 italic flex items-center gap-1.5 py-2">
-                    <Loader className="w-3.5 h-3.5 animate-spin" /> Cargando la flota…
-                  </p>
-                )}
-                {flotaCargada && !visibleTrucks.length && (
-                  <p className="text-[11px] text-gray-400 italic py-2">
-                    {trucks.length ? 'Ningún camión coincide con la búsqueda.' : 'No se pudo cargar la flota del servidor.'}
-                  </p>
-                )}
-                {visibleTrucks.map((truck) => (
-                  <TarjetaCamion
-                    key={truck.id}
-                    camion={truck}
-                    ruta={rutaDe(truck.id)}
-                    paradas={ordersOf(truck.id)}
-                    abierto={expandedTrucks.has(truck.id)}
-                    cambiandoEstado={cambiandoEstado === truck.id}
-                    onAbrir={() => alternarCamion(truck.id)}
-                    onToggleActivo={() => toggleTruck(truck.id)}
-                    onCambiarChofer={(d) => changeDriver(truck.id, d)}
-                    onCambiarEstado={(estado) => changeTruckState(truck.id, estado)}
-                    onEnfocar={focus}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ── SIN ASIGNAR ── */}
-          {sidebarTab === 'alertas' && (
-            <PanelSinAsignar
-              alertas={alertas}
-              alertaAbierta={alertaAbierta}
-              sugerencias={sugerencias}
-              cargandoSugerencias={cargandoSugerencias}
-              asignando={asignando}
-              onAbrirAlerta={toggleAlerta}
-              onAsignar={handleAsignar}
-              onIrAAgregarCamion={() => { setSidebarTab('camiones'); setMostrarAgregarCamion(true); }}
-              etiquetaCamion={truckLabel}
-            />
-          )}
-
-          {/* ── PEDIDOS ── */}
-          {sidebarTab === 'pedidos' && (
-            <div className="flex-1 flex flex-col min-h-0 pt-3">
-              <TablaPedidos
-                pedidos={visibleOrders}
-                filtro={orderFilter} onFiltro={setOrderFilter}
-                busqueda={orderSearch} onBusqueda={setOrderSearch}
-                colorDe={colorOf} onEnfocar={focus}
+            {/* ── SIN ASIGNAR ── */}
+            {sidebarTab === 'alertas' && (
+              <PanelSinAsignar
+                alertas={alertas}
+                alertaAbierta={alertaAbierta}
+                sugerencias={sugerencias}
+                cargandoSugerencias={cargandoSugerencias}
+                asignando={asignando}
+                onAbrirAlerta={toggleAlerta}
+                onAsignar={handleAsignar}
+                onIrAAgregarCamion={() => { setSidebarTab('camiones'); setMostrarAgregarCamion(true); }}
+                etiquetaCamion={truckLabel}
               />
-            </div>
-          )}
-
-          {/* ── MANIFIESTO ── */}
-          {sidebarTab === 'manifiesto' && (
-            <Manifiesto camionesActivos={camionesActivos} paradasDe={ordersOf} />
-          )}
-        </aside>
-
-        {/* ── MAPA ── */}
-        <div className="flex-1 flex flex-col min-w-0 bg-gray-100 relative">
-          <button
-            onClick={() => setIsPanelOpen(!isPanelOpen)}
-            className="absolute top-1/2 -translate-y-1/2 left-0 z-[2000] bg-white border border-l-0 border-gray-200 text-gray-500 hover:text-gray-800 rounded-r-md p-1 shadow-md hover:shadow-lg transition-all flex items-center justify-center cursor-pointer w-4 h-14"
-            title={isPanelOpen ? 'Ocultar panel' : 'Mostrar panel'}
-          >
-            {isPanelOpen ? <ChevronLeft className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-          </button>
-
-          {/* Resumen del día: evita tener que contar a ojo en la tabla. */}
-          <div className="flex items-stretch bg-white border-b border-gray-200 flex-shrink-0 divide-x divide-gray-100">
-            {[
-              { etiqueta: 'Pedidos del día', valor: resumen.total, clase: 'text-gray-800' },
-              { etiqueta: 'En un camión', valor: resumen.asignados, clase: 'text-emerald-600' },
-              { etiqueta: 'Sin asignar', valor: resumen.sinAsignar, clase: resumen.sinAsignar ? 'text-red-600' : 'text-gray-300' },
-              { etiqueta: 'En la calle', valor: resumen.enCalle, clase: resumen.enCalle ? 'text-blue-600' : 'text-gray-300' },
-              { etiqueta: 'Camiones activos', valor: camionesActivos.length, clase: 'text-gray-800' },
-            ].map((m) => (
-              <div key={m.etiqueta} className="px-5 py-2">
-                <div className={`text-lg font-extrabold leading-tight ${m.clase}`}>{m.valor}</div>
-                <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">{m.etiqueta}</div>
-              </div>
-            ))}
+            )}
           </div>
-
-          <MapaRutas
-            camionesActivos={camionesActivos}
-            paradasDe={ordersOf}
-            rutasOsrm={osrmRoutes}
-            camionesGPS={camionesGPS}
-            rutasGeneradas={routesGenerated}
-            coordsEnfocadas={focusedCoords}
-            panelAbierto={isPanelOpen}
-            onEnfocarCedis={() => focus(CEDIS)}
-            mensajeEstado={syncStatus}
-          />
         </div>
-      </div>
+
+        {/* ═══ MÁS ABAJO: PEDIDOS DEL DÍA ═══
+            Ya no son pestañas. Se llega recorriendo la página, que es lo que
+            uno hace sin pensarlo, en vez de tener que acordarse de que existe
+            una pestaña y hacer clic. */}
+        <section className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100">
+            <Package className="h-4 w-4 text-orange-500" />
+            <h2 className="text-sm font-bold text-gray-800">Pedidos del día</h2>
+            <span className="text-[10px] font-bold text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+              {visibleOrders.length}
+            </span>
+          </div>
+          <TablaPedidos
+            pedidos={visibleOrders}
+            filtro={orderFilter} onFiltro={setOrderFilter}
+            busqueda={orderSearch} onBusqueda={setOrderSearch}
+            colorDe={colorOf} onEnfocar={focus}
+          />
+        </section>
+
+        {/* ═══ MÁS ABAJO: MANIFIESTO DE CARGA ═══ */}
+        <section className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100">
+            <FileText className="h-4 w-4 text-orange-500" />
+            <h2 className="text-sm font-bold text-gray-800">Manifiesto de carga</h2>
+          </div>
+          <Manifiesto camionesActivos={camionesActivos} paradasDe={ordersOf} />
+        </section>
+      </main>
 
       <ModalForzar
         confirmacion={confirmacion}

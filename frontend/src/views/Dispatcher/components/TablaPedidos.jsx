@@ -25,8 +25,11 @@ export default function TablaPedidos({
   onEnfocar,
 }) {
   return (
-    <div className="flex-1 flex flex-col min-h-0 px-3 pb-3">
-      <div className="flex items-center gap-3 border-b border-gray-200 mb-2 flex-shrink-0">
+    // Sin scroll propio: la tabla fluye y quien se recorre es la página. Un
+    // scroll dentro de otro scroll obliga a atinarle al área correcta con el
+    // ratón para poder bajar.
+    <div className="px-4 pb-4">
+      <div className="flex items-center gap-3 border-b border-gray-200 mb-2">
         <div className="flex gap-3 text-[11px] font-bold flex-wrap">
           {FILTROS.map((f) => (
             <button
@@ -51,9 +54,10 @@ export default function TablaPedidos({
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto rounded-lg border border-gray-200">
+      {/* overflow-x para que una tabla ancha no empuje la página de lado. */}
+      <div className="overflow-x-auto rounded-lg border border-gray-200">
         <table className="w-full text-left text-xs">
-          <thead className="bg-gray-50 border-b border-gray-200 text-[10px] font-bold text-gray-400 uppercase sticky top-0">
+          <thead className="bg-gray-50 border-b border-gray-200 text-[10px] font-bold text-gray-400 uppercase">
             <tr>
               <th className="px-3 py-2">ID</th>
               <th className="px-3 py-2">Cliente</th>

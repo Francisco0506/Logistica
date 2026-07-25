@@ -1,5 +1,5 @@
 import React from 'react';
-import { User, LogOut, Menu, X } from 'lucide-react';
+import { User, LogOut } from 'lucide-react';
 import LabenLogo from '../../../components/LabenLogo';
 
 // Cómo se ve el estado de la conexión con SAP. El texto largo va en el `title`
@@ -13,8 +13,6 @@ const ESTILOS_SYNC = {
 };
 
 export default function HeaderDespacho({
-  panelAbierto,
-  onTogglePanel,
   fecha,
   onFecha,
   estadoSync,
@@ -23,16 +21,11 @@ export default function HeaderDespacho({
 }) {
   const estilo = ESTILOS_SYNC[tipoSync] || ESTILOS_SYNC.cargando;
 
+  // Pegado arriba: la página se recorre hacia abajo y la fecha y el estado de
+  // SAP tienen que seguir a la vista sin importar dónde vayas.
   return (
-    <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0 z-20 relative">
+    <header className="sticky top-0 z-[1100] bg-white/95 backdrop-blur border-b border-gray-200 px-6 py-3 flex items-center justify-between gap-4">
       <div className="flex items-center gap-3">
-        <button
-          onClick={onTogglePanel}
-          title={panelAbierto ? 'Ocultar el panel lateral' : 'Mostrar el panel lateral'}
-          className="p-1.5 -ml-1.5 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition"
-        >
-          {panelAbierto ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-        </button>
         <LabenLogo variant="horizontal" />
         <span className="text-[9px] text-gray-300 font-bold tracking-[.2em] uppercase self-end pb-0.5">· Despacho</span>
       </div>

@@ -49,15 +49,18 @@ function CentrarMapa({ coords }) {
   return null;
 }
 
-// Leaflet no se entera cuando el contenedor cambia de tamaño por CSS (al
-// colapsar el panel izquierdo), así que hay que decirle explícitamente que
-// recalcule su tamaño una vez termine la transición (duration-300 → 320 ms).
-function RecalcularTamano({ panelAbierto }) {
+// Leaflet no se entera cuando su contenedor cambia de tamaño por CSS, así que
+// hay que decirle explícitamente que recalcule. Se observa el contenedor real
+// en vez de reaccionar a una prop: así funciona igual si cambia por el botón de
+// expandir, por redimensionar la ventana o por el acomodo de la página.
+function RecalcularTamano() {
   const map = useMap();
   useEffect(() => {
-    const t = setTimeout(() => map.invalidateSize(), 320);
-    return () => clearTimeout(t);
-  }, [panelAbierto, map]);
+    const contenedor = map.getContainer();
+    const observer = new ResizeObserver(() => map.invalidateSize());
+    observer.observe(contenedor);
+    return () => observer.disconnect();
+  }, [map]);
   return null;
 }
 
@@ -76,22 +79,26 @@ export default function MapaRutas({
   camionesGPS,
   rutasGeneradas,
   coordsEnfocadas,
-  panelAbierto,
   onEnfocarCedis,
   mensajeEstado,
+  alto = 'h-[70vh]',
+  acciones = null,
 }) {
   const hayRutasEnRecta = rutasGeneradas && camionesActivos.some(
     (c) => paradasDe(c.id).length > 0 && !rutasOsrm[c.id]
   );
 
   return (
-    <div className="flex-1 relative">
-      <button
-        onClick={onEnfocarCedis}
-        className="absolute top-3 right-3 z-[400] bg-white/95 border border-gray-200 px-3 py-1.5 rounded-lg shadow-sm flex items-center gap-1.5 text-[11px] font-bold text-gray-700 hover:bg-gray-50 transition"
-      >
-        <Compass className="h-3.5 w-3.5 text-orange-600" /> CEDIS
-      </button>
+    <div className={`relative rounded-xl border border-gray-200 overflow-hidden bg-white shadow-sm ${alto}`}>
+      <div className="absolute top-3 right-3 z-[400] flex items-center gap-1.5">
+        {acciones}
+        <button
+          onClick={onEnfocarCedis}
+          className="bg-white/95 border border-gray-200 px-3 py-1.5 rounded-lg shadow-sm flex items-center gap-1.5 text-[11px] font-bold text-gray-700 hover:bg-gray-50 transition"
+        >
+          <Compass className="h-3.5 w-3.5 text-orange-600" /> CEDIS
+        </button>
+      </div>
 
       {/* Aviso honesto: si la ruta se dibujó en recta, el mapa NO está
           mostrando el camino real y no se debe medir nada sobre él. */}
@@ -110,7 +117,7 @@ export default function MapaRutas({
 
       <MapContainer center={CEDIS} zoom={13} className="w-full h-full" zoomControl={false}>
         <CentrarMapa coords={coordsEnfocadas} />
-        <RecalcularTamano panelAbierto={panelAbierto} />
+        <RecalcularTamano />
         <TileLayer
           attribution='&copy; <a href="https://carto.com">CARTO</a>'
           url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
