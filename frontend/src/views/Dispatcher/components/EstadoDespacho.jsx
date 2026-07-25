@@ -1,5 +1,5 @@
 import React from 'react';
-import { ClipboardList, PackageOpen, PackageCheck, Truck, Flag } from 'lucide-react';
+import { PencilLine, PackageOpen, PackageCheck, Truck, Flag } from 'lucide-react';
 
 /**
  * El avance de despacho de una ruta.
@@ -12,28 +12,33 @@ import { ClipboardList, PackageOpen, PackageCheck, Truck, Flag } from 'lucide-re
  * Finalizada), en qué paso estás, y UNA sola acción: la que sigue.
  */
 
-// Cada paso trae el icono de lo que de verdad está pasando en el almacén o en
-// la calle: una carpeta de plan, una caja abriéndose, una caja lista, el camión
-// andando, la bandera de meta.
+// El icono dice lo que ese paso significa para quien opera:
+//   Borrador  -> el lápiz: esta ruta TODAVÍA SE PUEDE CAMBIAR. Es lo único que
+//                importa saber de un borrador; una carpeta o un icono de plan
+//                no decían nada útil.
+//   Cargando  -> caja abriéndose, el almacén está subiendo mercancía.
+//   Listo     -> caja cerrada y palomeada, ya cargado esperando salir.
+//   En ruta   -> el camión, ya está en la calle y no se le puede tocar nada.
+//   Terminó   -> bandera de meta.
 const PASOS = [
-  { estado: 'Borrador',   etiqueta: 'Borrador',  icono: ClipboardList, acabado: 'Planeada' },
-  { estado: 'Cargando',   etiqueta: 'Cargando',  icono: PackageOpen,   acabado: 'Subiendo mercancía' },
-  { estado: 'Listo',      etiqueta: 'Listo',     icono: PackageCheck,  acabado: 'Cargado y esperando' },
-  { estado: 'En_Ruta',    etiqueta: 'En ruta',   icono: Truck,         acabado: 'En la calle' },
-  { estado: 'Finalizada', etiqueta: 'Terminó',   icono: Flag,          acabado: 'Terminada' },
+  { estado: 'Borrador',   etiqueta: 'Borrador',  icono: PencilLine,   acabado: 'Todavía se puede cambiar' },
+  { estado: 'Cargando',   etiqueta: 'Cargando',  icono: PackageOpen,  acabado: 'Subiendo mercancía' },
+  { estado: 'Listo',      etiqueta: 'Listo',     icono: PackageCheck, acabado: 'Cargado y esperando' },
+  { estado: 'En_Ruta',    etiqueta: 'En ruta',   icono: Truck,        acabado: 'En la calle' },
+  { estado: 'Finalizada', etiqueta: 'Terminó',   icono: Flag,         acabado: 'Terminada' },
 ];
 
 // Qué se puede hacer desde cada estado. Coincide con TRANSICIONES_VALIDAS del
 // backend (api.py): no se pueden saltar pasos.
 //
-// Cada acción lleva el color del paso al que lleva, no un negro parejo: el
-// botón deja de verse como un bloque ajeno y se entiende de un vistazo si lo
-// que sigue es cargar, salir o cerrar.
+// TODAS las acciones van en el naranja de Laben. Es el color de la marca y el
+// de la acción principal en todo el sistema: cambiarlo por paso hacía que el
+// botón se sintiera de otra aplicación.
 const SIGUIENTE = {
-  Borrador:  { estado: 'Cargando',   texto: 'Empezar a cargar',  ayuda: 'El almacén empieza a subir la mercancía',            color: 'bg-orange-500 hover:bg-orange-600' },
-  Cargando:  { estado: 'Listo',      texto: 'Marcar como listo', ayuda: 'Ya está cargado y esperando salir',                  color: 'bg-emerald-600 hover:bg-emerald-700' },
-  Listo:     { estado: 'En_Ruta',    texto: 'Dar salida',        ayuda: 'Las ETAs se recalculan desde la hora real de salida', color: 'bg-blue-600 hover:bg-blue-700' },
-  En_Ruta:   { estado: 'Finalizada', texto: 'Cerrar la ruta',    ayuda: 'El camión regresó y terminó sus entregas',           color: 'bg-slate-600 hover:bg-slate-700' },
+  Borrador:  { estado: 'Cargando',   texto: 'Empezar a cargar',  ayuda: 'El almacén empieza a subir la mercancía' },
+  Cargando:  { estado: 'Listo',      texto: 'Marcar como listo', ayuda: 'Ya está cargado y esperando salir' },
+  Listo:     { estado: 'En_Ruta',    texto: 'Dar salida',        ayuda: 'Las ETAs se recalculan desde la hora real de salida' },
+  En_Ruta:   { estado: 'Finalizada', texto: 'Cerrar la ruta',    ayuda: 'El camión regresó y terminó sus entregas' },
   Finalizada: null,
 };
 
@@ -86,7 +91,7 @@ export default function EstadoDespacho({ ruta, onCambiarEstado, cambiando }) {
             <button
               onClick={() => onCambiarEstado(siguiente.estado)}
               disabled={cambiando}
-              className={`w-full ${siguiente.color} disabled:opacity-40 text-white font-bold text-xs py-2.5 rounded-lg shadow-sm transition`}
+              className="w-full bg-orange-500 hover:bg-orange-600 disabled:opacity-40 disabled:hover:bg-orange-500 text-white font-bold text-xs py-2.5 rounded-lg shadow-sm transition"
             >
               {cambiando ? 'Guardando…' : siguiente.texto}
             </button>

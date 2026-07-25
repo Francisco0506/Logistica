@@ -1,5 +1,26 @@
 @import "tailwindcss";
 
+/* Al imprimir la guía de carga sale SOLO la hoja, no el panel completo.
+   Se oculta todo y se vuelve a mostrar únicamente el contenedor marcado, que
+   además se saca de su posición flotante para que ocupe la página entera. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .hoja-imprimible,
+  .hoja-imprimible * {
+    visibility: visible;
+  }
+  .hoja-imprimible {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+  }
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',

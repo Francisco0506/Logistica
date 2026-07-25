@@ -13,6 +13,7 @@ import TablaPedidos from './components/TablaPedidos';
 import Manifiesto from './components/Manifiesto';
 import MapaRutas from './components/MapaRutas';
 import ModalForzar from './components/ModalForzar';
+import PreviewManifiesto from './components/PreviewManifiesto';
 
 // Cada cuánto se refresca la vista para traer lo más nuevo (pedidos nuevos de
 // SAP, cambios de estado de otros usuarios) sin recargar la página a mano.
@@ -66,6 +67,7 @@ export default function DispatcherPanel() {
   // ── Interfaz ──
   // El mapa se puede ensanchar a toda la página cuando hace falta verlo grande.
   const [mapaAncho, setMapaAncho]       = useState(false);
+  const [previewCamion, setPreviewCamion] = useState(null); // camión cuya guía se está viendo
   // Solo dos pestañas en la columna de operación: camiones y lo que no cupo.
   // Los pedidos y el manifiesto ya no son pestañas — viven más abajo en la
   // misma página, y se llega a ellos recorriendo, no clicando.
@@ -550,31 +552,33 @@ export default function DispatcherPanel() {
                   </div>
                 )}
 
-                {/* Turno como botones y no como lista desplegable: son cinco
-                    opciones fijas, se ven todas de un golpe y se cambia con un
-                    clic en vez de dos (abrir la lista y escoger). */}
-                <div>
-                  <span className="text-[10px] font-bold text-gray-400 uppercase flex items-center gap-1 mb-1.5">
-                    <Clock className="h-3 w-3" /> Turno del chofer
+                {/* Turno: control compacto pegado a su etiqueta, no una barra
+                    estirada a todo lo ancho. Son cinco opciones fijas, así que
+                    se ven todas y se cambia con un clic. */}
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[11px] font-semibold text-gray-500 flex items-center gap-1.5 flex-shrink-0">
+                    <Clock className="h-3.5 w-3.5 text-gray-400" />
+                    Turno
+                    {horasTurno > 6 && (
+                      <span className="text-[10px] font-bold text-amber-600">+{horasTurno - 6} h</span>
+                    )}
                   </span>
-                  <div className="flex items-stretch rounded-lg border border-gray-200 overflow-hidden divide-x divide-gray-200">
+                  <div className="inline-flex items-center rounded-lg bg-gray-100 p-0.5 gap-0.5">
                     {[6, 6.5, 7, 7.5, 8].map((h) => (
                       <button
                         key={h}
                         onClick={() => setHorasTurno(h)}
-                        className={`flex-1 py-1.5 text-[11px] font-bold transition ${
+                        title={h === 6 ? 'Turno normal' : `${h - 6} h más que el turno normal`}
+                        className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition ${
                           horasTurno === h
-                            ? h > 6 ? 'bg-amber-500 text-white' : 'bg-gray-800 text-white'
-                            : 'bg-white text-gray-500 hover:bg-gray-50'
+                            ? 'bg-white text-gray-800 shadow-sm'
+                            : 'text-gray-400 hover:text-gray-600'
                         }`}
                       >
-                        {h} h
+                        {h}
                       </button>
                     ))}
                   </div>
-                  <p className="text-[9px] text-gray-400 mt-1">
-                    {horasTurno === 6 ? 'Turno normal.' : `Ampliado ${horasTurno - 6} h sobre el normal.`}
-                  </p>
                 </div>
                 {horasTurno > 6 && (
                   <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
@@ -682,9 +686,20 @@ export default function DispatcherPanel() {
             <FileText className="h-4 w-4 text-orange-500" />
             <h2 className="text-sm font-bold text-gray-800">Manifiesto de carga</h2>
           </div>
-          <Manifiesto camionesActivos={camionesActivos} paradasDe={ordersOf} />
+          <Manifiesto
+            camionesActivos={camionesActivos}
+            paradasDe={ordersOf}
+            onVerPreview={setPreviewCamion}
+          />
         </section>
       </main>
+
+      <PreviewManifiesto
+        camion={previewCamion}
+        paradas={previewCamion ? ordersOf(previewCamion.id) : []}
+        fecha={selectedDate}
+        onCerrar={() => setPreviewCamion(null)}
+      />
 
       <ModalForzar
         confirmacion={confirmacion}

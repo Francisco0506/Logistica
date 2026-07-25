@@ -1,5 +1,5 @@
 import React from 'react';
-import { Download, AlertCircle } from 'lucide-react';
+import { Eye, AlertCircle } from 'lucide-react';
 
 /**
  * Manifiesto de carga por camión, en orden LIFO: lo primero que se sube al
@@ -11,7 +11,7 @@ import { Download, AlertCircle } from 'lucide-react';
  * 150 kg que usa el optimizador — un peso inventado que se ve como medido es
  * justo lo que haría sobrecargar un camión con confianza.
  */
-export default function Manifiesto({ camionesActivos, paradasDe }) {
+export default function Manifiesto({ camionesActivos, paradasDe, onVerPreview }) {
   return (
     // Sin scroll propio: fluye con la página.
     <div className="px-4 pb-4">
@@ -113,11 +113,11 @@ export default function Manifiesto({ camionesActivos, paradasDe }) {
 
               <div className="px-3 pb-3 pt-1">
                 <button
-                  disabled
-                  title="Todavía no genera el archivo — ver docs/pendientes.md"
-                  className="w-full flex items-center justify-center gap-1.5 bg-gray-50 text-gray-300 font-bold py-2 rounded-lg text-[11px] border border-gray-200 cursor-not-allowed"
+                  onClick={() => onVerPreview(camion)}
+                  disabled={!pedidos.length}
+                  className="w-full flex items-center justify-center gap-1.5 bg-orange-500 hover:bg-orange-600 disabled:bg-gray-100 disabled:text-gray-300 text-white font-bold py-2 rounded-lg text-[11px] transition"
                 >
-                  <Download className="h-3 w-3" /> Descargar guía (pendiente)
+                  <Eye className="h-3.5 w-3.5" /> Ver guía de carga
                 </button>
               </div>
             </div>
