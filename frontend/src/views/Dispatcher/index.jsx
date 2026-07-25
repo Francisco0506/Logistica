@@ -396,6 +396,49 @@ export default function DispatcherPanel() {
                 </button>
               }
             />
+
+            {/* Leyenda: de quién es cada color, cuántas paradas trae y cómo va.
+                Ocupa el hueco que quedaba debajo del mapa (la columna de la
+                derecha siempre es más alta) y de paso resuelve la pregunta que
+                uno se hace viendo el mapa: "¿de quién es esta línea?".
+                Al hacer clic se aísla esa ruta, igual que abriendo la tarjeta. */}
+            {routesGenerated && !!camionesActivos.length && (
+              <div className="mt-4 bg-white rounded-xl border border-gray-200 shadow-sm p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Rutas en el mapa</span>
+                  {!!expandedTrucks.size && (
+                    <button
+                      onClick={() => setExpandedTrucks(new Set())}
+                      className="text-[10px] font-bold text-orange-600 hover:text-orange-700"
+                    >
+                      Ver todas
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {camionesActivos.map((c) => {
+                    const paradas = ordersOf(c.id);
+                    const activa = !expandedTrucks.size || expandedTrucks.has(c.id);
+                    return (
+                      <button
+                        key={c.id}
+                        onClick={() => alternarCamion(c.id)}
+                        title={`${paradas.length} paradas · ${rutaDe(c.id)?.estado || 'sin ruta'}`}
+                        className={`flex items-center gap-1.5 rounded-lg border px-2 py-1 transition ${
+                          activa
+                            ? 'border-gray-200 bg-white hover:bg-gray-50'
+                            : 'border-gray-100 bg-gray-50 opacity-45 hover:opacity-75'
+                        }`}
+                      >
+                        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: c.color }} />
+                        <span className="text-[11px] font-bold text-gray-700">{c.id}</span>
+                        <span className="text-[10px] text-gray-400">{paradas.length}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* ── Columna de operación ── */}
@@ -507,20 +550,31 @@ export default function DispatcherPanel() {
                   </div>
                 )}
 
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[10px] font-bold text-gray-400 uppercase flex items-center gap-1">
-                    <Clock className="h-3 w-3" /> Turno chofer
+                {/* Turno como botones y no como lista desplegable: son cinco
+                    opciones fijas, se ven todas de un golpe y se cambia con un
+                    clic en vez de dos (abrir la lista y escoger). */}
+                <div>
+                  <span className="text-[10px] font-bold text-gray-400 uppercase flex items-center gap-1 mb-1.5">
+                    <Clock className="h-3 w-3" /> Turno del chofer
                   </span>
-                  <select
-                    value={horasTurno} onChange={(e) => setHorasTurno(Number(e.target.value))}
-                    className={`bg-white border rounded-md px-2 py-1 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-orange-200 ${
-                      horasTurno > 6 ? 'border-amber-400 text-amber-700' : 'border-gray-200 text-gray-700'
-                    }`}
-                  >
+                  <div className="flex items-stretch rounded-lg border border-gray-200 overflow-hidden divide-x divide-gray-200">
                     {[6, 6.5, 7, 7.5, 8].map((h) => (
-                      <option key={h} value={h}>{h} horas{h === 6 ? ' (normal)' : ''}</option>
+                      <button
+                        key={h}
+                        onClick={() => setHorasTurno(h)}
+                        className={`flex-1 py-1.5 text-[11px] font-bold transition ${
+                          horasTurno === h
+                            ? h > 6 ? 'bg-amber-500 text-white' : 'bg-gray-800 text-white'
+                            : 'bg-white text-gray-500 hover:bg-gray-50'
+                        }`}
+                      >
+                        {h} h
+                      </button>
                     ))}
-                  </select>
+                  </div>
+                  <p className="text-[9px] text-gray-400 mt-1">
+                    {horasTurno === 6 ? 'Turno normal.' : `Ampliado ${horasTurno - 6} h sobre el normal.`}
+                  </p>
                 </div>
                 {horasTurno > 6 && (
                   <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
