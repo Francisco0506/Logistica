@@ -77,6 +77,15 @@ las respuestas de arriba.
 - 🟡 **Narciso Cafetería recibe 07:00–09:00** y el primer camión sale ~09:06.
   Es imposible de atender con la operación actual: hay que negociar la ventana o
   aceptar que no entra.
+- 🔴 **Los días de entrega no se respetan.** `Destino` guarda `ent_lun`…`ent_sab`
+  y se llenan desde SAP y desde el Excel, pero **el optimizador nunca los lee**.
+  Hoy **68 de 195 destinos** tienen algún día restringido (casi todos "no reciben
+  sábado") y el sistema les planea entregas ese día igual.
+- 🔴 **Pizza DePrizza: la regla real no está en los datos.** Los **52 destinos**
+  con `card_code` que empieza en `C587` en la práctica **solo se surten martes y
+  jueves**, pero en el sistema aparecen recibiendo los seis días. De hecho
+  **ningún** destino de los 195 está marcado como "solo martes y jueves". Hay que
+  capturarlo en SAP; sin ese dato, arreglar el código de arriba no alcanza.
 - ⚪ **UDF de contacto, teléfono y referencias**: no existen en `CRD1`. El código
   ya los lee si algún día se configuran; hoy los 195 destinos los tienen vacíos.
 - ⚪ **Segunda ventana de recibo**: el código ya la usa (commit `397d30e`), pero
