@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Truck, RefreshCw, Search, AlertCircle, Package, FileText, Clock, Loader, FlaskConical, Maximize2, Minimize2 } from 'lucide-react';
+import { Truck, RefreshCw, Search, AlertCircle, Package, FileText, Clock, Loader, FlaskConical, Maximize2, Minimize2, Plus } from 'lucide-react';
 import { CEDIS, PALETA_COLORES_CAMION } from '../../config/fleet';
 import {
   syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado,
@@ -382,6 +382,9 @@ export default function DispatcherPanel() {
               onEnfocarCedis={() => focus(CEDIS)}
               mensajeEstado={syncStatus}
               alto={mapaAncho ? 'h-[78vh]' : 'h-[72vh]'}
+              placasSeleccionadas={[...expandedTrucks]}
+              onLimpiarSeleccion={() => setExpandedTrucks(new Set())}
+              estadoRutaDe={(placa) => rutaDe(placa)?.estado}
               acciones={
                 <button
                   onClick={() => setMapaAncho((v) => !v)}
@@ -426,18 +429,22 @@ export default function DispatcherPanel() {
               <div>
                 <div className="p-4 border-b border-gray-100 space-y-3">
                 <div className="flex items-center justify-end gap-1.5">
-                  <button
-                    onClick={() => setMostrarCargarPrueba((v) => !v)}
-                    title="Cargar pedidos de prueba (sin depender de SAP)"
-                    className="flex items-center gap-1 text-[10px] font-bold text-purple-600 bg-purple-50 border border-purple-200 hover:bg-purple-100 transition rounded-md px-2 py-1"
-                  >
-                    <FlaskConical className="h-3 w-3" /> Prueba
-                  </button>
+                  {/* Acciones secundarias: mismo peso visual entre ellas y
+                      claramente por debajo de Optimizar, que es LA acción de
+                      esta pantalla. Antes cada botón traía su propio color de
+                      fondo y competían entre sí y con el botón principal. */}
                   <button
                     onClick={() => setMostrarAgregarCamion((v) => !v)}
-                    className="flex items-center gap-1 text-[10px] font-bold text-orange-600 bg-orange-50 border border-orange-200 hover:bg-orange-100 transition rounded-md px-2 py-1"
+                    className="flex items-center gap-1.5 text-[11px] font-semibold text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition rounded-lg px-3 py-1.5"
                   >
-                    + Agregar camión
+                    <Plus className="h-3.5 w-3.5" /> Agregar camión
+                  </button>
+                  <button
+                    onClick={() => setMostrarCargarPrueba((v) => !v)}
+                    title="Cargar pedidos de prueba, sin depender de SAP"
+                    className="flex items-center gap-1.5 text-[11px] font-semibold text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition rounded-lg px-3 py-1.5"
+                  >
+                    <FlaskConical className="h-3.5 w-3.5" /> Datos de prueba
                   </button>
                 </div>
 
@@ -525,10 +532,15 @@ export default function DispatcherPanel() {
                   onClick={optimize}
                   disabled={isOptimizing || !flotaCargada}
                   title={!flotaCargada ? 'Esperando la flota del servidor…' : undefined}
-                  className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-bold py-2.5 rounded-lg shadow transition-all text-xs disabled:opacity-60"
+                  className="w-full flex items-center justify-center gap-2 bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 rounded-lg shadow-sm hover:shadow transition-all text-[13px] disabled:opacity-50 disabled:hover:bg-orange-500"
                 >
-                  <RefreshCw className={`h-3.5 w-3.5 ${isOptimizing || !flotaCargada ? 'animate-spin' : ''}`} />
-                  {!flotaCargada ? 'Cargando flota…' : isOptimizing ? 'Optimizando…' : `Optimizar Rutas (turno ${horasTurno} h)`}
+                  <RefreshCw className={`h-4 w-4 ${isOptimizing || !flotaCargada ? 'animate-spin' : ''}`} />
+                  {!flotaCargada ? 'Cargando flota…' : isOptimizing ? 'Optimizando…' : 'Optimizar rutas'}
+                  {flotaCargada && !isOptimizing && (
+                    <span className="text-[11px] font-semibold text-orange-100">
+                      · {camionesActivos.length} camiones · {horasTurno} h
+                    </span>
+                  )}
                 </button>
               </div>
 

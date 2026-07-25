@@ -24,9 +24,15 @@ export default function TarjetaCamion({
   const proxima = paradas.find((o) => o.estado !== 'Entregado');
 
   return (
+    // Abierto = es el que se está viendo en el mapa. El anillo lo conecta con
+    // el trazo de allá, para que no haya que adivinar de quién es la línea.
     <div className={`rounded-lg border overflow-hidden transition-all ${
-      camion.active ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'
-    }`}>
+      !camion.active ? 'border-gray-100 bg-gray-50 opacity-60'
+        : abierto ? 'border-transparent bg-white ring-2 shadow-sm'
+        : 'border-gray-200 bg-white'
+    }`}
+      style={abierto && camion.active ? { '--tw-ring-color': camion.color } : undefined}
+    >
       <div
         className="flex items-center gap-3 px-3 py-2.5 cursor-pointer select-none"
         onClick={() => camion.active && onAbrir()}
@@ -75,6 +81,14 @@ export default function TarjetaCamion({
           ? <ChevronUp className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
           : <ChevronDown className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />)}
       </div>
+
+      {abierto && camion.active && (
+        <div className="px-3 -mt-1 pb-1">
+          <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide text-white px-1.5 py-0.5 rounded" style={{ backgroundColor: camion.color }}>
+            <MapPin className="w-2.5 h-2.5" /> Viendo esta ruta en el mapa
+          </span>
+        </div>
+      )}
 
       {/* Avance SIN tener que abrir la tarjeta: cuántas entregó, en qué estado
           va la ruta y cuál es la próxima parada. Antes había que expandir cada

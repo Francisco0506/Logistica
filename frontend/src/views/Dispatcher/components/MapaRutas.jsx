@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { Compass } from 'lucide-react';
+import { Compass, X } from 'lucide-react';
 import { CEDIS } from '../../../config/fleet';
 
 // ── Iconos de Leaflet ──
@@ -29,10 +29,12 @@ const iconoGPS = (enMovimiento) =>
     iconAnchor: [13, 13],
   });
 
-const iconoParada = (color, numero) =>
+// Una parada ya entregada se apaga: se ve que ese pedido ya está hecho y el
+// color fuerte queda para lo que todavía falta.
+const iconoParada = (color, numero, entregada) =>
   L.divIcon({
     className: 'custom-div-icon',
-    html: `<div style="background:${color};width:24px;height:24px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:900;box-shadow:0 2px 6px rgba(0,0,0,0.35);">${numero}</div>`,
+    html: `<div style="background:${color};width:24px;height:24px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:900;box-shadow:0 2px 6px rgba(0,0,0,0.35);opacity:${entregada ? 0.35 : 1}">${numero}</div>`,
     iconSize: [24, 24],
     iconAnchor: [12, 12],
   });
@@ -49,17 +51,23 @@ function CentrarMapa({ coords }) {
   return null;
 }
 
-// Leaflet no se entera cuando su contenedor cambia de tamaño por CSS, así que
-// hay que decirle explícitamente que recalcule. Se observa el contenedor real
-// en vez de reaccionar a una prop: así funciona igual si cambia por el botón de
-// expandir, por redimensionar la ventana o por el acomodo de la página.
+// Leaflet mide su contenedor UNA vez, al crearse, y se queda con esa medida.
+// Si la página todavía estaba acomodándose en ese momento (que es lo que pasa
+// con el mapa dentro de una rejilla y en posición flotante), se queda chico y
+// deja una franja en blanco a la derecha y abajo, porque no pide las imágenes
+// del mapa que faltan para cubrir el hueco.
+//
+// Se corrige por partida triple: se recalcula en cuanto monta, otra vez en el
+// siguiente cuadro de animación (ya con la rejilla resuelta) y de ahí en
+// adelante cada vez que el contenedor cambie de tamaño, sin importar por qué.
 function RecalcularTamano() {
   const map = useMap();
   useEffect(() => {
-    const contenedor = map.getContainer();
+    map.invalidateSize();
+    const raf = requestAnimationFrame(() => map.invalidateSize());
     const observer = new ResizeObserver(() => map.invalidateSize());
-    observer.observe(contenedor);
-    return () => observer.disconnect();
+    observer.observe(map.getContainer());
+    return () => { cancelAnimationFrame(raf); observer.disconnect(); };
   }, [map]);
   return null;
 }
@@ -83,8 +91,20 @@ export default function MapaRutas({
   mensajeEstado,
   alto = 'h-[70vh]',
   acciones = null,
+  placasSeleccionadas = [],
+  onLimpiarSeleccion,
+  estadoRutaDe = () => null,
 }) {
-  const hayRutasEnRecta = rutasGeneradas && camionesActivos.some(
+  // Al abrir un camión en la lista, el mapa se queda solo con su ruta. Con cinco
+  // rutas encimadas no se alcanza a seguir ninguna: se cruzan por las mismas
+  // avenidas y los números de parada se amontonan. Si no hay ninguno abierto,
+  // se ven todas.
+  const hayFiltro = placasSeleccionadas.length > 0;
+  const camionesDibujados = hayFiltro
+    ? camionesActivos.filter((c) => placasSeleccionadas.includes(c.id))
+    : camionesActivos;
+
+  const hayRutasEnRecta = rutasGeneradas && camionesDibujados.some(
     (c) => paradasDe(c.id).length > 0 && !rutasOsrm[c.id]
   );
 
@@ -100,16 +120,34 @@ export default function MapaRutas({
         </button>
       </div>
 
-      {/* Aviso honesto: si la ruta se dibujó en recta, el mapa NO está
-          mostrando el camino real y no se debe medir nada sobre él. */}
-      {hayRutasEnRecta && (
-        <div className="absolute top-3 left-3 z-[400] bg-amber-50 border border-amber-300 px-3 py-2 rounded-lg shadow-sm max-w-[300px]">
-          <p className="text-[10px] font-bold text-amber-800">Rutas dibujadas en línea recta</p>
-          <p className="text-[10px] text-amber-700 leading-snug mt-0.5">
-            El servidor de rutas no respondió. Las líneas no son el camino real del camión.
-          </p>
-        </div>
-      )}
+      <div className="absolute top-3 left-3 z-[400] space-y-2 max-w-[320px]">
+        {/* Qué se está viendo, y cómo volver a verlas todas. */}
+        {hayFiltro && (
+          <div className="bg-white border border-gray-200 shadow-sm rounded-lg px-3 py-1.5 flex items-center gap-2">
+            <span className="text-[11px] font-bold text-gray-700">
+              Solo {placasSeleccionadas.join(', ')}
+            </span>
+            <button
+              onClick={onLimpiarSeleccion}
+              title="Ver todas las rutas"
+              className="text-gray-400 hover:text-gray-700 transition"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Aviso honesto: si la ruta se dibujó en recta, el mapa NO está
+            mostrando el camino real y no se debe medir nada sobre él. */}
+        {hayRutasEnRecta && (
+          <div className="bg-amber-50 border border-amber-300 px-3 py-2 rounded-lg shadow-sm">
+            <p className="text-[10px] font-bold text-amber-800">Rutas dibujadas en línea recta</p>
+            <p className="text-[10px] text-amber-700 leading-snug mt-0.5">
+              El servidor de rutas no respondió. Las líneas no son el camino real del camión.
+            </p>
+          </div>
+        )}
+      </div>
 
       <div className="absolute bottom-3 left-3 z-[400] bg-white/90 border border-gray-200 px-3 py-1.5 rounded-lg shadow-sm text-[10px] font-semibold text-gray-500 max-w-[260px]">
         {mensajeEstado}
@@ -138,38 +176,47 @@ export default function MapaRutas({
           </Marker>
         ))}
 
-        {rutasGeneradas && camionesActivos.map((camion) => {
+        {rutasGeneradas && camionesDibujados.map((camion) => {
           const paradas = paradasDe(camion.id).filter((o) => o.lat && o.lng);
           if (!paradas.length) return null;
           const puntos = paradas.map((o) => [o.lat, o.lng]);
           const geometria = rutasOsrm[camion.id];
           const posiciones = geometria || [CEDIS, ...puntos, CEDIS];
 
+          // El camión que ya salió lleva la línea más tenue: lo que se está
+          // decidiendo son las rutas que todavía se pueden cambiar, y esa ya
+          // está en la calle. Se sigue viendo, pero deja de competir por
+          // atención con las que sí se están armando.
+          const yaSalio = estadoRutaDe(camion.id) === 'En_Ruta' || estadoRutaDe(camion.id) === 'Finalizada';
+          const opacidad = yaSalio ? 0.45 : 1;
+
           return (
             <React.Fragment key={`r-${camion.id}`}>
-              {/* Borde blanco debajo + línea de color encima = efecto "tubo" limpio.
-                  Sin geometría de OSRM la línea va punteada, para que se distinga
-                  de un vistazo que ese trazo no es el camino real. */}
-              <Polyline positions={posiciones} pathOptions={{ color: '#fff', weight: 8, opacity: 0.9 }} />
+              {/* Borde blanco debajo + línea de color encima = efecto "tubo" limpio. */}
+              <Polyline positions={posiciones} pathOptions={{ color: '#fff', weight: 8, opacity: 0.9 * opacidad }} />
               <Polyline
                 positions={posiciones}
                 pathOptions={{
                   color: camion.color,
                   weight: 4,
-                  opacity: 1,
+                  opacity: opacidad,
                   lineCap: 'round',
                   lineJoin: 'round',
-                  dashArray: geometria ? undefined : '6 8',
                 }}
               />
               {paradas.map((o, i) => (
-                <Marker key={`s-${camion.id}-${i}`} position={[o.lat, o.lng]} icon={iconoParada(camion.color, i + 1)}>
+                <Marker
+                  key={`s-${camion.id}-${i}`}
+                  position={[o.lat, o.lng]}
+                  icon={iconoParada(camion.color, i + 1, o.estado === 'Entregado')}
+                >
                   {/* Cada ruta numera desde 1, así que varios círculos "1" cercanos
                       son normales — el popup aclara a qué camión pertenece. */}
                   <Popup>
                     <b>{camion.id}</b> — Parada {i + 1}<br />
                     <span style={{ fontSize: 11, color: '#64748b' }}>#{o.doc_num} {o.card_name}</span>
-                    {o.eta && <><br /><span style={{ fontSize: 11, color: '#64748b' }}>Llega ~{o.eta}</span></>}
+                    {o.eta && <><br /><span style={{ fontSize: 11, color: '#64748b' }}>Llega {o.eta}</span></>}
+                    {o.ventana && <><br /><span style={{ fontSize: 11, color: '#64748b' }}>Recibe {o.ventana}</span></>}
                   </Popup>
                 </Marker>
               ))}
