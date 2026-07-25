@@ -77,6 +77,28 @@ las respuestas de arriba.
 - 🟡 **Narciso Cafetería recibe 07:00–09:00** y el primer camión sale ~09:06.
   Es imposible de atender con la operación actual: hay que negociar la ventana o
   aceptar que no entra.
+- 🟡 **Cuánto tarda una parada con varios clientes.** Cuando el camión llega a
+  un domicilio donde entrega a varios (PROVEO PARQUE MARTEL son cuatro razones
+  sociales, EL SURTIDOR tres, y hay pares como `C587-44`/`C587-45` que facturan
+  aparte pero entregan en la misma puerta), **no tarda 12 min por cliente** —
+  se estaciona una vez. El optimizador ya lo cuenta como **una parada de 12
+  min**, que es lo que Samsara midió: sus 11.7 min son tiempo detenido en un
+  punto, así que esos casos ya están dentro del promedio.
+
+  Lo que falta medir es **cuánto más** tarda esa parada por cada entrega extra
+  (papeleo y firma de cada una). Francisco (25-jul-2026): *"no creo que se tarde
+  12, 12, 12, 12, a lo mejor sí un poco más"*. **Samsara no lo puede decir**,
+  porque solo ve que el camión estuvo detenido; hay que medirlo en piso o
+  capturarlo desde la app del chofer cuando exista.
+
+  Con los pedidos del 25-jul: **120 documentos = 105 paradas reales**. Antes se
+  planeaban 120, o sea **168 minutos de descarga que en la calle no existen**,
+  repartidos entre 5 camiones.
+- ⚪ **Vale la pena revisar en SAP** algunos Ship-To que parecen captura
+  duplicada de verdad (no facturación aparte): `MALIS` / `MALÍS`,
+  `Pizza Deprizza Juárez Centro` / `PIZZA DEPRIZZA JUAREZ CENTRO`,
+  `Valle de Lincoln` con `DEPRRIZZA` (R de más). El ruteo ya no se ve afectado
+  —agrupa por coordenada— pero ensucian reportes y listados.
 - 🔴 **Los días de entrega no se respetan.** `Destino` guarda `ent_lun`…`ent_sab`
   y se llenan desde SAP y desde el Excel, pero **el optimizador nunca los lee**.
   Hoy **68 de 195 destinos** tienen algún día restringido (casi todos "no reciben

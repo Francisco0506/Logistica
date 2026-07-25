@@ -112,6 +112,52 @@ def _ventana_en_minutos(destino, minutos_turno=MINUTOS_TURNO_MAXIMO, hora_cero=N
     return (0, minutos_turno)
 
 
+# Cuántos decimales se conservan de lat/lng para decidir si dos direcciones son
+# EL MISMO LUGAR. Cuatro decimales son ~11 metros: junta una plaza o un centro
+# comercial, y separa dos negocios de calles distintas. Si dos puntos están a
+# menos de 11 m, el camión se estaciona una sola vez de todos modos.
+DECIMALES_MISMO_LUGAR = 4
+
+
+def _clave_lugar(destino):
+    """
+    Identifica el LUGAR FÍSICO de un destino, no el registro de SAP.
+
+    Hace falta porque SAP manda varios Ship-To en el mismo punto, y NO siempre
+    por error:
+
+    1. Dos códigos que facturan aparte pero entregan en la misma puerta
+       (ej. C587-44 y C587-45, ambos PIZZA DEPRIZZA SANTA MONICA, misma calle y
+       mismas coordenadas): puede ser el mismo pedido partido en dos facturas.
+    2. Varios negocios en un mismo domicilio: PROVEO PARQUE MARTEL tiene cuatro
+       razones sociales en la misma dirección, EL SURTIDOR tres.
+    3. Y sí, también duplicados de captura de verdad (MALIS / MALÍS,
+       "DEPRIZZA" / "DEPRRIZZA").
+
+    Da igual cuál sea el caso: el camión se estaciona UNA vez. Por eso se agrupa
+    por coordenada y no se intenta adivinar si dos códigos "son el mismo
+    cliente" — eso es asunto de facturación, no de ruteo. Agrupar por destino_id
+    (como se hacía) planeaba una parada de 12 min por cada registro: medido con
+    los pedidos del 25-jul, 120 paradas planeadas contra 106 lugares reales,
+    o sea 168 minutos de descarga que en la calle no existen.
+
+    Los 11.7 min medidos con Samsara son tiempo DETENIDO EN UN PUNTO, así que
+    cuando el camión paró en PROVEO y entregó a cuatro clientes, Samsara lo
+    contó como una sola parada: el promedio ya trae esos casos adentro. Por eso
+    12 min por lugar es lo medido, y 12 por registro era lo inventado.
+
+    PENDIENTE (Francisco, 25-jul-2026): entregar a cuatro clientes en un mismo
+    domicilio sí toma algo más que a uno solo — papeleo y firma por cada uno —
+    pero cuánto más no está medido y Samsara no lo puede decir, porque solo ve
+    que el camión estuvo detenido. Queda anotado en docs/pendientes.md para
+    medirlo cuando se pueda y afinar el tiempo de servicio.
+    """
+    return (
+        round(destino.latitude, DECIMALES_MISMO_LUGAR),
+        round(destino.longitude, DECIMALES_MISMO_LUGAR),
+    )
+
+
 def _horas_y_minutos(minutos):
     """'3 h 20 min' / '45 min'. Para mensajes al despachador."""
     h, m = divmod(int(minutos), 60)
@@ -153,16 +199,16 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords, minu
     if not remisiones:
         return None
 
-    # Varios documentos (remisiones) del mismo cliente el mismo día llegan al
-    # mismo destino físico: el camión entra una sola vez. Se agrupan por
-    # destino ANTES de armar el modelo VRP para que cada parada real sea un
-    # solo nodo (con el peso sumado), en vez de contar cada documento como una
-    # parada aparte y duplicar tiempo de descarga que en la calle no existe.
-    grupos_por_destino = {}
+    # Todo lo que se entrega en el MISMO LUGAR es una sola parada: el camión se
+    # estaciona una vez. Se agrupa por coordenada y no por destino porque SAP
+    # manda varios Ship-To en el mismo punto — duplicados de captura y varios
+    # negocios en un mismo domicilio. Ver _clave_lugar para el detalle y las
+    # cifras medidas.
+    grupos_por_lugar = {}
     remisiones_sin_geo = []
     for r in remisiones:
         if r.destino and r.destino.latitude is not None and r.destino.longitude is not None:
-            grupos_por_destino.setdefault(r.destino_id, []).append(r)
+            grupos_por_lugar.setdefault(_clave_lugar(r.destino), []).append(r)
         else:
             # Nunca se asignan silenciosamente: se reportan para que el dispatcher
             # los vea y pueda resolverlos (geocodificar manualmente, etc.)
@@ -174,15 +220,28 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords, minu
     time_windows = [(0, minutos_turno)]
     remisiones_validas = []  # una entrada por nodo: lista de remisiones de esa parada
 
-    for remisiones_del_destino in grupos_por_destino.values():
-        destino = remisiones_del_destino[0].destino
+    for remisiones_del_lugar in grupos_por_lugar.values():
+        destino = remisiones_del_lugar[0].destino
         locations.append((destino.latitude, destino.longitude))
         peso_parada = sum(
-            (r.peso_kg if r.peso_kg else PESO_ESTIMADO_KG) for r in remisiones_del_destino
+            (r.peso_kg if r.peso_kg else PESO_ESTIMADO_KG) for r in remisiones_del_lugar
         )
         demands.append(int(peso_parada))
-        time_windows.append(_ventana_recortada_a_turno(*_ventana_en_minutos(destino, minutos_turno, hora_cero), minutos_turno))
-        remisiones_validas.append(remisiones_del_destino)
+        # Cuando en un mismo lugar hay clientes distintos, cada uno puede tener
+        # su propia ventana de recibo. Se toma la INTERSECCIÓN: el camión tiene
+        # que llegar cuando TODOS estén abiertos, porque va a entregarles en la
+        # misma parada. Si no se cruzan, se deja la del primero y el despachador
+        # lo verá en las alertas.
+        ventanas = [
+            _ventana_en_minutos(r.destino, minutos_turno, hora_cero)
+            for r in {r.destino_id: r for r in remisiones_del_lugar}.values()
+        ]
+        ini_comun = max(v[0] for v in ventanas)
+        fin_comun = min(v[1] for v in ventanas)
+        if ini_comun >= fin_comun:
+            ini_comun, fin_comun = ventanas[0]
+        time_windows.append(_ventana_recortada_a_turno(ini_comun, fin_comun, minutos_turno))
+        remisiones_validas.append(remisiones_del_lugar)
 
     if len(locations) <= 1:
         return {'sin_solucion': True, 'remisiones_sin_geo': remisiones_sin_geo}
@@ -536,14 +595,16 @@ def recalcular_etas_desde_salida(ruta, depot_coords, salida_dt=None):
         return 0
     salida_dt = salida_dt or datetime.now()
 
-    # Paradas únicas en orden: documentos consecutivos del mismo destino
-    # comparten parada (el camión entra una sola vez).
+    # Paradas únicas en orden: documentos consecutivos que se entregan en el
+    # mismo LUGAR comparten parada (el camión se estaciona una sola vez), aunque
+    # sean clientes distintos de SAP. Mismo criterio que build_data_model.
     paradas = []
     for r in remisiones:
-        if paradas and paradas[-1][0] == r.destino_id:
+        clave = _clave_lugar(r.destino)
+        if paradas and paradas[-1][0] == clave:
             paradas[-1][1].append(r)
         else:
-            paradas.append((r.destino_id, [r], (r.destino.latitude, r.destino.longitude)))
+            paradas.append((clave, [r], (r.destino.latitude, r.destino.longitude)))
 
     locations = [depot_coords] + [p[2] for p in paradas]
     _, time_matrix, _ = build_distance_time_matrices(locations, VELOCIDAD_PROMEDIO_KMH)
@@ -596,8 +657,16 @@ def sugerir_camiones_para_remision(remision, depot_coords):
             key=lambda r: r.secuencia_ruta or 0,
         )
 
-        # Puntos de la ruta actual: CEDIS -> paradas existentes -> CEDIS
-        puntos = [depot_coords] + [(r.destino.latitude, r.destino.longitude) for r in remisiones_ruta] + [depot_coords]
+        # Puntos de la ruta actual: CEDIS -> paradas existentes -> CEDIS.
+        # Las remisiones que caen en el mismo lugar cuentan como UNA parada; si
+        # no, una ruta con tres documentos al mismo domicilio se evaluaba como
+        # tres puntos y el tiempo agregado salía inflado.
+        paradas_ruta = []
+        for r in remisiones_ruta:
+            clave = _clave_lugar(r.destino)
+            if not paradas_ruta or paradas_ruta[-1][0] != clave:
+                paradas_ruta.append((clave, (r.destino.latitude, r.destino.longitude)))
+        puntos = [depot_coords] + [p[1] for p in paradas_ruta] + [depot_coords]
         locations_con_nuevo = puntos + [(destino.latitude, destino.longitude)]
         idx_nuevo = len(puntos)  # último índice = el pedido a insertar
 
