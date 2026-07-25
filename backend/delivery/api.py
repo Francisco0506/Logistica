@@ -1,6 +1,7 @@
 from ninja import NinjaAPI, Schema
 from typing import List, Optional
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from django.db.models import Count
 from . import fleet
 from .models import Remision, Ruta
 from .optimizer import (
@@ -68,16 +69,6 @@ def get_remisiones(request, fecha: date):
             lat = r.destino.latitude
             lng = r.destino.longitude
 
-        # Ventana de recibo tal como está capturada, en 24 h. Si hay segunda
-        # ventana se muestran las dos, porque son horarios distintos de verdad
-        # (ej. cierra a mediodía y reabre en la tarde) y juntarlos en un solo
-        # rango haría creer que recibe también en el hueco de en medio.
-        ventana = None
-        if r.destino and r.destino.ini_recibo_1 and r.destino.fin_recibo_1:
-            ventana = f"{r.destino.ini_recibo_1:%H:%M} - {r.destino.fin_recibo_1:%H:%M}"
-            if r.destino.ini_recibo_2 and r.destino.fin_recibo_2:
-                ventana += f" y {r.destino.ini_recibo_2:%H:%M} - {r.destino.fin_recibo_2:%H:%M}"
-
         result.append({
             "id": r.id,
             "doc_num": r.doc_num,
@@ -92,7 +83,7 @@ def get_remisiones(request, fecha: date):
             "truck": r.ruta.camion if r.ruta else None,
             "secuencia_ruta": r.secuencia_ruta,
             "peso_kg": r.peso_kg,
-            "ventana": ventana,
+            "ventana": _texto_ventana(r.destino),
         })
     return result
 
@@ -277,6 +268,164 @@ def get_alertas(request, fecha: date):
             "motivo": "Sin georreferencia en SAP B1" if sin_geo else "Pendiente de asignar a una ruta",
         })
     return alertas
+
+# ══════════════════════════════════════════════════════════════════════════
+# PANEL DE VENDEDOR
+# ══════════════════════════════════════════════════════════════════════════
+# Cada vendedora ve SOLO sus pedidos, filtrados por el SlpCode que SAP ya trae
+# en cada remisión (sync.py los guarda en slp_code/slp_name).
+#
+# Hoy el vendedor se manda como parámetro porque el login todavía no valida
+# nada: es un selector de rol. Cuando haya usuarios de verdad, el SlpCode debe
+# salir del usuario de la sesión y NO del parámetro, o cualquiera podría pedir
+# los pedidos de otra vendedora cambiando la URL. Está anotado en
+# docs/pendientes.md §5.
+
+# Margen que se le suma a la ETA para presentarla como rango ("entre 09:00 y
+# 09:15") en vez de una hora exacta. Una hora al minuto suena a promesa que no
+# se puede cumplir; el rango dice la verdad: es una estimación.
+# OJO: es un margen de presentación, NO un intervalo de confianza medido. La
+# incertidumbre real es mayor mientras OSRM siga ~25% optimista
+# (ver docs/calibracion-tiempos-osrm.md).
+MARGEN_ETA_MINUTOS = 15
+
+
+def _texto_ventana(destino):
+    """
+    La ventana de recibo lista para mostrar, en 24 h, o None si no hay.
+
+    Los horarios corruptos de SAP (hora de cierre igual o anterior a la de
+    apertura, ej. "08:00-06:00" de LA PARMESANA, a la que le falta el PM) NO se
+    muestran tal cual: un rango imposible en pantalla parece un error del
+    sistema y no del dato. Se marca como mal capturado, que es la verdad y
+    además dice qué hay que arreglar y dónde. El optimizador ya los ignora por
+    su lado (ver optimizer._ventana_en_minutos).
+    """
+    if not destino or not destino.ini_recibo_1 or not destino.fin_recibo_1:
+        return None
+
+    def _rango(ini, fin):
+        ini_min = ini.hour * 60 + ini.minute
+        fin_min = fin.hour * 60 + fin.minute
+        # "00:00" de cierre casi siempre es medianoche real (cierra al final del
+        # día), no el inicio del día.
+        if fin_min == 0:
+            fin_min = 24 * 60
+        if fin_min <= ini_min:
+            return None
+        return f"{ini:%H:%M} - {fin:%H:%M}"
+
+    texto = _rango(destino.ini_recibo_1, destino.fin_recibo_1)
+    if texto is None:
+        return "Horario mal capturado en SAP"
+
+    if destino.ini_recibo_2 and destino.fin_recibo_2:
+        segundo = _rango(destino.ini_recibo_2, destino.fin_recibo_2)
+        if segundo:
+            texto += f" y {segundo}"
+    return texto
+
+
+class VendedorOut(Schema):
+    slp_code: str
+    slp_name: str
+    pedidos: int
+
+
+@api.get("/ventas/vendedores", response=List[VendedorOut])
+def get_vendedores(request, fecha: date):
+    """Vendedores que tienen pedidos ese día, para el selector del panel."""
+    filas = (
+        Remision.objects.filter(doc_date=fecha)
+        .values('slp_code', 'slp_name')
+        .annotate(pedidos=Count('id'))
+        .order_by('slp_name')
+    )
+    return list(filas)
+
+
+class PedidoVentasOut(Schema):
+    id: int
+    doc_num: int
+    card_name: str
+    estado: str
+    doc_total: float
+    address: str = ""
+    ventana: Optional[str] = None
+    eta_desde: Optional[str] = None
+    eta_hasta: Optional[str] = None
+    camion: Optional[str] = None
+    # Explicación en lenguaje de vendedora de qué está pasando con su pedido.
+    situacion: str
+    # True cuando el pedido ya tiene lugar en una ruta del día.
+    programado: bool
+
+
+def _rango_eta(eta):
+    """'09:00' -> ('09:00', '09:15'). None si no hay ETA calculada."""
+    if not eta:
+        return None, None
+    try:
+        inicio = datetime.strptime(eta, "%H:%M")
+    except ValueError:
+        # ETAs viejas guardadas en 12 h ("09:00 AM") antes del cambio a 24 h.
+        try:
+            inicio = datetime.strptime(eta, "%I:%M %p")
+        except ValueError:
+            return None, None
+    fin = inicio + timedelta(minutes=MARGEN_ETA_MINUTOS)
+    return inicio.strftime("%H:%M"), fin.strftime("%H:%M")
+
+
+@api.get("/ventas/pedidos", response=List[PedidoVentasOut])
+def get_pedidos_vendedor(request, fecha: date, slp_code: str):
+    remisiones = (
+        Remision.objects.filter(doc_date=fecha, slp_code=slp_code)
+        .select_related('destino', 'ruta')
+        .order_by('eta', 'doc_num')
+    )
+
+    resultado = []
+    for r in remisiones:
+        eta_desde, eta_hasta = _rango_eta(r.eta)
+        sin_geo = not r.destino or r.destino.latitude is None or r.destino.longitude is None
+        camion = r.ruta.camion if r.ruta else None
+
+        # La situación dice qué está pasando Y por qué, para que la vendedora
+        # pueda contestarle al cliente sin preguntarle a nadie más.
+        if r.estado == 'Entregado':
+            situacion = "Entregado"
+        elif r.estado == 'En_Camino':
+            situacion = (
+                f"En camino en el {camion}, llega entre {eta_desde} y {eta_hasta}"
+                if eta_desde else f"En camino en el {camion}"
+            )
+        elif r.estado == 'Asignado' and camion:
+            situacion = (
+                f"Programado en el {camion}, llega entre {eta_desde} y {eta_hasta}"
+                if eta_desde else f"Programado en el {camion}, falta calcular la hora"
+            )
+        elif sin_geo:
+            situacion = "No se puede programar: al cliente le falta la ubicación en SAP"
+        else:
+            situacion = "Todavía no entra en ninguna ruta de hoy"
+
+        resultado.append({
+            "id": r.id,
+            "doc_num": r.doc_num,
+            "card_name": r.card_name,
+            "estado": r.estado,
+            "doc_total": float(r.doc_total),
+            "address": r.destino.street if r.destino and r.destino.street else "",
+            "ventana": _texto_ventana(r.destino),
+            "eta_desde": eta_desde,
+            "eta_hasta": eta_hasta,
+            "camion": camion,
+            "situacion": situacion,
+            "programado": bool(camion),
+        })
+    return resultado
+
 
 # 7. Sugerir en qué camión conviene meter un pedido que quedó sin asignar.
 # No modifica nada: solo calcula opciones para que el despachador decida.

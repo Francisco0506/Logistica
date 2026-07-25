@@ -4,6 +4,32 @@
  */
 
 const BASE = '/api/dispatcher';
+const BASE_VENTAS = '/api/ventas';
+
+/**
+ * Vendedores que tienen pedidos ese día, para el selector del panel de ventas.
+ * @param {string} fecha — Formato YYYY-MM-DD
+ */
+export async function getVendedores(fecha, { signal } = {}) {
+  const res = await fetch(`${BASE_VENTAS}/vendedores?fecha=${fecha}`, { signal });
+  if (!res.ok) throw new Error(`Vendedores failed: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * Los pedidos de UNA vendedora, con la hora a la que llega cada uno y qué está
+ * pasando con él.
+ *
+ * El vendedor va como parámetro porque el login todavía no valida nada. Cuando
+ * haya usuarios de verdad esto tiene que salir de la sesión, no de la URL.
+ * @param {string} fecha — Formato YYYY-MM-DD
+ * @param {string} slpCode — Código de vendedor de SAP
+ */
+export async function getPedidosVendedor(fecha, slpCode, { signal } = {}) {
+  const res = await fetch(`${BASE_VENTAS}/pedidos?fecha=${fecha}&slp_code=${encodeURIComponent(slpCode)}`, { signal });
+  if (!res.ok) throw new Error(`Pedidos vendedor failed: ${res.status}`);
+  return res.json();
+}
 
 /**
  * Sincroniza pedidos desde SAP B1 (o carga mock data).
