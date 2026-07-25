@@ -152,5 +152,10 @@ las respuestas de arriba.
 ## 7. Basura acumulada
 
 - ⚪ **Dos rutas colgadas en `En_Ruta` del 18-jul** que nunca se finalizaron.
+- ⚪ **Los pedidos de prueba solo existen para un día a la vez.**
+  `cargar_pedidos_prueba` reutiliza los folios `8500000+i` para cualquier fecha,
+  y como el folio es único, cargar prueba para un día nuevo **mueve** los
+  registros del día anterior en vez de crear otros. Se ve como si se hubieran
+  borrado pedidos. Se arregla incluyendo la fecha en el folio.
 - ⚪ **La rama `worktree-dispatcher-overhaul`** en GitHub quedó abandonada; su
   contenido ya llegó a `main` por otro camino.

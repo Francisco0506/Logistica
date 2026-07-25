@@ -40,6 +40,13 @@ class RemisionOut(Schema):
     lng: Optional[float] = None
     truck: Optional[str] = None
     secuencia_ruta: Optional[int] = None
+    # Peso real del pedido en KG. `null` cuando SAP no lo trae (ver sync.py):
+    # el panel debe mostrarlo como desconocido, NUNCA sustituirlo por el
+    # estimado que usa el optimizador, o se vería como un peso medido.
+    peso_kg: Optional[float] = None
+    # Ventana de recibo del cliente, en 24 h ("15:00 - 22:00"). Es el dato que
+    # explica por qué las rutas van apretadas y no se mostraba en ningún lado.
+    ventana: Optional[str] = None
 
 class RutaOut(Schema):
     id: int
@@ -60,7 +67,17 @@ def get_remisiones(request, fecha: date):
         if r.destino and r.destino.latitude is not None and r.destino.longitude is not None:
             lat = r.destino.latitude
             lng = r.destino.longitude
-            
+
+        # Ventana de recibo tal como está capturada, en 24 h. Si hay segunda
+        # ventana se muestran las dos, porque son horarios distintos de verdad
+        # (ej. cierra a mediodía y reabre en la tarde) y juntarlos en un solo
+        # rango haría creer que recibe también en el hueco de en medio.
+        ventana = None
+        if r.destino and r.destino.ini_recibo_1 and r.destino.fin_recibo_1:
+            ventana = f"{r.destino.ini_recibo_1:%H:%M} - {r.destino.fin_recibo_1:%H:%M}"
+            if r.destino.ini_recibo_2 and r.destino.fin_recibo_2:
+                ventana += f" y {r.destino.ini_recibo_2:%H:%M} - {r.destino.fin_recibo_2:%H:%M}"
+
         result.append({
             "id": r.id,
             "doc_num": r.doc_num,
@@ -74,6 +91,8 @@ def get_remisiones(request, fecha: date):
             "lng": lng,
             "truck": r.ruta.camion if r.ruta else None,
             "secuencia_ruta": r.secuencia_ruta,
+            "peso_kg": r.peso_kg,
+            "ventana": ventana,
         })
     return result
 
