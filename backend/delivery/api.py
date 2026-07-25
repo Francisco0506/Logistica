@@ -159,7 +159,7 @@ def get_rutas(request, fecha: date):
             "pedidos_count": r.remisiones.count(),
             # Hora real en que el despachador dio "Salida" (botón En_Ruta), no
             # una hora teórica: null hasta que el camión de verdad se despache.
-            "hora_salida": r.hora_salida.strftime("%I:%M %p") if r.hora_salida else None,
+            "hora_salida": r.hora_salida.strftime("%H:%M") if r.hora_salida else None,
         })
     return result
 

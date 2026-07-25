@@ -112,6 +112,14 @@ def _ventana_en_minutos(destino, minutos_turno=MINUTOS_TURNO_MAXIMO, hora_cero=N
     return (0, minutos_turno)
 
 
+def _horas_y_minutos(minutos):
+    """'3 h 20 min' / '45 min'. Para mensajes al despachador."""
+    h, m = divmod(int(minutos), 60)
+    if h and m:
+        return f"{h} h {m} min"
+    return f"{h} h" if h else f"{m} min"
+
+
 def _ventana_recortada_a_turno(ini_min, fin_min, minutos_turno=MINUTOS_TURNO_MAXIMO):
     """
     Recorta una ventana real al turno máximo del chofer, para usarla como
@@ -411,7 +419,8 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None):
                     minutos_llegada = minutos_desde_cero - TIEMPO_DESCARGA_MINUTOS
                     eta_time = hora_cero + timedelta(minutes=minutos_llegada)
                     for remision in remisiones_parada:
-                        remision.eta = eta_time.strftime("%I:%M %p")
+                        # 24 h, igual que como se captura el horario en SAP.
+                        remision.eta = eta_time.strftime("%H:%M")
                     route_sequence.append(remisiones_parada)
 
                 index = solution.Value(routing.NextVar(index))
@@ -544,7 +553,7 @@ def recalcular_etas_desde_salida(ruta, depot_coords, salida_dt=None):
     for i, (_, rems, _) in enumerate(paradas):
         t += timedelta(minutes=time_matrix[i][i + 1])
         for r in rems:
-            r.eta = t.strftime("%I:%M %p")
+            r.eta = t.strftime("%H:%M")
             actualizadas.append(r)
         t += timedelta(minutes=TIEMPO_DESCARGA_MINUTOS)
     Remision.objects.bulk_update(actualizadas, ['eta'])
@@ -594,20 +603,49 @@ def sugerir_camiones_para_remision(remision, depot_coords):
 
         distance_matrix, time_matrix, _ = build_distance_time_matrices(locations_con_nuevo, VELOCIDAD_PROMEDIO_KMH)
 
-        # Probar insertar el nuevo punto entre cada par consecutivo de la ruta
-        # actual (incluye antes de la primera parada y después de la última) y
-        # quedarse con la posición que agrega menos tiempo.
-        mejor_costo = None
-        mejor_posicion = None
+        ini_ventana, fin_ventana = _ventana_en_minutos(destino)
+
+        # Probar insertar el nuevo punto entre CADA par consecutivo de la ruta
+        # (incluye antes de la primera parada y después de la última) y quedarse
+        # con la mejor. "Mejor" NO es solo la más barata en tiempo: primero se
+        # prefiere una posición donde el camión llegue DENTRO de la ventana de
+        # recibo del cliente, y entre esas, la más barata.
+        #
+        # Antes solo se evaluaba la inserción más barata y se revisaba si esa
+        # caía en ventana. Para un cliente que abre tarde (ej. Mangioz, 15:00 a
+        # 22:00) la posición más barata casi siempre queda a media mañana, así
+        # que salían todos los camiones en rojo aunque el pedido sí cupiera más
+        # adelante en la ruta. Ahora se busca ese hueco.
+        candidatas = []
         for i in range(len(puntos) - 1):
             costo_actual = time_matrix[i][i + 1]
             costo_con_insercion = (
                 time_matrix[i][idx_nuevo] + TIEMPO_DESCARGA_MINUTOS + time_matrix[idx_nuevo][i + 1]
             )
             minutos_agregados = costo_con_insercion - costo_actual
-            if mejor_costo is None or minutos_agregados < mejor_costo:
-                mejor_costo = minutos_agregados
-                mejor_posicion = i  # se inserta después de la parada i (0 = después del CEDIS)
+
+            # Hora de llegada al nuevo cliente si se inserta en esta posición:
+            # manejo de parada en parada MÁS la descarga de cada parada previa.
+            # Antes solo se sumaba el manejo, así que la llegada salía ~12 min
+            # optimista por cada parada anterior (con 10 paradas antes, dos
+            # horas de error) y no cuadraba con la ETA que calcula
+            # recalcular_etas_desde_salida.
+            minutos_llegada = sum(
+                time_matrix[k][k + 1] + (TIEMPO_DESCARGA_MINUTOS if k > 0 else 0)
+                for k in range(i + 1)
+            )
+            candidatas.append({
+                "posicion": i,
+                "minutos_agregados": minutos_agregados,
+                "minutos_llegada": minutos_llegada,
+                "en_ventana": ini_ventana <= minutos_llegada <= fin_ventana,
+            })
+
+        # Ordena: primero las que caen en ventana, luego por tiempo agregado.
+        candidatas.sort(key=lambda c: (not c["en_ventana"], c["minutos_agregados"]))
+        elegida = candidatas[0] if candidatas else None
+        mejor_costo = elegida["minutos_agregados"] if elegida else None
+        mejor_posicion = elegida["posicion"] if elegida else None  # se inserta después de la parada i (0 = después del CEDIS)
 
         peso_actual = sum((r.peso_kg if r.peso_kg else PESO_ESTIMADO_KG) for r in remisiones_ruta)
         # Capacidad REAL del camión de esta ruta. Antes se usaba un 3,000 kg
@@ -633,16 +671,36 @@ def sugerir_camiones_para_remision(remision, depot_coords):
         if not cabe_peso:
             motivos.append(f"se pasaría del peso máximo del camión ({capacidad} kg)")
 
-        # Choque de ventana de horario del propio destino nuevo.
-        ini_ventana, fin_ventana = _ventana_en_minutos(destino)
-        minutos_llegada_estimados = sum(time_matrix[i][i + 1] for i in range(mejor_posicion + 1)) if mejor_posicion is not None else 0
-        choca_ventana = not (ini_ventana <= minutos_llegada_estimados <= fin_ventana)
+        # Choque de ventana de horario del propio destino nuevo. El mensaje dice
+        # de QUÉ LADO se pasa y por cuánto: "fuera de la ventana" a secas hacía
+        # pensar que el camión llegaba tarde cuando el caso más común es que
+        # llega demasiado temprano, y son problemas distintos (llegar temprano
+        # se arregla metiéndolo más adelante en la ruta; llegar tarde, no).
+        minutos_llegada_estimados = elegida["minutos_llegada"] if elegida else 0
+        choca_ventana = not (elegida["en_ventana"] if elegida else False)
         if choca_ventana:
-            hora_ini = (HORA_CERO + timedelta(minutes=ini_ventana)).strftime("%I:%M %p")
-            hora_fin = (HORA_CERO + timedelta(minutes=fin_ventana)).strftime("%I:%M %p")
-            motivos.append(f"llegaría fuera de la ventana de recibo del cliente ({hora_ini} - {hora_fin})")
+            hora_ini = (HORA_CERO + timedelta(minutes=ini_ventana)).strftime("%H:%M")
+            hora_fin = (HORA_CERO + timedelta(minutes=fin_ventana)).strftime("%H:%M")
+            if minutos_llegada_estimados < ini_ventana:
+                # Llegar temprano NO es imposible: el camión puede esperar en la
+                # puerta. Es caro (deja al camión parado) pero es una salida real,
+                # así que se dice en vez de solo marcarlo en rojo. Ya se buscó en
+                # toda la ruta, incluido el final, y esta fue la hora más tardía
+                # que se pudo conseguir.
+                falta = ini_ventana - minutos_llegada_estimados
+                motivos.append(
+                    f"llegaría {_horas_y_minutos(falta)} antes de que abran "
+                    f"(reciben {hora_ini}-{hora_fin}); es lo más tarde que se puede "
+                    f"acomodar, así que el camión tendría que esperar ese rato en la puerta"
+                )
+            else:
+                tarde = minutos_llegada_estimados - fin_ventana
+                motivos.append(
+                    f"llegaría {_horas_y_minutos(tarde)} DESPUÉS de que cierren "
+                    f"(reciben {hora_ini}-{hora_fin})"
+                )
 
-        eta_estimada = (HORA_CERO + timedelta(minutes=minutos_llegada_estimados)).strftime("%I:%M %p")
+        eta_estimada = (HORA_CERO + timedelta(minutes=minutos_llegada_estimados)).strftime("%H:%M")
 
         opciones.append({
             "ruta_id": ruta.id,
