@@ -1,7 +1,12 @@
 """
-Cliente OSRM compartido por el optimizador (matriz de distancia/tiempo) y por
-cualquier geocodificación de respaldo. Centralizado aquí para no duplicar la
-URL del servidor OSRM ni el parámetro de exclusión de autopistas entre archivos.
+Cliente OSRM: matriz de distancia/tiempo por calle real para el optimizador.
+Centralizado aquí para no duplicar la URL del servidor OSRM ni el parámetro de
+exclusión de autopistas entre archivos.
+
+Aquí NO se geocodifica. Cuando SAP no trae lat/lng de un Ship-To, el pedido se
+deja sin coordenada y el panel lo marca como alerta (ver api.py): mandar la
+dirección de un cliente a un servicio externo para resolverla sería filtrar
+datos del cliente a un tercero sin avisar.
 """
 import math
 import os
@@ -109,29 +114,3 @@ def build_distance_time_matrices(locations, velocidad_kmh_fallback):
             distance_matrix[i][j] = int(dist_km * 1000)
             time_matrix_min[i][j] = int((dist_km / velocidad_kmh_fallback) * 60)
     return distance_matrix, time_matrix_min, f"haversine_{motivo}"
-
-
-def geocode_address(street, city, state="Nuevo Leon", country="Mexico"):
-    """
-    Geocodifica una dirección de texto contra Nominatim (OpenStreetMap) como
-    último respaldo cuando SAP no trae lat/lng. Es un servicio gratuito con
-    límite de uso justo (1 req/seg) — solo se llama para pedidos sin coordenada.
-    Regresa (lat, lng) o None si no se pudo geocodificar.
-    """
-    if not street:
-        return None
-    query = ", ".join(p for p in [street, city, state, country] if p)
-    try:
-        resp = requests.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={"q": query, "format": "json", "limit": 1},
-            headers={"User-Agent": "LabenDispatcher/1.0"},
-            timeout=REQUEST_TIMEOUT,
-        )
-        resp.raise_for_status()
-        results = resp.json()
-        if not results:
-            return None
-        return float(results[0]["lat"]), float(results[0]["lon"])
-    except (requests.RequestException, KeyError, ValueError, IndexError):
-        return None

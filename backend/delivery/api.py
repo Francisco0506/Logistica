@@ -74,8 +74,7 @@ class RemisionOut(Schema):
     estado: str
     ship_to_code: str
     doc_total: float
-    window: str = "09:00 - 12:00"
-    eta: str = "09:30 AM"
+    eta: str = "Pendiente"
     address: str = ""
     lat: Optional[float] = None
     lng: Optional[float] = None

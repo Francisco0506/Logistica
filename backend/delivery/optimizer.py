@@ -10,7 +10,7 @@ from .routing_service import build_distance_time_matrices
 # ==========================================
 # ── Constantes medidas con 1 mes de GPS real (Samsara), SOLO los 5 camiones
 # que de verdad operan (013, 016, 017, 023, 027 — se excluyen 024/015/012 que
-# casi no salen y ensuciaban los promedios). Ver docs/uso-flota-samsara.md.
+# casi no salen y ensuciaban los promedios). Ver docs/flota.md.
 VELOCIDAD_PROMEDIO_KMH = 42.0  # Solo se usa si OSRM no responde (respaldo Haversine) — real: promedio 42.3 km/h, mediana 39.0
 TIEMPO_DESCARGA_MINUTOS = 12   # Tiempo de servicio por cliente — real: promedio 11.7 min, mediana 9.2, P75 14.5 (1662 paradas medidas)
 # Hora base del plan = salida del PRIMER camión del día. Medido con GPS sobre
@@ -22,10 +22,12 @@ TIEMPO_DESCARGA_MINUTOS = 12   # Tiempo de servicio por cliente — real: promed
 # (ver recalcular_etas_desde_salida).
 HORA_CERO = datetime.strptime("09:00", "%H:%M")
 MINUTOS_TURNO_MAXIMO = 6 * 60  # Turno normal de 6 h. La jornada real medida es 6.7 h promedio / 6.4 h mediana, pero 6 h es el turno oficial: el despachador amplía por corrida desde el panel cuando hace falta.
-# Referencia operativa (no es restricción): paradas reales por camión al día
-# = mediana 15, P75 20, máximo observado 38 (ese día fueron 12.9 h de jornada).
-# El límite de turno + el tiempo de descarga ya acotan las paradas por ruta.
-PARADAS_TIPICAS_POR_RUTA = 15
+# Referencia operativa para validar un plan (no es una constante del modelo):
+# las paradas reales por camión al día son mediana 15, P75 20, máximo observado
+# 38 (ese día fueron 12.9 h de jornada). Si una corrida entrega rutas de ~20
+# paradas parejas, el plan va optimista — ver docs/calibracion-tiempos-osrm.md.
+# Quien acota las paradas por ruta es el turno + el tiempo de descarga + el
+# tope medido por camión (api.py:MAX_PARADAS_POR_CAMION).
 PESO_ESTIMADO_KG = 150  # Fallback SOLO cuando SAP no trae peso real de línea (ver sync.py)
 # Escalón entre salidas EN EL PLAN. Va en 0 a propósito, aunque en la calle los
 # camiones sí salen separados (medido con GPS: 31 min de mediana entre uno y

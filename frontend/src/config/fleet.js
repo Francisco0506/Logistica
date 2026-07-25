@@ -28,7 +28,7 @@ export const ID_TO_PLATE = {
 // pendiente de confirmar con la tarjeta de circulación de cada unidad — debe
 // coincidir con CAPACIDADES_CAMION_KG en backend/delivery/api.py (mismo orden).
 // ORDEN = ranking de uso real (km GPS Samsara, últimos 60 días al 18-jul-2026,
-// ver docs/uso-flota-samsara.md): los que más salen hasta arriba. Así el panel
+// ver docs/flota.md): los que más salen hasta arriba. Así el panel
 // muestra primero los camiones que de verdad trabajan, y el optimizador los
 // usa en ese mismo orden. 015 y 012 (últimos) llevan 2 meses sin operar.
 // `activo: false` = los que casi no salen (ver días trabajados en 30 días:
