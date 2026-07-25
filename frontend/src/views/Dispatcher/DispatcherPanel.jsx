@@ -4,9 +4,9 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { Truck, RefreshCw, Search, Compass, AlertCircle, Eye, Package, FileText, Download, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, MapPin, User, Clock, Play, Check, Loader, Menu, X, FlaskConical, LogOut } from 'lucide-react';
-import { CEDIS, FLEET, ID_TO_PLATE } from '../../config/fleet';
+import { CEDIS, PALETA_COLORES_CAMION } from '../../config/fleet';
 import LabenLogo from '../../components/LabenLogo';
-import { syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado, getSugerencias, asignarManual, cargarPruebaPedidos, getCamionesGPS } from '../../services/api';
+import { syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado, getSugerencias, asignarManual, cargarPruebaPedidos, getCamionesGPS, getFlota } from '../../services/api';
 
 // Cada cuánto se refresca la vista para traer lo más nuevo (pedidos nuevos de
 // SAP, cambios de estado de otros usuarios) sin que el dispatcher tenga que
@@ -71,12 +71,32 @@ function MapResizeHandler({ isPanelOpen }) {
   return null;
 }
 
+// Un camión como lo manda el backend -> como lo usa el panel. `driver` arranca
+// vacío a propósito: quién maneja cada unidad no es un dato que el sistema
+// tenga todavía (ver docs/pendientes.md §1), y antes se mostraba un "Chofer 1"
+// inventado que parecía real.
+const aCamionDelPanel = (c) => ({
+  id: c.placa,
+  samsara: c.samsara,
+  modelo: c.modelo,
+  capacidadKg: c.capacidad_kg,
+  maxParadas: c.max_paradas,
+  color: c.color,
+  active: c.activo_default,
+  driver: '',
+  route: 'Sin ruta asignada',
+});
+
 // ── Component ──
 export default function DispatcherPanel() {
   const navigate = useNavigate();
-  // `activo` viene de fleet.js: los camiones que casi no salen (024, 015, 012)
-  // arrancan apagados; se prenden con un clic cuando se ocupen.
-  const [trucks, setTrucks]             = useState(FLEET.map(t => ({ ...t, active: t.activo !== false })));
+  // La flota la manda el backend (fuente única: backend/delivery/fleet.py).
+  // Arranca vacía y se llena una sola vez al abrir el panel — a propósito NO se
+  // recarga en el refresco de cada 45 s, porque eso borraría los choferes que
+  // el despachador capturó y volvería a prender los camiones que apagó.
+  const [trucks, setTrucks]             = useState([]);
+  const [ordenFlota, setOrdenFlota]     = useState([]); // placas en orden de uso real, para ordenar el panel
+  const [flotaCargada, setFlotaCargada] = useState(false);
   const [routesGenerated, setRoutesGenerated] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [searchQuery, setSearchQuery]   = useState('');
@@ -112,7 +132,20 @@ export default function DispatcherPanel() {
   // una de las tres salidas junto con activar otro camión o asignar manual.
   const [horasTurno, setHorasTurno]     = useState(6);
 
-  const PALETA_COLORES_CAMION = ['#F27A18', '#D92525', '#3b82f6', '#10b981', '#8b5cf6', '#ec4899', '#eab308', '#06b6d4'];
+  // ── La flota, una sola vez al abrir ──
+  useEffect(() => {
+    const controller = new AbortController();
+    getFlota({ signal: controller.signal })
+      .then(flota => {
+        setTrucks(flota.map(aCamionDelPanel));
+        setOrdenFlota(flota.map(c => c.placa));
+        setFlotaCargada(true);
+      })
+      .catch(e => {
+        if (e.name !== 'AbortError') console.error('No se pudo cargar la flota:', e);
+      });
+    return () => controller.abort();
+  }, []);
 
   const agregarCamion = () => {
     if (!nuevaPlaca.trim() || !nuevoChofer.trim()) return;
@@ -218,7 +251,9 @@ export default function DispatcherPanel() {
       setSyncStatusTipo(syncData.status === 'success' ? 'ok' : syncData.status === 'warning' ? 'warning' : 'error');
 
       const remData = await getRemisiones(fecha, { signal });
-      setOrders(remData.map(o => ({ ...o, truck: ID_TO_PLATE[o.truck] || o.truck || null })));
+      // `truck` ya viene como la placa real desde el backend; antes llegaba
+      // como "T-001" y había que traducirlo aquí.
+      setOrders(remData.map(o => ({ ...o, truck: o.truck || null })));
 
       const rutData = await getRutas(fecha, { signal });
       setRutas(rutData);
@@ -298,20 +333,17 @@ export default function DispatcherPanel() {
 
   const changeDriver = (id, d) => setTrucks(p => p.map(t => t.id === id ? { ...t, driver: d } : t));
 
-  // El backend identifica camiones con códigos genéricos (T-001, T-002…) y les
-  // pone un chofer placeholder ("Chofer 1") al crear la ruta — no conoce la
-  // placa real ni el chofer que el dispatcher asignó en el panel. Acá se
-  // resuelve siempre a la placa real (ID_TO_PLATE) y al chofer real vigente
-  // en `trucks`, para no mostrar identificadores genéricos en la UI.
-  const truckLabel = (camionCode) => {
-    const placa = ID_TO_PLATE[camionCode] || camionCode;
-    const truckReal = trucks.find(t => t.id === placa);
-    return { placa, chofer: truckReal?.driver || null };
-  };
+  // El backend ya guarda la placa real en la ruta. Lo único que sigue viviendo
+  // solo en el panel es el chofer, porque quién maneja no es un dato que el
+  // sistema tenga todavía (ver docs/pendientes.md §1).
+  const truckLabel = (placa) => ({
+    placa,
+    chofer: trucks.find(t => t.id === placa)?.driver || null,
+  });
 
   // ── Dispatch Actions ──
   const changeTruckState = async (truckId, newState) => {
-    const ruta = rutas.find(r => ID_TO_PLATE[r.camion] === truckId || r.camion === truckId);
+    const ruta = rutas.find(r => r.camion === truckId);
     if (!ruta) {
         alert('Ruta no encontrada para este camión. Genera rutas primero.');
         return;
@@ -325,16 +357,16 @@ export default function DispatcherPanel() {
   };
 
   // ── Filters ──
-  // Orden FIJO del panel: ranking de uso real (FLEET ya viene ordenada por km
-  // de GPS Samsara de los últimos 60 días — los que más salen, arriba).
+  // Orden FIJO del panel: ranking de uso real (el backend manda la flota ya
+  // ordenada por km de GPS de los últimos 60 días — los que más salen, arriba).
   // Camiones agregados a mano van al final.
-  const FLEET_RANK = Object.fromEntries(FLEET.map((t, i) => [t.id, i]));
+  const rankFlota = Object.fromEntries(ordenFlota.map((placa, i) => [placa, i]));
   const visibleTrucks = trucks
     .filter(t =>
       t.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
       t.driver.toLowerCase().includes(searchQuery.toLowerCase())
     )
-    .sort((a, b) => (FLEET_RANK[a.id] ?? 99) - (FLEET_RANK[b.id] ?? 99));
+    .sort((a, b) => (rankFlota[a.id] ?? 99) - (rankFlota[b.id] ?? 99));
 
   const visibleOrders = orders.filter(o => {
     if (o.truck) { const t = trucks.find(x => x.id === o.truck); if (!t?.active) return false; }
@@ -351,13 +383,16 @@ export default function DispatcherPanel() {
 
   // ── Optimize ──
   const optimize = async () => {
+    // Se mandan las PLACAS de los camiones activos, no cuántos son. Antes iba
+    // solo el número y el backend tomaba los primeros N de una lista fija, así
+    // que apagar un camión y prender otro planeaba con la capacidad del que se
+    // apagó, sin avisar.
+    const placasActivas = trucks.filter(t => t.active).map(t => t.id);
+    if (!placasActivas.length) { alert('Activa al menos un camión.'); return; }
     setIsOptimizing(true);
     setRoutesGenerated(false);
-    const fecha = selectedDate;
-    const n = trucks.filter(t => t.active).length;
-    if (!n) { alert('Activa al menos un camión.'); setIsOptimizing(false); return; }
     try {
-      const data = await generarRutas(fecha, n, horasTurno);
+      const data = await generarRutas(selectedDate, placasActivas, horasTurno);
       if (data.status === 'success') await fetchData();
       else alert(data.message);
     } catch { alert('Error del optimizador.'); }
@@ -591,11 +626,12 @@ export default function DispatcherPanel() {
 
             <button
               onClick={optimize}
-              disabled={isOptimizing}
+              disabled={isOptimizing || !flotaCargada}
+              title={!flotaCargada ? 'Esperando la flota del servidor…' : undefined}
               className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-bold py-2.5 rounded-lg shadow transition-all text-xs disabled:opacity-60"
             >
-              <RefreshCw className={`h-3.5 w-3.5 ${isOptimizing ? 'animate-spin' : ''}`} />
-              {isOptimizing ? 'Optimizando…' : `Optimizar Rutas (turno ${horasTurno}h)`}
+              <RefreshCw className={`h-3.5 w-3.5 ${isOptimizing || !flotaCargada ? 'animate-spin' : ''}`} />
+              {!flotaCargada ? 'Cargando flota…' : isOptimizing ? 'Optimizando…' : `Optimizar Rutas (turno ${horasTurno}h)`}
             </button>
           </div>
 
@@ -614,6 +650,16 @@ export default function DispatcherPanel() {
 
           {/* Truck List */}
           <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
+            {!flotaCargada && (
+              <p className="text-[11px] text-gray-400 italic flex items-center gap-1.5 py-2">
+                <Loader className="w-3.5 h-3.5 animate-spin" /> Cargando la flota…
+              </p>
+            )}
+            {flotaCargada && !visibleTrucks.length && (
+              <p className="text-[11px] text-gray-400 italic py-2">
+                {trucks.length ? 'Ningún camión coincide con la búsqueda.' : 'No se pudo cargar la flota del servidor.'}
+              </p>
+            )}
             {visibleTrucks.map(truck => {
               const expanded = expandedTruck === truck.id;
               const tOrders = ordersOf(truck.id);
@@ -682,7 +728,7 @@ export default function DispatcherPanel() {
 
                       {/* Dispatch Controls */}
                       {(() => {
-                        const r = rutas.find(x => ID_TO_PLATE[x.camion] === truck.id || x.camion === truck.id);
+                        const r = rutas.find(x => x.camion === truck.id);
                         if (!r) return null;
                         
                         return (

@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
 from django.db import transaction
+from . import fleet
 from .models import Ruta, Remision
 from .routing_service import build_distance_time_matrices
 
@@ -27,7 +28,7 @@ MINUTOS_TURNO_MAXIMO = 6 * 60  # Turno normal de 6 h. La jornada real medida es 
 # 38 (ese día fueron 12.9 h de jornada). Si una corrida entrega rutas de ~20
 # paradas parejas, el plan va optimista — ver docs/calibracion-tiempos-osrm.md.
 # Quien acota las paradas por ruta es el turno + el tiempo de descarga + el
-# tope medido por camión (api.py:MAX_PARADAS_POR_CAMION).
+# tope medido por camión (fleet.py:max_paradas).
 PESO_ESTIMADO_KG = 150  # Fallback SOLO cuando SAP no trae peso real de línea (ver sync.py)
 # Escalón entre salidas EN EL PLAN. Va en 0 a propósito, aunque en la calle los
 # camiones sí salen separados (medido con GPS: 31 min de mediana entre uno y
@@ -40,10 +41,8 @@ PESO_ESTIMADO_KG = 150  # Fallback SOLO cuando SAP no trae peso real de línea (
 # escalón 30 → solo 67. La hora real de salida de cada camión se aplica al dar
 # "Salida" en el panel, que recalcula las ETAs (recalcular_etas_desde_salida).
 INTERVALO_SALIDA_MINUTOS = 0
-CAPACIDAD_CAMION_KG_DEFAULT = 3000  # Ruta no guarda la capacidad real del camión asignado; ver api.py:CAPACIDADES_CAMION_KG
-# Tope de paradas por ruta para un camión sin historial medido. Los topes por
-# camión (medidos con GPS) están en api.py:MAX_PARADAS_POR_CAMION.
-MAX_PARADAS_POR_RUTA_DEFAULT = 25
+# La capacidad y el tope de paradas de cada camión salen de su ficha real en
+# fleet.py, buscados por placa. Ya no hay valores "por posición" aquí.
 
 # Estados de Ruta que ya fueron despachados/en proceso físico: nunca se destruyen
 # ni recalculan al re-optimizar, para no reasignarle a otro camión un pedido que
@@ -209,42 +208,53 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords, minu
 # ==========================================
 # 3. SOLUCIONADOR PRINCIPAL (OR-TOOLS)
 # ==========================================
-def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords, horas_turno=None, hora_salida=None, max_paradas=None):
+def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None):
     """
     Resuelve el problema de ruteo de vehículos usando OR-Tools (VRPTW) sobre
     distancias/tiempos reales de calle (OSRM, evitando autopistas de cuota).
     Nunca destruye rutas ya despachadas (Cargando/Listo/En_Ruta/Finalizada).
+
+    `placas`: las placas de los camiones que el despachador tiene ACTIVOS para
+    esta corrida (ej. ["RA7475A", "PP4873A"]). Cada ruta se guarda con la placa
+    real del camión que la lleva, y su capacidad y tope de paradas salen de la
+    ficha de ESE camión (fleet.py).
+
+    Antes esto recibía solo CUÁNTOS camiones había y tomaba los primeros N de
+    una lista de capacidades. Apagar un camión y prender otro dejaba el plan
+    corriendo con la capacidad del que se apagó, sin avisar; y las rutas se
+    guardaban como "T-001", así que el historial no decía qué unidad fue.
 
     `horas_turno`: duración del turno de cada chofer para ESTA corrida (default
     6h). El despachador puede ampliarlo (ej. 7h) cuando los pedidos del día no
     caben en las rutas con el turno normal.
 
     `hora_salida` ("HH:MM"): a qué hora sale el PRIMER camión ese día (default
-    09:30, la salida real medida). Es la palanca más fuerte del plan: como las
+    09:00, la salida real medida). Es la palanca más fuerte del plan: como las
     ventanas de recibo de los clientes son horas de reloj fijas y 97 de 195
     destinos cierran antes de las 14:00, adelantar la salida una hora mete
     ~5 pedidos más, mientras que alargar el turno no mete casi ninguno.
     """
     minutos_turno = int(horas_turno * 60) if horas_turno else MINUTOS_TURNO_MAXIMO
     hora_cero = datetime.strptime(hora_salida, "%H:%M") if hora_salida else HORA_CERO
-    max_paradas = list(max_paradas) if max_paradas else [MAX_PARADAS_POR_RUTA_DEFAULT] * num_vehicles
+
     # Los camiones ya despachados hoy (Cargando/Listo/En_Ruta/Finalizada) no
-    # están disponibles para rutas NUEVAS: ya salieron con su propia carga. Si
-    # no se restan aquí, el solver intenta crear una ruta nueva por cada
-    # camión activo en el panel sin importar cuántos ya están ocupados, y al
-    # guardarlas se queda sin códigos T-00X libres e inventa uno (T-006, etc.)
-    # que no corresponde a ningún camión real de la flota.
+    # están disponibles para rutas NUEVAS: ya salieron con su propia carga. Se
+    # descartan por placa, así que el camión que se excluye es exactamente el
+    # que está en la calle — no "uno cualquiera" como cuando esto se contaba.
     camiones_congelados = set(
         Ruta.objects.filter(fecha=fecha, estado__in=ESTADOS_RUTA_CONGELADOS).values_list('camion', flat=True)
     )
-    num_vehicles = max(0, num_vehicles - len(camiones_congelados))
-    vehicle_capacities = vehicle_capacities[:num_vehicles]
-    max_paradas = max_paradas[:num_vehicles]
-    if num_vehicles == 0:
+    placas_disponibles = [p for p in placas if p not in camiones_congelados]
+    if not placas_disponibles:
         return {
             "status": "error",
-            "message": "Todos los camiones activos ya están despachados hoy. Agrega otro camión o espera a que alguno termine su ruta.",
+            "message": "Todos los camiones activos ya están despachados hoy. Activa otro camión o espera a que alguno termine su ruta.",
         }
+
+    # La capacidad y el tope de paradas siguen a la placa, no a la posición.
+    num_vehicles = len(placas_disponibles)
+    vehicle_capacities = [fleet.capacidad_kg(p) for p in placas_disponibles]
+    max_paradas = [fleet.max_paradas(p) for p in placas_disponibles]
 
     data = build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords, minutos_turno, hora_cero)
     if not data:
@@ -375,7 +385,6 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords, horas_turno
         remisiones_validas = data['remisiones_validas']
         nodos_visitados = set()
         rutas_generadas = []
-        siguiente_num_camion = 1
         for vehicle_id in range(data['num_vehicles']):
             index = routing.Start(vehicle_id)
             route_sequence = []  # lista de paradas; cada parada es una lista de remisiones
@@ -408,17 +417,17 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords, horas_turno
                 index = solution.Value(routing.NextVar(index))
 
             if route_sequence:
-                # Asignar el siguiente código de camión libre (T-00X) que no esté
-                # ya usado por una ruta congelada de este mismo día.
-                while f"T-00{siguiente_num_camion}" in camiones_congelados:
-                    siguiente_num_camion += 1
-                camion_code = f"T-00{siguiente_num_camion}"
-                siguiente_num_camion += 1
-
+                # La ruta se guarda con la PLACA del camión que la lleva. El
+                # vehículo `vehicle_id` del solver es exactamente el camión
+                # `placas_disponibles[vehicle_id]`, con cuya capacidad y tope de
+                # paradas se resolvió, así que el plan y lo guardado no pueden
+                # discrepar. El chofer se deja vacío a propósito: quién maneja no
+                # es un dato que el sistema tenga (ver docs/pendientes.md §1), y
+                # antes se inventaba un "Chofer 1" que parecía real.
                 ruta_obj = Ruta.objects.create(
                     fecha=fecha,
-                    camion=camion_code,
-                    chofer=f"Chofer {camion_code[-1]}",
+                    camion=placas_disponibles[vehicle_id],
+                    chofer='',
                     estado='Borrador'
                 )
 
@@ -601,7 +610,11 @@ def sugerir_camiones_para_remision(remision, depot_coords):
                 mejor_posicion = i  # se inserta después de la parada i (0 = después del CEDIS)
 
         peso_actual = sum((r.peso_kg if r.peso_kg else PESO_ESTIMADO_KG) for r in remisiones_ruta)
-        capacidad = CAPACIDAD_CAMION_KG_DEFAULT
+        # Capacidad REAL del camión de esta ruta. Antes se usaba un 3,000 kg
+        # parejo para toda la flota, así que al 013 (1,500 kg) se le decía que
+        # sí cabía cuando ya iba sobrecargado, y al 027 (6,000 kg) que no cabía
+        # con la mitad del camión libre.
+        capacidad = fleet.capacidad_kg(ruta.camion)
 
         # Tiempo total de la ruta si se agrega este pedido, contra el turno de
         # 6h del camión (aproximado: se asume que ya venía ajustada al turno).

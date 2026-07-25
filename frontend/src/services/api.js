@@ -39,19 +39,33 @@ export async function getRutas(fecha, { signal } = {}) {
 }
 
 /**
+ * La flota de reparto: placa, número de Samsara, modelo, capacidad, tope de
+ * paradas y color. Fuente única — el backend manda estos datos y el frontend
+ * ya no guarda su propia copia (ver backend/delivery/fleet.py).
+ */
+export async function getFlota({ signal } = {}) {
+  const res = await fetch(`${BASE}/flota`, { signal });
+  if (!res.ok) throw new Error(`Flota failed: ${res.status}`);
+  return res.json();
+}
+
+/**
  * Lanza el optimizador de rutas (OR-Tools).
  * @param {string} fecha
- * @param {number} numCamiones
+ * @param {string[]} placas — las placas de los camiones ACTIVOS en el panel.
+ *   Se mandan las placas y no un conteo: el backend saca de cada placa su
+ *   capacidad y su tope de paradas, así que apagar un camión y prender otro ya
+ *   no deja el plan corriendo con la capacidad del que se apagó.
  * @param {number} horasTurno — turno del chofer en horas (default 6). Se puede
  *   ampliar (7, 8) cuando los pedidos del día no caben con el turno normal.
  * La hora de salida no se manda: el backend usa la salida real medida con GPS,
  * y las ETAs se recalculan con la hora verdadera al despachar el camión.
  */
-export async function generarRutas(fecha, numCamiones, horasTurno = 6, { signal } = {}) {
+export async function generarRutas(fecha, placas, horasTurno = 6, { signal } = {}) {
   const res = await fetch(`${BASE}/rutas/generar`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fecha, numero_camiones: numCamiones, horas_turno: horasTurno }),
+    body: JSON.stringify({ fecha, camiones: placas, horas_turno: horasTurno }),
     signal,
   });
   if (!res.ok) throw new Error(`Generar rutas failed: ${res.status}`);

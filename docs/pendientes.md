@@ -33,14 +33,20 @@ las respuestas de arriba.
 
 ## 2. Flota y camiones
 
-- 🔴 **La identidad del camión.** La base guarda `T-001`, `T-002`… en vez de la
-  placa. Eso vuelve **inservibles los reportes históricos**: consultar Postgres
-  por lo que hizo la flota el mes pasado no dice qué camión fue, porque a qué
-  unidad correspondía cada `T-00X` dependía de cuáles estaban prendidos en el
-  navegador ese día. *(En proceso — rama `reestructura`.)*
-- 🔴 **Las capacidades se toman por posición, no por camión.** Si en el panel se
-  apaga un camión y se prende otro, el optimizador planea con la capacidad del
-  que se apagó. No avisa nada. *(En proceso — misma rama.)*
+- ✅ ~~**La identidad del camión.**~~ La ruta ya se guarda con la **placa real**.
+  Se acabó el `T-001`, y con él la traducción que hacía el frontend. Ojo: las
+  rutas guardadas **antes** de este cambio siguen diciendo `T-00X` y no hay forma
+  de saber a qué unidad correspondían (eran todas de prueba, no se perdió nada
+  real).
+- ✅ ~~**Las capacidades por posición.**~~ Al optimizar se mandan las **placas**
+  de los camiones activos, y la capacidad y el tope de paradas salen de la ficha
+  de cada uno. Verificado: apagando el 027 y prendiendo el 024, el plan usa el
+  024 con sus 25 paradas de tope, no las 29 del 027.
+- ✅ ~~**La revisión de peso al asignar a mano usaba 3,000 kg para todos.**~~
+  Ahora usa la capacidad real de la unidad de esa ruta.
+- 🟡 **El chofer sigue viviendo solo en el navegador** y se borra al recargar
+  (ver §1). La ruta ya no guarda el "Chofer 1" inventado: guarda vacío, que es
+  la verdad.
 - 🟡 **Confirmar capacidades contra la tarjeta de circulación.** Hoy salen del
   VIN que reporta Samsara contra la ficha de Isuzu México. Los 8 VIN están en
   [`flota.md` §6](flota.md). Ojo con el **013**: se tenía como 2 ton y el VIN

@@ -1,11 +1,11 @@
 from ninja import NinjaAPI, Schema
 from typing import List, Optional
 from datetime import date, datetime
+from . import fleet
 from .models import Remision, Ruta
 from .optimizer import (
     solve_vrp, sugerir_camiones_para_remision, asignar_manualmente,
-    recalcular_etas_desde_salida, CAPACIDAD_CAMION_KG_DEFAULT,
-    MAX_PARADAS_POR_RUTA_DEFAULT,
+    recalcular_etas_desde_salida,
 )
 from .sync import sync_from_sap
 from .test_data import cargar_pedidos_prueba
@@ -13,49 +13,9 @@ from .samsara_service import get_ubicaciones_isuzu
 
 api = NinjaAPI(title="Laben Routing API", version="1.0.0")
 
-# Capacidades promedio en KG por camión y coordenadas de salida del CEDIS.
-# Únicas en todo el backend (frontend/src/config/fleet.js mantiene su propia
-# copia de CEDIS solo para centrar el mapa, no para el cálculo de rutas).
-# Orden = mismo orden que FLEET/ID_TO_PLATE en fleet.js (T-001..T-008 = los 8
-# camiones ISUZU de reparto reales: 012, 013, 015, 016, 017, 023, 024, 027).
-# Capacidad de carga útil por camión, según la ficha técnica de Isuzu México
-# para el modelo EXACTO de cada unidad. El modelo sale del VIN que reporta
-# Samsara (en los VIN no se usa la letra Q, por eso NQR aparece como "N1R"):
-#   NLR -> ELF 100         = 1,500 kg
-#   NKR -> ELF 200         = 2,000 kg
-#   NPR -> ELF 400/500     = 3,500 kg (rango 3,000-5,000; se toma el bajo para
-#                            no arriesgar sobrecarga hasta confirmar la caja)
-#   NQR -> ELF 600         = 6,000 kg
-# Pendiente afinar con la tarjeta de circulación de cada unidad — al hacerlo se
-# actualiza esta lista y FLEET en frontend/src/config/fleet.js (mismo orden).
-# Orden = ranking de uso real (km GPS Samsara 60 días, ver docs/flota.md): el
-# optimizador usa primero los camiones que de verdad operan.
-CAPACIDADES_CAMION_KG = [
-    6000,  # T-001 = 027 RA7475A  NQR / ELF 600     2022  (el más usado)
-    3500,  # T-002 = 023 PP4873A  NPR / ELF 400/500 2020
-    6000,  # T-003 = 017 PR6889B  NQR / ELF 600     2017
-    2000,  # T-004 = 016 RJ97892  NKR / ELF 200     2016
-    1500,  # T-005 = 013 RJ37663  NLR / ELF 100     2015
-    3500,  # T-006 = 024 PP4872A  NPR / ELF 400/500 2018  (parado desde 14-jul)
-    2000,  # T-007 = 015 RJ57620  NKR / ELF 200     2016  (2 meses sin operar)
-    3500,  # T-008 = 012 RH83800  NPR / ELF 400/500 2014  (2 meses sin operar)
-]
-
-# Tope de paradas por ruta, medido con GPS: es el máximo de entregas que cada
-# camión ha hecho realmente en un día. Sirve de tope práctico mientras SAP no
-# mande el peso real de cada pedido (sin SAP, la restricción de kilos usa un
-# peso estimado y no es confiable; las paradas sí están medidas).
-MAX_PARADAS_POR_CAMION = [
-    29,  # T-001 = 027 (promedio 16.6/día)
-    30,  # T-002 = 023 (promedio 17.9/día; llegó a 38 en una jornada de 12.9 h)
-    24,  # T-003 = 017 (promedio 11.8/día)
-    29,  # T-004 = 016 (promedio 18.0/día)
-    19,  # T-005 = 013 (promedio 11.9/día)
-    25,  # T-006 = 024 (sin datos suficientes: se usa el típico de su tamaño)
-    25,  # T-007 = 015 (sin datos)
-    25,  # T-008 = 012 (sin datos)
-]
-DEPOT_COORDS = (25.693214524592616, -100.48167993202988)
+# La flota (placas, capacidades, topes de paradas) y el CEDIS viven en fleet.py,
+# que es la única fuente de verdad y la que el frontend consume por API.
+DEPOT_COORDS = fleet.CEDIS
 
 # Transiciones válidas del flujo de despacho: no se puede saltar pasos
 # (ej. de Borrador directo a En_Ruta) llamando la API directo sin pasar por UI.
@@ -138,7 +98,11 @@ def cargar_prueba_endpoint(request, payload: CargarPruebaIn):
 # 3. Optimizar Rutas usando OR-Tools
 class GenerarRutasIn(Schema):
     fecha: date
-    numero_camiones: int
+    # Placas de los camiones que el despachador tiene ACTIVOS en el panel
+    # (ej. ["RA7475A", "PP4873A"]). Antes esto era un simple conteo y el backend
+    # tomaba los primeros N de una lista fija, así que apagar un camión y
+    # prender otro planeaba con la capacidad del que se apagó.
+    camiones: List[str]
     # Turno del chofer en horas para esta corrida. Default 6h (turno oficial);
     # el despachador puede ampliarlo (6.5h, 7h, 8h) cuando los pedidos no
     # caben — la jornada real medida con GPS llega a 6.7h promedio. Acotado a
@@ -158,27 +122,27 @@ def generar_rutas(request, payload: GenerarRutasIn):
         datetime.strptime(payload.hora_salida, "%H:%M")
     except ValueError:
         return {"status": "error", "message": "Hora de salida inválida. Usa el formato HH:MM (ej. 09:30)."}
-    # Si piden más camiones de los que hay capacidad configurada (ej. se agregó
-    # un 6to camión desde el panel), se completa con el valor conservador por
-    # default en vez de tronar — hasta que se confirme su capacidad real.
-    vehicle_capacities = [
-        CAPACIDADES_CAMION_KG[i] if i < len(CAPACIDADES_CAMION_KG) else CAPACIDAD_CAMION_KG_DEFAULT
-        for i in range(payload.numero_camiones)
-    ]
-    max_paradas = [
-        MAX_PARADAS_POR_CAMION[i] if i < len(MAX_PARADAS_POR_CAMION) else MAX_PARADAS_POR_RUTA_DEFAULT
-        for i in range(payload.numero_camiones)
-    ]
+    if not payload.camiones:
+        return {"status": "error", "message": "Activa al menos un camión antes de optimizar."}
+
+    # Un camión agregado a mano desde el panel no está en la flota conocida:
+    # entra a la corrida con capacidad y tope conservadores (fleet.py), pero se
+    # avisa, porque el plan que salga para ese camión es una estimación.
+    desconocidos = [p for p in payload.camiones if not fleet.datos(p)]
 
     res = solve_vrp(
         fecha=payload.fecha,
-        num_vehicles=payload.numero_camiones,
-        vehicle_capacities=vehicle_capacities,
-        max_paradas=max_paradas,
+        placas=payload.camiones,
         depot_coords=DEPOT_COORDS,
         horas_turno=horas_turno,
         hora_salida=payload.hora_salida,
     )
+    if desconocidos and res.get("status") == "success":
+        res["message"] += (
+            f" Ojo: {', '.join(desconocidos)} no está(n) en la flota registrada, "
+            f"así que se planeó con capacidad estimada de {fleet.CAPACIDAD_KG_DESCONOCIDO} kg "
+            f"y {fleet.MAX_PARADAS_DESCONOCIDO} paradas."
+        )
     return res
 
 # 4. Obtener rutas activas del día
@@ -198,6 +162,24 @@ def get_rutas(request, fecha: date):
             "hora_salida": r.hora_salida.strftime("%I:%M %p") if r.hora_salida else None,
         })
     return result
+
+# 4a. La flota de reparto. El frontend la pide al abrir el panel en vez de
+# mantener su propia copia de capacidades y topes de paradas, que era lo que
+# obligaba a editar dos archivos en el mismo orden cada vez que se confirmaba un
+# dato de un camión.
+class CamionOut(Schema):
+    placa: str
+    samsara: str
+    modelo: str
+    anio: int
+    capacidad_kg: int
+    max_paradas: int
+    activo_default: bool
+    color: str
+
+@api.get("/dispatcher/flota", response=List[CamionOut])
+def get_flota(request):
+    return fleet.CAMIONES
 
 # 4b. Ubicación en vivo de los camiones ISUZU de reparto (GPS real vía Samsara).
 # Solo lectura: si Samsara no está configurado o falla, regresa lista vacía en

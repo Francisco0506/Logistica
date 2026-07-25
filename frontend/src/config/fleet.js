@@ -1,52 +1,27 @@
 /**
- * Configuración de flota de Laben Food Service.
- * Fuente única de verdad para datos de camiones y CEDIS.
+ * Configuración de Laben Food Service que el frontend necesita antes de hablar
+ * con el backend.
+ *
+ * OJO: aquí ya NO vive la flota. Los camiones (placa, número de Samsara,
+ * modelo, capacidad, tope de paradas, color, si arranca activo) vienen del
+ * backend con `getFlota()` — la fuente única es backend/delivery/fleet.py.
+ *
+ * Antes había aquí una copia completa de la flota que tenía que coincidir a
+ * mano, y en el mismo orden, con una lista de capacidades del backend. Eso
+ * causaba que confirmar el dato de un camión obligara a editar dos archivos, y
+ * que el panel pudiera mostrar una capacidad distinta de la que el optimizador
+ * usaba para planear. También había un mapa T-001 -> placa, que ya no existe:
+ * el backend guarda y devuelve la placa real.
  */
 
-// Coordenadas exactas de salida de los camiones (CEDIS Santa Catarina)
+// Coordenadas del CEDIS (Santa Catarina). Se quedan del lado del frontend
+// porque se ocupan para centrar el mapa ANTES de que responda el backend; el
+// cálculo de rutas usa las del backend (fleet.py:CEDIS, el mismo punto).
 export const CEDIS = [25.693214524592616, -100.48167993202988];
 
-// Mapeo Backend T-00X → Placa del frontend (mismo orden que FLEET)
-export const ID_TO_PLATE = {
-  'T-001': 'RA7475A',
-  'T-002': 'PP4873A',
-  'T-003': 'PR6889B',
-  'T-004': 'RJ97892',
-  'T-005': 'RJ37663',
-  'T-006': 'PP4872A',
-  'T-007': 'RJ57620',
-  'T-008': 'RH83800',
-};
-
-// Datos base de los 8 camiones ISUZU de reparto reales (placa y nombre real de
-// Samsara — mismo criterio que backend/delivery/samsara_service.py). Los
-// Nissan/Hino/Freightliner y los 4 vehículos de vendedores quedan fuera, no
-// son de reparto. `driver` queda vacío: el chofer se captura a mano desde el
-// panel cuando haga falta (no hay roster fijo). La posición en el mapa es
-// SOLO la capa verde de GPS real (Samsara) — aquí no se guardan posiciones.
-// `capacidadKg` es la carga útil ESTIMADA por modelo (ficha Isuzu México),
-// pendiente de confirmar con la tarjeta de circulación de cada unidad — debe
-// coincidir con CAPACIDADES_CAMION_KG en backend/delivery/api.py (mismo orden).
-// ORDEN = ranking de uso real (km GPS Samsara, últimos 60 días al 18-jul-2026,
-// ver docs/flota.md): los que más salen hasta arriba. Así el panel
-// muestra primero los camiones que de verdad trabajan, y el optimizador los
-// usa en ese mismo orden. 015 y 012 (últimos) llevan 2 meses sin operar.
-// `activo: false` = los que casi no salen (ver días trabajados en 30 días:
-// 024 salió 1 día, 015 tres días con 9 km, 012 ninguno). Arrancan apagados
-// para no meterlos en la optimización por default — se activan con un clic
-// desde el panel el día que se ocupen.
-// `modelo`/`capacidadKg` salen del modelo EXACTO de cada unidad, sacado del VIN
-// que reporta Samsara (NLR = ELF 100, NKR = ELF 200, NPR = ELF 400/500,
-// NQR = ELF 600) contra la ficha técnica de Isuzu México. `maxParadas` es el
-// récord real de entregas en un día medido con GPS: es el tope práctico
-// mientras SAP no mande el peso real de los pedidos. Ver docs/flota.md.
-export const FLEET = [
-  { id: 'RA7475A', samsara: '027', modelo: 'ELF 600', capacidadKg: 6000, maxParadas: 29, activo: true, driver: '', route: 'Sin ruta asignada', color: '#06b6d4' },
-  { id: 'PP4873A', samsara: '023', modelo: 'ELF 400/500', capacidadKg: 3500, maxParadas: 30, activo: true, driver: '', route: 'Sin ruta asignada', color: '#ec4899' },
-  { id: 'PR6889B', samsara: '017', modelo: 'ELF 600', capacidadKg: 6000, maxParadas: 24, activo: true, driver: '', route: 'Sin ruta asignada', color: '#8b5cf6' },
-  { id: 'RJ97892', samsara: '016', modelo: 'ELF 200', capacidadKg: 2000, maxParadas: 29, activo: true, driver: '', route: 'Sin ruta asignada', color: '#10b981' },
-  { id: 'RJ37663', samsara: '013', modelo: 'ELF 100', capacidadKg: 1500, maxParadas: 19, activo: true, driver: '', route: 'Sin ruta asignada', color: '#D92525' },
-  { id: 'PP4872A', samsara: '024', modelo: 'ELF 400/500', capacidadKg: 3500, maxParadas: 25, activo: false, driver: '', route: 'Sin ruta asignada', color: '#eab308' },
-  { id: 'RJ57620', samsara: '015', modelo: 'ELF 200', capacidadKg: 2000, maxParadas: 25, activo: false, driver: '', route: 'Sin ruta asignada', color: '#3b82f6' },
-  { id: 'RH83800', samsara: '012', modelo: 'ELF 400/500', capacidadKg: 3500, maxParadas: 25, activo: false, driver: '', route: 'Sin ruta asignada', color: '#F27A18' },
+// Colores para camiones que el despachador agrega a mano y que por lo tanto no
+// traen color asignado desde el backend.
+export const PALETA_COLORES_CAMION = [
+  '#F27A18', '#D92525', '#3b82f6', '#10b981',
+  '#8b5cf6', '#ec4899', '#eab308', '#06b6d4',
 ];
