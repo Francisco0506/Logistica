@@ -355,6 +355,11 @@ class PedidoVentasOut(Schema):
     eta_desde: Optional[str] = None
     eta_hasta: Optional[str] = None
     camion: Optional[str] = None
+    # Para ubicar el pedido en el mapa del panel de ventas. `null` cuando SAP no
+    # trae la coordenada del cliente — en ese caso el pedido tampoco se puede
+    # rutear, y la situación ya lo explica.
+    lat: Optional[float] = None
+    lng: Optional[float] = None
     # Explicación en lenguaje de vendedora de qué está pasando con su pedido.
     situacion: str
     # True cuando el pedido ya tiene lugar en una ruta del día.
@@ -423,6 +428,8 @@ def get_pedidos_vendedor(request, fecha: date, slp_code: str):
             "camion": camion,
             "situacion": situacion,
             "programado": bool(camion),
+            "lat": None if sin_geo else r.destino.latitude,
+            "lng": None if sin_geo else r.destino.longitude,
         })
     return resultado
 

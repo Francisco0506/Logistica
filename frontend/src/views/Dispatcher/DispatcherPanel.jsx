@@ -65,12 +65,16 @@ export default function DispatcherPanel() {
 
   // ── Interfaz ──
   const [isPanelOpen, setIsPanelOpen]   = useState(true);
+  // Cuatro pestañas al mismo nivel. Antes "Manifiesto" vivía como sub-pestaña
+  // dentro de "Pedidos", así que llegar a él costaba dos clics y no se veía
+  // que existiera hasta entrar.
   const [sidebarTab, setSidebarTab]     = useState('camiones');
-  const [activeTab, setActiveTab]       = useState('pedidos');
   const [searchQuery, setSearchQuery]   = useState('');
   const [orderFilter, setOrderFilter]   = useState('todos');
   const [orderSearch, setOrderSearch]   = useState('');
-  const [expandedTruck, setExpandedTruck] = useState(null);
+  // Varios camiones abiertos a la vez. Antes solo cabía uno: comparar dos rutas
+  // obligaba a cerrar una para abrir la otra, y volver a buscarla en la lista.
+  const [expandedTrucks, setExpandedTrucks] = useState(() => new Set());
   const [focusedCoords, setFocusedCoords] = useState(CEDIS);
 
   // ── Optimización y despacho ──
@@ -321,10 +325,21 @@ export default function DispatcherPanel() {
     }
   };
 
-  // Ancho del panel según la pestaña: la tabla de pedidos necesita más espacio
-  // que la lista de camiones. El mapa toma el resto.
-  const anchoPanel = sidebarTab === 'pedidos' ? 'w-[720px]' : 'w-[400px]';
-  const margenCerrado = sidebarTab === 'pedidos' ? '-ml-[720px]' : '-ml-[400px]';
+  const alternarCamion = (placa) =>
+    setExpandedTrucks((prev) => {
+      const siguiente = new Set(prev);
+      if (siguiente.has(placa)) siguiente.delete(placa);
+      else siguiente.add(placa);
+      return siguiente;
+    });
+
+  // El panel se lleva casi la mitad de la pantalla en vez de una franja fija de
+  // 400 px: el mapa se estaba comiendo dos tercios y la información quedaba
+  // apretada en un rincón. Va en porcentaje para que aproveche pantallas
+  // grandes, con topes para que no se deforme en las chicas ni en las enormes.
+  const anchoPanel = sidebarTab === 'pedidos' || sidebarTab === 'manifiesto'
+    ? 'w-[52%] min-w-[560px] max-w-[900px]'
+    : 'w-[42%] min-w-[420px] max-w-[680px]';
 
   return (
     <div className="flex flex-col h-screen w-full bg-gray-50 text-gray-800 overflow-hidden" style={{ fontFamily: "'Inter', sans-serif" }}>
@@ -339,27 +354,29 @@ export default function DispatcherPanel() {
       />
 
       <div className="flex-1 flex min-h-0 relative">
-        <aside className={`relative bg-white border-r border-gray-200 flex flex-col flex-shrink-0 transition-all duration-300 z-10 ${
-          isPanelOpen ? 'ml-0' : margenCerrado
-        } ${anchoPanel}`}>
-
-          {/* Pestañas */}
+        <aside
+          className={`relative bg-white border-r border-gray-200 flex flex-col flex-shrink-0 transition-all duration-300 z-10 overflow-hidden ${
+            isPanelOpen ? anchoPanel : 'w-0 min-w-0'
+          }`}
+        >
+          {/* Pestañas — las cuatro al mismo nivel */}
           <div className="flex items-stretch border-b border-gray-200 flex-shrink-0">
             {[
               { id: 'camiones', icono: Truck, texto: 'Camiones', badge: camionesActivos.length, color: 'orange' },
               { id: 'alertas', icono: AlertCircle, texto: 'Sin asignar', badge: alertas.length || null, color: 'red' },
               { id: 'pedidos', icono: Package, texto: 'Pedidos', badge: null, color: 'orange' },
+              { id: 'manifiesto', icono: FileText, texto: 'Manifiesto', badge: null, color: 'orange' },
             ].map(({ id, icono: Icono, texto, badge, color }) => (
               <button
                 key={id}
                 onClick={() => setSidebarTab(id)}
-                className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-3 text-xs font-bold transition border-b-2 ${
+                className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-3 text-xs font-bold transition border-b-2 whitespace-nowrap ${
                   sidebarTab === id
                     ? color === 'red' ? 'text-red-600 border-red-500 bg-red-50/50' : 'text-orange-600 border-orange-500 bg-orange-50/50'
                     : 'text-gray-400 border-transparent hover:text-gray-600 hover:bg-gray-50'
                 }`}
               >
-                <Icono className="h-4 w-4" /> {texto}
+                <Icono className="h-4 w-4 flex-shrink-0" /> {texto}
                 {badge != null && (
                   <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
                     color === 'red' ? 'bg-red-100 text-red-700' : 'bg-white text-gray-500 border border-gray-200'
@@ -508,9 +525,9 @@ export default function DispatcherPanel() {
                     camion={truck}
                     ruta={rutaDe(truck.id)}
                     paradas={ordersOf(truck.id)}
-                    abierto={expandedTruck === truck.id}
+                    abierto={expandedTrucks.has(truck.id)}
                     cambiandoEstado={cambiandoEstado === truck.id}
-                    onAbrir={() => setExpandedTruck(expandedTruck === truck.id ? null : truck.id)}
+                    onAbrir={() => alternarCamion(truck.id)}
                     onToggleActivo={() => toggleTruck(truck.id)}
                     onCambiarChofer={(d) => changeDriver(truck.id, d)}
                     onCambiarEstado={(estado) => changeTruckState(truck.id, estado)}
@@ -536,37 +553,21 @@ export default function DispatcherPanel() {
             />
           )}
 
-          {/* ── PEDIDOS / MANIFIESTO ── */}
+          {/* ── PEDIDOS ── */}
           {sidebarTab === 'pedidos' && (
-            <div className="flex-1 flex flex-col min-h-0">
-              <div className="flex items-center gap-1 px-3 pt-3 flex-shrink-0">
-                {[
-                  { id: 'pedidos', icono: Package, texto: 'Pedidos del Día' },
-                  { id: 'manifiesto', icono: FileText, texto: 'Manifiesto' },
-                ].map(({ id, icono: Icono, texto }) => (
-                  <button
-                    key={id}
-                    onClick={() => setActiveTab(id)}
-                    className={`flex items-center gap-1.5 px-3 py-2 rounded-t-lg text-xs font-bold transition ${
-                      activeTab === id ? 'bg-white border border-b-0 border-gray-200 text-orange-600' : 'text-gray-400 hover:text-gray-600'
-                    }`}
-                  >
-                    <Icono className="h-3.5 w-3.5" /> {texto}
-                  </button>
-                ))}
-              </div>
-
-              {activeTab === 'pedidos' ? (
-                <TablaPedidos
-                  pedidos={visibleOrders}
-                  filtro={orderFilter} onFiltro={setOrderFilter}
-                  busqueda={orderSearch} onBusqueda={setOrderSearch}
-                  colorDe={colorOf} onEnfocar={focus}
-                />
-              ) : (
-                <Manifiesto camionesActivos={camionesActivos} paradasDe={ordersOf} />
-              )}
+            <div className="flex-1 flex flex-col min-h-0 pt-3">
+              <TablaPedidos
+                pedidos={visibleOrders}
+                filtro={orderFilter} onFiltro={setOrderFilter}
+                busqueda={orderSearch} onBusqueda={setOrderSearch}
+                colorDe={colorOf} onEnfocar={focus}
+              />
             </div>
+          )}
+
+          {/* ── MANIFIESTO ── */}
+          {sidebarTab === 'manifiesto' && (
+            <Manifiesto camionesActivos={camionesActivos} paradasDe={ordersOf} />
           )}
         </aside>
 

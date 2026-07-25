@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, LogOut, User, RefreshCw, Truck, CheckCircle2, Package, AlertCircle } from 'lucide-react';
+import { Search, LogOut, User, RefreshCw, Truck, CheckCircle2, Package, AlertCircle, Map as MapIcon, List } from 'lucide-react';
 import LabenLogo from '../../components/LabenLogo';
-import { getVendedores, getPedidosVendedor } from '../../services/api';
+import { getVendedores, getPedidosVendedor, getCamionesGPS } from '../../services/api';
 import TarjetaPedido from './components/TarjetaPedido';
+import MapaPedidos from './components/MapaPedidos';
 
 // Se refresca solo para que la vendedora no tenga que recargar mientras le
 // contesta a un cliente por teléfono.
@@ -33,6 +34,8 @@ export default function SalesPanel() {
   const [busqueda, setBusqueda]     = useState('');
   const [cargando, setCargando]     = useState(true);
   const [error, setError]           = useState(null);
+  const [camionesGPS, setCamionesGPS] = useState([]);
+  const [verMapa, setVerMapa]       = useState(true);
 
   // ── Vendedores del día ──
   // El selector es temporal: hoy el login no valida nada, así que no hay forma
@@ -70,6 +73,21 @@ export default function SalesPanel() {
     const interval = setInterval(traer, REFRESH_INTERVAL_MS);
     return () => { controller.abort(); clearInterval(interval); };
   }, [fecha, slpCode]);
+
+  // ── Camiones en vivo (Samsara) ──
+  // Aparte de los pedidos: si Samsara falla, la lista debe seguir funcionando.
+  // Se refresca más seguido que los pedidos porque es lo que se mueve.
+  useEffect(() => {
+    const controller = new AbortController();
+    const traerGPS = () => {
+      getCamionesGPS({ signal: controller.signal })
+        .then(setCamionesGPS)
+        .catch((e) => { if (e.name !== 'AbortError') console.error('GPS:', e); });
+    };
+    traerGPS();
+    const interval = setInterval(traerGPS, 30_000);
+    return () => { controller.abort(); clearInterval(interval); };
+  }, []);
 
   const vendedor = vendedores.find((v) => v.slp_code === slpCode);
 
@@ -158,22 +176,35 @@ export default function SalesPanel() {
           </div>
         </div>
 
-        {/* ── Buscador ── */}
-        <div className="bg-white rounded-xl border border-slate-200 px-4 py-3 flex items-center focus-within:ring-2 focus-within:ring-orange-200 transition">
-          <Search className="text-slate-400 w-4 h-4 mr-3 flex-shrink-0" />
-          <input
-            type="text"
-            placeholder="Buscar por cliente o número de remisión…"
-            className="w-full text-sm outline-none text-slate-700 bg-transparent"
-            value={busqueda}
-            onChange={(e) => setBusqueda(e.target.value)}
-          />
-          {busqueda && (
-            <button onClick={() => setBusqueda('')} className="text-[11px] font-bold text-slate-400 hover:text-slate-600 ml-2">
-              Limpiar
-            </button>
-          )}
+        {/* ── Buscador + interruptor del mapa ── */}
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex-1 bg-white rounded-xl border border-slate-200 px-4 py-3 flex items-center focus-within:ring-2 focus-within:ring-orange-200 transition">
+            <Search className="text-slate-400 w-4 h-4 mr-3 flex-shrink-0" />
+            <input
+              type="text"
+              placeholder="Buscar por cliente o número de remisión…"
+              className="w-full text-sm outline-none text-slate-700 bg-transparent"
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+            />
+            {busqueda && (
+              <button onClick={() => setBusqueda('')} className="text-[11px] font-bold text-slate-400 hover:text-slate-600 ml-2">
+                Limpiar
+              </button>
+            )}
+          </div>
+          <button
+            onClick={() => setVerMapa((v) => !v)}
+            className="flex items-center justify-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 rounded-xl px-4 py-3 text-xs font-bold text-slate-600 transition flex-shrink-0"
+          >
+            {verMapa ? <><List className="w-4 h-4" /> Ocultar mapa</> : <><MapIcon className="w-4 h-4" /> Ver en el mapa</>}
+          </button>
         </div>
+
+        {/* ── Mapa: dónde están los clientes y por dónde va el camión ── */}
+        {verMapa && !!pedidos.length && (
+          <MapaPedidos pedidos={filtrados} camionesGPS={camionesGPS} />
+        )}
 
         {/* ── Estados ── */}
         {error && (

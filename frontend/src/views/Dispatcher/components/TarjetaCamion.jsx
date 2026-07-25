@@ -18,6 +18,11 @@ export default function TarjetaCamion({
   onCambiarEstado,
   onEnfocar,
 }) {
+  const entregadas = paradas.filter((o) => o.estado === 'Entregado').length;
+  const porcentajeEntregado = paradas.length ? (entregadas / paradas.length) * 100 : 0;
+  // La próxima parada es la primera que todavía no se entrega.
+  const proxima = paradas.find((o) => o.estado !== 'Entregado');
+
   return (
     <div className={`rounded-lg border overflow-hidden transition-all ${
       camion.active ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'
@@ -53,6 +58,7 @@ export default function TarjetaCamion({
           </span>
         )}
 
+
         <button
           onClick={(e) => { e.stopPropagation(); onToggleActivo(); }}
           className={`p-1.5 rounded-lg border transition flex-shrink-0 ${
@@ -69,6 +75,41 @@ export default function TarjetaCamion({
           ? <ChevronUp className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
           : <ChevronDown className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />)}
       </div>
+
+      {/* Avance SIN tener que abrir la tarjeta: cuántas entregó, en qué estado
+          va la ruta y cuál es la próxima parada. Antes había que expandir cada
+          camión, uno por uno, solo para saber cómo iba. */}
+      {camion.active && !abierto && paradas.length > 0 && (
+        <div className="px-3 pb-2.5 -mt-1 space-y-1.5">
+          <div className="flex items-center gap-2">
+            <div className="flex-1 h-1 bg-gray-100 rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all"
+                style={{ width: `${porcentajeEntregado}%`, backgroundColor: camion.color }}
+              />
+            </div>
+            <span className="text-[9px] font-bold text-gray-400 tabular-nums flex-shrink-0">
+              {entregadas}/{paradas.length}
+            </span>
+            {ruta && (
+              <span className={`text-[8px] font-bold uppercase px-1.5 py-0.5 rounded flex-shrink-0 ${
+                ruta.estado === 'En_Ruta' ? 'bg-blue-50 text-blue-700'
+                : ruta.estado === 'Finalizada' ? 'bg-emerald-50 text-emerald-700'
+                : ruta.estado === 'Borrador' ? 'bg-gray-100 text-gray-500'
+                : 'bg-orange-50 text-orange-700'
+              }`}>
+                {ruta.estado.replace('_', ' ')}
+              </span>
+            )}
+          </div>
+          {proxima && (
+            <div className="text-[9px] text-gray-500 truncate">
+              <span className="font-bold text-gray-400">Sigue:</span> {proxima.card_name}
+              {proxima.eta && <span className="text-gray-400"> · {proxima.eta}</span>}
+            </div>
+          )}
+        </div>
+      )}
 
       {abierto && camion.active && (
         <div className="border-t border-gray-100 bg-gray-50/60 px-4 py-3 space-y-3 text-xs">
