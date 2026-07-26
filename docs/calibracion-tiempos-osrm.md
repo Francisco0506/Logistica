@@ -207,6 +207,122 @@ factor de la sección siguiente.
 
 ---
 
+## Re-medición del 26-jul-2026 (con la API de Samsara)
+
+Se volvió a medir de cero, ahora contra el historial de GPS de Samsara en vez de
+las constantes ya guardadas. **Confirma el sesgo y lo agranda un poco.**
+
+### Lo real, medido con 45,825 lecturas de GPS
+
+Siete días, los 4 ISUZU que operaron, solo lecturas **en movimiento** (>5 km/h),
+que es la comparación correcta contra el tiempo de manejo de OSRM:
+
+| Camión | Promedio | Mediana | **Efectiva** (km ÷ h en movimiento) |
+|--------|---------:|--------:|------------------------------------:|
+| 013 | 38.4 | 35.4 | **36.6** (657 km / 17.9 h) |
+| 017 | 42.5 | 41.8 | **40.6** (560 km / 13.8 h) |
+| 023 | 42.9 | 39.0 | **40.6** (793 km / 19.5 h) |
+| 027 | 46.0 | 44.0 | **42.3** (941 km / 22.3 h) |
+| **Flota** | **42.7** | **40.0** | **~40** |
+
+La "efectiva" es la que importa: kilómetros recorridos entre horas de manejo. Es
+exactamente lo que OSRM pretende predecir.
+
+### Lo que dice OSRM hoy
+
+24 rutas CEDIS → cliente, destinos reales tomados al azar del padrón:
+
+```
+601 km en 672 min  ->  53.7 km/h
+```
+
+### El factor
+
+| | |
+|---|---:|
+| OSRM implica | **53.7 km/h** |
+| Real, velocidad promedio | **42.7 km/h** → factor **1.26** |
+| Real, velocidad efectiva | **~40 km/h** → factor **1.34** |
+
+**El factor está entre 1.25 y 1.35. Punto medio: 1.3.**
+
+La medición vieja (1.25) se queda corta. La diferencia entre 1.26 y 1.34 es que
+la velocidad efectiva usa distancia en línea entre puntos GPS, que subestima un
+poco los kilómetros de curva — o sea que el factor real tira más hacia arriba
+que hacia abajo.
+
+### Cómo aplicarlo
+
+Un solo lugar: `routing_service.build_distance_time_matrices`.
+
+```python
+# Antes
+time_matrix_min = [[int(d / 60) for d in row] for row in durations_s]
+
+# Después
+FACTOR_TRAFICO_REAL = 1.3
+time_matrix_min = [[round(d * FACTOR_TRAFICO_REAL / 60) for d in row] for row in durations_s]
+```
+
+Dos cambios, no uno:
+
+1. **El factor 1.3.**
+2. **`round` en vez de `int`.** `int()` trunca hacia abajo, así que cada tramo
+   pierde hasta 59 segundos. Con 20 paradas son hasta 20 minutos regalados, en
+   la misma dirección optimista.
+
+Lo agarran solos el plan, el recálculo al dar Salida y el sugeridor manual,
+porque los tres pasan por esa función.
+
+### Qué esperar al aplicarlo
+
+**Las rutas van a traer menos paradas, y eso es lo correcto.** Con los pedidos
+del 25-jul el plan daba **27 paradas** a un camión; el récord real de esa unidad
+medido con GPS es **29 en un día de 12.9 h**, y su promedio es 16.6.
+
+La prueba de que quedó bien calibrado: que el plan dé **15-18 paradas por
+camión**, no 25-27.
+
+### Sigue pendiente
+
+**Re-medir con el OSRM propio.** Los 53.7 km/h salieron del servidor público con
+el perfil de coche por defecto. Un OSRM propio, con otro perfil o evitando
+autopistas de verdad, va a dar tiempos distintos y el 1.3 dejaría de ser el
+número correcto. El procedimiento de medición queda arriba para repetirlo.
+
+---
+
+## La hora de salida no es 09:00 (medido el 26-jul-2026)
+
+Aparte del sesgo de velocidad, salió algo más grande. El sistema planea con
+`HORA_CERO = 09:00`, y las salidas reales del CEDIS de los últimos días fueron:
+
+| Día | Primera salida | Detalle por camión |
+|-----|---------------:|--------------------|
+| 22-jul | **13:49** | 023 13:49 · 027 13:49 · 013 13:50 · 017 14:17 |
+| 23-jul | 09:25 | 027 09:25 · 023 09:26 · 013 10:25 · 017 11:57 |
+| 24-jul | **07:11** | 027 07:11 · 023 09:19 · 013 09:49 |
+| 25-jul | **07:03** | 013 07:03 · 023 08:55 |
+
+**De 07:03 a 13:49.** No es una variación de minutos alrededor de las 9: es de
+casi siete horas entre el día más temprano y el más tarde.
+
+Y dentro del mismo día los camiones se separan mucho: el 23-jul el primero salió
+09:25 y el último 11:57, **dos horas y media después**.
+
+Eso vuelve discutible planear todo con una hora fija. Dos consecuencias:
+
+- Las ETAs del plan pueden estar horas lejos antes de que el camión salga. Ya se
+  mitiga: al dar "Salida" se recalculan con la hora real.
+- **Las ventanas de recibo se evalúan contra una hora que puede no tener nada
+  que ver con la realidad**, así que el optimizador acepta o rechaza pedidos por
+  una razón equivocada. Eso NO está mitigado.
+
+Lo correcto sería tomar la hora de salida de Samsara —o al menos que el
+despachador la capture por camión— en vez de una constante para toda la flota.
+
+---
+
 ## Corrección propuesta (pendiente de aplicar)
 
 No tirar OSRM, sino **calibrarlo** con lo que ya se midió: aplicar un factor de
