@@ -178,8 +178,13 @@ export default function TarjetaCamion({
             ) : <span className="text-emerald-600 font-bold">Todo entregado</span>}
 
             {duracionTexto && (
-              <span className="text-gray-400 flex-shrink-0 tabular-nums" title={`De ${inicioRuta} a ${finRuta}`}>
-                {inicioRuta}–{finRuta} · {duracionTexto}
+              <span
+                className={`flex-shrink-0 tabular-nums ${ruta?.hora_salida ? 'text-gray-500' : 'text-gray-400 italic'}`}
+                title={ruta?.hora_salida
+                  ? `Horas recalculadas desde la salida real (${ruta.hora_salida})`
+                  : 'Horas del PLAN: suponen que este camión sale a la hora configurada. Se recalculan solas al dar Salida.'}
+              >
+                {!ruta?.hora_salida && '~'}{inicioRuta}–{finRuta} · {duracionTexto}
               </span>
             )}
           </div>

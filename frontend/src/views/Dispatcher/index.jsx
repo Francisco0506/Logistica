@@ -439,6 +439,13 @@ export default function DispatcherPanel() {
           <div className="flex items-center gap-2 text-[11px] text-gray-500 -mt-2 px-1">
             <Clock className="w-3.5 h-3.5 text-gray-400" />
             <span>Plan generado a las <b className="text-gray-700">{planGenerado}</b>.</span>
+            {/* Las horas del plan suponen que TODOS los camiones salen a la
+                misma hora, que no es lo que pasa en la calle: medido con GPS,
+                entre una salida y otra hay ~31 min de mediana. La hora real de
+                cada camión entra al dar "Salida", que recalcula sus ETAs. */}
+            <span className="text-gray-400">
+              Las horas son estimadas hasta que cada camión dé Salida.
+            </span>
             {resumen.sinAsignar > 0 && (
               <span className="text-orange-600 font-semibold">
                 Hay {resumen.sinAsignar} pedido{resumen.sinAsignar === 1 ? '' : 's'} fuera del plan.
@@ -768,6 +775,7 @@ export default function DispatcherPanel() {
             colorDe={colorOf} onEnfocar={focus}
             camiones={camionesActivos}
             camionFiltro={camionFiltro} onCamionFiltro={setCamionFiltro}
+            camionesGPS={camionesGPS}
           />}
         </section>
 

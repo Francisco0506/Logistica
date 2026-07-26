@@ -1,5 +1,6 @@
-import React from 'react';
-import { Truck, Clock, MapPin, CheckCircle2, AlertCircle, Package } from 'lucide-react';
+import React, { useState } from 'react';
+import { Truck, Clock, MapPin, CheckCircle2, AlertCircle, Package, Eye } from 'lucide-react';
+import MiniMapa from '../../../components/MiniMapa';
 
 /**
  * Un pedido como lo ve la vendedora: qué es, a qué hora llega y qué está
@@ -37,12 +38,14 @@ const ESTILOS = {
   },
 };
 
-export default function TarjetaPedido({ pedido }) {
+export default function TarjetaPedido({ pedido, camion }) {
   const estilo = ESTILOS[pedido.estado] || ESTILOS.Pendiente;
   const Icono = estilo.icono;
+  const [verMapa, setVerMapa] = useState(false);
 
   return (
-    <article className="bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow overflow-hidden flex">
+    <article className="bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow overflow-hidden">
+      <div className="flex">
       {/* Franja de color: el estado se lee de reojo sin buscar la etiqueta */}
       <div className={`w-1.5 flex-shrink-0 ${estilo.barra}`} />
 
@@ -98,8 +101,38 @@ export default function TarjetaPedido({ pedido }) {
           <div className="text-[11px] font-bold text-slate-500">
             ${pedido.doc_total?.toLocaleString('es-MX')}
           </div>
+
+          {/* El ojo: ver dónde queda el cliente y por dónde va el camión, sin
+              salir de la lista. Es la pregunta que sigue después de "¿a qué
+              hora llega?" cuando el cliente está llamando. */}
+          <button
+            onClick={() => setVerMapa((v) => !v)}
+            className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-500 hover:text-orange-600 transition"
+          >
+            <Eye className="w-3.5 h-3.5" /> {verMapa ? 'Ocultar mapa' : 'Ver en el mapa'}
+          </button>
         </div>
       </div>
+      </div>
+
+      {verMapa && (
+        <div className="px-4 pb-4">
+          <MiniMapa
+            lat={pedido.lat}
+            lng={pedido.lng}
+            nombre={pedido.card_name}
+            camion={camion}
+            alto="h-52"
+          />
+          {camion && (
+            <p className="text-[10px] text-slate-500 mt-1.5 flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-green-600" />
+              El camión {camion.placa} {camion.velocidad_kmh > 2 ? 'va circulando' : 'está detenido'}
+              {camion.direccion ? ` por ${camion.direccion}` : ''}.
+            </p>
+          )}
+        </div>
+      )}
     </article>
   );
 }

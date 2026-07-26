@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Eye, Search, MapPin, Clock, Truck, X, Package, ChevronDown, Check } from 'lucide-react';
+import MiniMapa from '../../../components/MiniMapa';
 
 const FILTROS = ['todos', 'pendiente', 'asignado', 'en_camino', 'entregado'];
 
@@ -32,6 +33,7 @@ export default function TablaPedidos({
   camiones = [],
   camionFiltro,
   onCamionFiltro,
+  camionesGPS = [],
 }) {
   const [detalle, setDetalle] = useState(null);
   const [abrirCamiones, setAbrirCamiones] = useState(false);
@@ -208,6 +210,18 @@ export default function TablaPedidos({
               <button onClick={() => setDetalle(null)} className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 transition flex-shrink-0">
                 <X className="w-4 h-4" />
               </button>
+            </div>
+
+            {/* Dónde queda, de un vistazo. Antes el detalle solo traía la
+                dirección en texto, que no dice nada si no te sabes la calle. */}
+            <div className="px-5 pt-4">
+              <MiniMapa
+                lat={detalle.lat}
+                lng={detalle.lng}
+                nombre={detalle.card_name}
+                color={detalle.truck ? colorDe(detalle.truck) : '#f97316'}
+                camion={detalle.truck ? camionesGPS.find((c) => c.placa === detalle.truck) : null}
+              />
             </div>
 
             <div className="px-5 py-4 space-y-3 text-sm">

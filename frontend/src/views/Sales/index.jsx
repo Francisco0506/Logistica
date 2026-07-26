@@ -239,7 +239,13 @@ export default function SalesPanel() {
                 <span className="text-slate-300 font-semibold">({delGrupo.length})</span>
               </h2>
               <div className="space-y-2">
-                {delGrupo.map((p) => <TarjetaPedido key={p.id} pedido={p} />)}
+                {delGrupo.map((p) => (
+                  <TarjetaPedido
+                    key={p.id}
+                    pedido={p}
+                    camion={p.camion ? camionesGPS.find((c) => c.placa === p.camion) : null}
+                  />
+                ))}
               </div>
             </section>
           );
