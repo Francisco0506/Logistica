@@ -22,7 +22,7 @@ const ESTILOS = {
   Pendiente: { icono: AlertCircle,  pill: 'bg-gray-100 text-gray-600',      barra: 'bg-gray-300',    texto: 'Sin programar' },
 };
 
-export default function TarjetaPedido({ pedido, camion }) {
+export default function TarjetaPedido({ pedido, camion, color }) {
   const estilo = ESTILOS[pedido.estado] || ESTILOS.Pendiente;
   const Icono = estilo.icono;
   const [abierto, setAbierto] = useState(false);
@@ -38,7 +38,10 @@ export default function TarjetaPedido({ pedido, camion }) {
         className="w-full flex items-stretch text-left"
       >
         {/* Franja de color: el estado se lee de reojo sin buscar la etiqueta */}
-        <div className={`w-1 flex-shrink-0 ${estilo.barra}`} />
+        <div
+          className={`w-1 flex-shrink-0 ${color ? '' : estilo.barra}`}
+          style={color ? { backgroundColor: color } : undefined}
+        />
 
         <div className="flex-1 min-w-0 px-3 py-2.5 flex items-center gap-3">
           <div className="flex-1 min-w-0">
@@ -93,6 +96,35 @@ export default function TarjetaPedido({ pedido, camion }) {
               <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">Qué está pasando</div>
               <p className="text-gray-700 leading-snug mt-0.5">{pedido.situacion}</p>
             </div>
+
+            {/* Cuántas paradas van antes que ésta y cuántas ya se hicieron. Es
+                la pregunta de verdad cuando el cliente llama: no "¿a qué hora?"
+                sino "¿ya mero?". Se contesta con un hecho —el camión ya hizo 3
+                de las 8 que van antes— y no con una hora estimada. */}
+            {pedido.paradas_antes != null && !entregado && (
+              <div className="bg-white border border-gray-200 rounded-lg px-2.5 py-2">
+                {pedido.paradas_antes === 0 ? (
+                  <p className="text-[11px] font-bold text-orange-600">
+                    Es la PRIMERA parada del {pedido.camion}.
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-[11px] text-gray-700">
+                      Van <b>{pedido.paradas_antes} paradas</b> antes que ésta.
+                      {pedido.entregadas_antes > 0
+                        ? <> El camión ya hizo <b className="text-emerald-600">{pedido.entregadas_antes}</b>, faltan <b>{pedido.paradas_antes - pedido.entregadas_antes}</b>.</>
+                        : ' Todavía no empieza a entregarlas.'}
+                    </p>
+                    <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden mt-1.5">
+                      <div
+                        className="h-full bg-emerald-500 rounded-full transition-all"
+                        style={{ width: `${(pedido.entregadas_antes / pedido.paradas_antes) * 100}%` }}
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
             <div className="flex items-start gap-1.5 text-gray-600">
               <MapPin className="w-3.5 h-3.5 text-gray-400 flex-shrink-0 mt-px" />
               <span>{pedido.address || 'Sin dirección en SAP'}</span>

@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import LabenLogo from '../../components/LabenLogo';
 import { useAviso } from '../../components/useAviso';
-import { getVendedores, getPedidosVendedor, getCamionesGPS } from '../../services/api';
+import { getVendedores, getPedidosVendedor, getCamionesGPS, getFlota } from '../../services/api';
 import TarjetaPedido from './components/TarjetaPedido';
 import MapaPedidos from './components/MapaPedidos';
 
@@ -46,6 +46,8 @@ export default function SalesPanel() {
   const [cargando, setCargando]     = useState(true);
   const [verMapa, setVerMapa]       = useState(true);
   const [actualizado, setActualizado] = useState(null);
+  const [flota, setFlota] = useState([]);
+  const [camionFiltro, setCamionFiltro] = useState('todos');
 
   // ── Vendedores del día ──
   // El selector es temporal: hoy el login no valida nada, así que no hay forma
@@ -85,6 +87,15 @@ export default function SalesPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fecha, slpCode]);
 
+  // ── La flota, para pintar cada pedido con el color de su camión ──
+  useEffect(() => {
+    const controller = new AbortController();
+    getFlota({ signal: controller.signal })
+      .then(setFlota)
+      .catch((e) => { if (e.name !== 'AbortError') console.error('Flota:', e); });
+    return () => controller.abort();
+  }, []);
+
   // ── Camiones en vivo ──
   // Aparte de los pedidos: si Samsara falla, la lista sigue funcionando.
   useEffect(() => {
@@ -107,8 +118,20 @@ export default function SalesPanel() {
     return c;
   }, [pedidos]);
 
+  // Los camiones que llevan pedidos de esta vendedora hoy.
+  const misCamiones = useMemo(
+    () => [...new Set(pedidos.map((p) => p.camion).filter(Boolean))].sort(),
+    [pedidos],
+  );
+
+  const colorDe = (placa) => flota.find((c) => c.placa === placa)?.color || '#94a3b8';
+
   const visibles = useMemo(() => {
     let lista = filtro === 'todos' ? pedidos : pedidos.filter((p) => p.estado === filtro);
+    // El filtro de camión se encadena con el de estado: filtrar por vendedora y
+    // luego por camión deja SOLO sus pedidos en ese camión, que es lo que se
+    // ocupa para contestar "¿y los míos que van en el 027?".
+    if (camionFiltro !== 'todos') lista = lista.filter((p) => p.camion === camionFiltro);
     if (busqueda.trim()) {
       const q = busqueda.toLowerCase();
       lista = lista.filter(
@@ -119,7 +142,7 @@ export default function SalesPanel() {
       );
     }
     return lista;
-  }, [pedidos, filtro, busqueda]);
+  }, [pedidos, filtro, busqueda, camionFiltro]);
 
   // El que urge: lo primero que va a llegar de lo que todavía no llega.
   const proximo = useMemo(() => {
@@ -235,6 +258,18 @@ export default function SalesPanel() {
                 className="w-full pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-orange-200"
               />
             </div>
+            {/* Filtro por camión, encadenado con el de estado. Solo salen los
+                camiones que llevan pedidos de esta vendedora. */}
+            {misCamiones.length > 1 && (
+              <select
+                value={camionFiltro}
+                onChange={(e) => setCamionFiltro(e.target.value)}
+                className="bg-gray-50 border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-200 flex-shrink-0"
+              >
+                <option value="todos">Todos los camiones</option>
+                {misCamiones.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            )}
             <button
               onClick={() => setVerMapa((v) => !v)}
               title={verMapa ? 'Ocultar el mapa' : 'Ver el mapa'}
@@ -279,6 +314,7 @@ export default function SalesPanel() {
                 key={p.id}
                 pedido={p}
                 camion={p.camion ? camionesGPS.find((c) => c.placa === p.camion) : null}
+                color={p.camion ? colorDe(p.camion) : null}
               />
             ))}
 
@@ -293,7 +329,7 @@ export default function SalesPanel() {
 
           {verMapa && !!pedidos.length && (
             <div className="lg:sticky lg:top-[76px]">
-              <MapaPedidos pedidos={visibles} camionesGPS={camionesGPS} />
+              <MapaPedidos pedidos={visibles} camionesGPS={camionesGPS} colorDe={colorDe} />
             </div>
           )}
         </div>

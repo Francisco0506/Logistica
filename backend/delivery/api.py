@@ -485,6 +485,14 @@ class PedidoVentasOut(Schema):
     # rutear, y la situación ya lo explica.
     lat: Optional[float] = None
     lng: Optional[float] = None
+    # En qué número de parada va este pedido dentro de su ruta.
+    posicion: Optional[int] = None
+    # Cuántas paradas van ANTES que ésta, y cuántas de esas ya se entregaron.
+    # Es la pregunta que hace una vendedora cuando el cliente llama: no "¿a qué
+    # hora llega?" sino "¿ya mero?". Con esto se contesta con un hecho —el
+    # camión ya hizo 3 de las 8 que van antes— y no con una hora estimada.
+    paradas_antes: Optional[int] = None
+    entregadas_antes: Optional[int] = None
     # Explicación en lenguaje de vendedora de qué está pasando con su pedido.
     situacion: str
     # True cuando el pedido ya tiene lugar en una ruta del día.
@@ -515,11 +523,38 @@ def get_pedidos_vendedor(request, fecha: date, slp_code: str):
         .order_by('eta', 'doc_num')
     )
 
+    # Avance de cada ruta del día, para poder decir cuántas paradas van antes
+    # de un pedido y cuántas de esas ya se entregaron. Se consultan las rutas
+    # completas (no solo los pedidos de esta vendedora) porque el camión entrega
+    # de todo en el camino, no nada más lo de ella.
+    rutas_del_dia = {}
+    for r in Remision.objects.filter(doc_date=fecha, ruta__isnull=False).values(
+        'ruta_id', 'secuencia_ruta', 'estado'
+    ):
+        rutas_del_dia.setdefault(r['ruta_id'], []).append(r)
+
     resultado = []
     for r in remisiones:
         eta_desde, eta_hasta = _rango_eta(r.eta)
         sin_geo = not r.destino or r.destino.latitude is None or r.destino.longitude is None
         camion = r.ruta.camion if r.ruta else None
+
+        # Cuántas paradas van antes de ésta en su ruta, y cuántas ya se
+        # entregaron. Las paradas se cuentan por secuencia distinta: varios
+        # documentos al mismo lugar son UNA parada, así que contar documentos
+        # inflaría el número que se le dice al cliente.
+        antes = entregadas = None
+        if r.ruta_id and r.secuencia_ruta:
+            companeros = rutas_del_dia.get(r.ruta_id, [])
+            secuencias_antes = {
+                c['secuencia_ruta'] for c in companeros
+                if c['secuencia_ruta'] and c['secuencia_ruta'] < r.secuencia_ruta
+            }
+            antes = len(secuencias_antes)
+            entregadas = len({
+                c['secuencia_ruta'] for c in companeros
+                if c['secuencia_ruta'] in secuencias_antes and c['estado'] == 'Entregado'
+            })
 
         # La situación dice qué está pasando Y por qué, para que la vendedora
         # pueda contestarle al cliente sin preguntarle a nadie más.
@@ -555,6 +590,9 @@ def get_pedidos_vendedor(request, fecha: date, slp_code: str):
             "programado": bool(camion),
             "lat": None if sin_geo else r.destino.latitude,
             "lng": None if sin_geo else r.destino.longitude,
+            "posicion": r.secuencia_ruta,
+            "paradas_antes": antes,
+            "entregadas_antes": entregadas,
         })
     return resultado
 
