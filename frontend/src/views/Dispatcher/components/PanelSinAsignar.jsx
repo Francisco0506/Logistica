@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Truck, AlertCircle, ChevronDown, ChevronUp, Clock, Loader, RefreshCw, ShieldCheck } from 'lucide-react';
+import { Truck, AlertCircle, ChevronDown, ChevronUp, Clock, Loader, RefreshCw, ShieldCheck, Lightbulb } from 'lucide-react';
 
 /**
  * Los pedidos que no quedaron en ninguna ruta, con la sugerencia de a qué
@@ -26,6 +26,9 @@ export default function PanelSinAsignar({
   horasTurno,
   optimizando,
   etiquetaCamion,
+  analisis,
+  analizando,
+  onAnalizar,
 }) {
   const [abrirTurnos, setAbrirTurnos] = useState(false);
   const haySinAsignar = alertas.some((a) => a.motivo.startsWith('Pendiente'));
@@ -39,7 +42,9 @@ export default function PanelSinAsignar({
       )}
 
       {haySinAsignar && (
-        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+        // Sin overflow-hidden: recortaba la lista de turnos, que se abre hacia
+        // abajo saliéndose de la tarjeta.
+        <div className="bg-white border border-gray-200 rounded-xl shadow-sm">
           <div className="px-3 py-2.5 border-b border-gray-100">
             <p className="text-[12px] font-bold text-gray-800">
               {alertas.length} pedido{alertas.length === 1 ? '' : 's'} sin lugar en ninguna ruta
@@ -115,15 +120,63 @@ export default function PanelSinAsignar({
             </p>
           </div>
 
-          {/* Medido con datos reales: salir 1 h antes mete ~5 pedidos más;
-              ampliar el turno casi no mueve la aguja, porque los clientes
-              cierran a hora fija sin importar cuánto trabaje el chofer. */}
-          <p className="text-[10px] text-gray-600 leading-snug bg-emerald-50 border-t border-emerald-100 px-3 py-2">
-            <b className="text-emerald-700">Lo que más ayudaría:</b> cargar más rápido en el CEDIS.
-            Cada hora que los camiones salgan más temprano caben ~5 pedidos más.
-            Alargar el turno casi no sirve: el límite no es la jornada del chofer,
-            es que 97 de 195 clientes cierran antes de las 14:00.
-          </p>
+          {/* En vez de una recomendación fija, se CALCULA con los pedidos de
+              hoy. Lo que sirve depende del día: unas veces falta camión y otras
+              lo que estorba son las ventanas de los clientes. */}
+          <div className="border-t border-gray-100 px-3 py-2.5 rounded-b-xl bg-gray-50/70">
+            {!analisis && (
+              <button
+                onClick={onAnalizar}
+                disabled={analizando}
+                className="w-full flex items-center justify-center gap-2 text-[11px] font-bold text-gray-600 border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 py-2 rounded-lg transition"
+              >
+                {analizando
+                  ? <><Loader className="w-3.5 h-3.5 animate-spin" /> Probando opciones… (~30 s)</>
+                  : <><Lightbulb className="w-3.5 h-3.5 text-amber-500" /> ¿Qué hago para que quepan todos?</>}
+              </button>
+            )}
+
+            {analisis && (
+              <div className="space-y-2">
+                <p className="text-[11px] font-bold text-gray-800">
+                  Hoy caben {analisis.asignados_ahora} de {analisis.total_pedidos}. Esto probé:
+                </p>
+
+                <div className="space-y-1">
+                  {analisis.opciones.map((o) => (
+                    <div
+                      key={o.titulo}
+                      className={`flex items-start gap-2 rounded-lg px-2.5 py-1.5 border ${
+                        o.gana > 0 ? 'bg-white border-emerald-200' : 'bg-white/60 border-gray-150'
+                      }`}
+                    >
+                      <span className={`text-[12px] font-extrabold tabular-nums flex-shrink-0 w-9 text-right ${
+                        o.gana > 0 ? 'text-emerald-600' : 'text-gray-300'
+                      }`}>
+                        {o.gana > 0 ? `+${o.gana}` : o.gana}
+                      </span>
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-semibold text-gray-700">{o.titulo}</div>
+                        <div className="text-[10px] text-gray-400 leading-snug">{o.detalle}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <p className="text-[10px] text-gray-600 bg-emerald-50 border border-emerald-100 rounded-lg px-2.5 py-2">
+                  <b className="text-emerald-700">Lo que conviene:</b> {analisis.recomendacion}
+                </p>
+
+                <button
+                  onClick={onAnalizar}
+                  disabled={analizando}
+                  className="text-[10px] font-bold text-gray-400 hover:text-gray-600 transition"
+                >
+                  {analizando ? 'Probando…' : 'Volver a probar'}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

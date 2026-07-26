@@ -275,7 +275,15 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords, minu
 # ==========================================
 # 3. SOLUCIONADOR PRINCIPAL (OR-TOOLS)
 # ==========================================
-def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None):
+class _SoloSimulacion(Exception):
+    """Señal interna para deshacer lo que escribió una corrida de prueba."""
+
+    def __init__(self, resultado):
+        self.resultado = resultado
+
+
+def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
+              simular=False, segundos_solver=None):
     """
     Resuelve el problema de ruteo de vehículos usando OR-Tools (VRPTW) sobre
     distancias/tiempos reales de calle (OSRM, evitando autopistas de cuota).
@@ -301,6 +309,22 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None):
     destinos cierran antes de las 14:00, adelantar la salida una hora mete
     ~5 pedidos más, mientras que alargar el turno no mete casi ninguno.
     """
+    # `simular`: corre exactamente el mismo cálculo y luego DESHACE todo lo que
+    # escribió. Sirve para contestar "¿y si le doy una hora más?" sin tocar el
+    # plan que el despachador está viendo. Se hace con una transacción que se
+    # revierte a propósito, en vez de duplicar la lógica en una versión "de
+    # mentiras" que tarde o temprano se desincronizaría de la de verdad.
+    if simular:
+        try:
+            with transaction.atomic():
+                resultado = solve_vrp(
+                    fecha, placas, depot_coords, horas_turno, hora_salida,
+                    simular=False, segundos_solver=segundos_solver,
+                )
+                raise _SoloSimulacion(resultado)
+        except _SoloSimulacion as señal:
+            return señal.resultado
+
     minutos_turno = int(horas_turno * 60) if horas_turno else MINUTOS_TURNO_MAXIMO
     hora_cero = datetime.strptime(hora_salida, "%H:%M") if hora_salida else HORA_CERO
 
@@ -430,7 +454,10 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None):
     # para exprimir mejoras de 2-opt en rutas largas (~1-3% de tiempo de
     # manejo) en días con muchos pedidos. Optimizar Rutas tarda más en
     # responder a cambio de rutas más ajustadas.
-    search_parameters.time_limit.FromSeconds(20)
+    # Al simular escenarios se corren varios seguidos, así que ahí se usa un
+    # límite más corto: interesa comparar cuántos pedidos caben en cada opción,
+    # no exprimir el último minuto de manejo de cada una.
+    search_parameters.time_limit.FromSeconds(segundos_solver or 20)
 
     solution = routing.SolveWithParameters(search_parameters)
 

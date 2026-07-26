@@ -5,6 +5,7 @@ import { CEDIS, PALETA_COLORES_CAMION } from '../../config/fleet';
 import {
   syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado,
   getSugerencias, asignarManual, cargarPruebaPedidos, getCamionesGPS, getFlota,
+  evaluarEscenarios,
 } from '../../services/api';
 import HeaderDespacho from './components/HeaderDespacho';
 import TarjetaCamion from './components/TarjetaCamion';
@@ -104,6 +105,8 @@ export default function DispatcherPanel() {
   const [cargandoSugerencias, setCargandoSugerencias] = useState(false);
   const [asignando, setAsignando]       = useState(null);
   const [confirmacion, setConfirmacion] = useState(null);
+  const [analisis, setAnalisis] = useState(null);   // resultado de "¿qué hago para que quepan?"
+  const [analizando, setAnalizando] = useState(false);
 
   // ── Formularios ──
   const [mostrarAgregarCamion, setMostrarAgregarCamion] = useState(false);
@@ -275,6 +278,7 @@ export default function DispatcherPanel() {
     setIsOptimizing(true);
     setRoutesGenerated(false);
     try {
+      setAnalisis(null); // el plan cambió: lo que se había probado ya no aplica
       const data = await generarRutas(selectedDate, placasActivas, turno ?? horasTurno);
       if (data.status === 'success') await fetchData();
       else alert(data.message);
@@ -290,6 +294,24 @@ export default function DispatcherPanel() {
     if (!siguiente) return;
     setHorasTurno(siguiente);
     await optimize(siguiente);
+  };
+
+  // Prueba qué pasaría si se cambiara una cosa a la vez. Tarda porque son
+  // varias corridas del optimizador; el resultado se queda en pantalla hasta
+  // que se vuelva a optimizar, para no rehacerlo en cada refresco.
+  const analizarEscenarios = async () => {
+    const placas = camionesActivos.map((t) => t.id);
+    if (!placas.length) return;
+    setAnalizando(true);
+    try {
+      const res = await evaluarEscenarios(selectedDate, placas, horasTurno);
+      if (res.status === 'success') setAnalisis(res);
+      else alert(res.message);
+    } catch {
+      alert('No se pudieron probar las opciones.');
+    } finally {
+      setAnalizando(false);
+    }
   };
 
   const toggleTruck = (id) =>
@@ -711,6 +733,9 @@ export default function DispatcherPanel() {
                 horasTurno={horasTurno}
                 optimizando={isOptimizing}
                 etiquetaCamion={truckLabel}
+                analisis={analisis}
+                analizando={analizando}
+                onAnalizar={analizarEscenarios}
               />
             )}
           </div>

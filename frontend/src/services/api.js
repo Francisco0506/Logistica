@@ -65,6 +65,25 @@ export async function getRutas(fecha, { signal } = {}) {
 }
 
 /**
+ * "¿Qué hago para que quepan todos?" — corre el optimizador varias veces
+ * cambiando UNA cosa cada vez (salir antes, más turno, otro camión) y regresa
+ * cuántos pedidos entrarían en cada caso, ordenado por el que más ayuda.
+ *
+ * Ninguna de esas corridas toca el plan real: se simulan y se deshacen. Tarda
+ * ~30 s porque son varias corridas del optimizador.
+ */
+export async function evaluarEscenarios(fecha, placas, horasTurno = 6, { signal } = {}) {
+  const res = await fetch(`${BASE}/rutas/escenarios`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fecha, camiones: placas, horas_turno: horasTurno }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`Escenarios failed: ${res.status}`);
+  return res.json();
+}
+
+/**
  * La flota de reparto: placa, número de Samsara, modelo, capacidad, tope de
  * paradas y color. Fuente única — el backend manda estos datos y el frontend
  * ya no guarda su propia copia (ver backend/delivery/fleet.py).

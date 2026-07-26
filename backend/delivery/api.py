@@ -179,6 +179,125 @@ def get_rutas(request, fecha: date):
         })
     return result
 
+# 3b. "¿Qué hago para que quepan todos?"
+#
+# Corre el optimizador varias veces con una sola variable cambiada cada vez y
+# devuelve cuántos pedidos entrarían en cada caso, ordenado por el que más
+# ayuda. Ninguna corrida toca el plan real: se simulan y se deshacen.
+#
+# Se prueba una variable a la vez a propósito. Si se cambiaran dos juntas no se
+# sabría cuál sirvió, y el despachador necesita saber QUÉ hacer, no solo que
+# "algo" mejora.
+class EscenariosIn(Schema):
+    fecha: date
+    camiones: List[str]
+    horas_turno: float = 6.0
+    hora_salida: str = "09:00"
+
+
+# Segundos de solver por escenario. Corto porque se corren varios seguidos y lo
+# que interesa es comparar cuántos pedidos caben, no exprimir cada ruta.
+SEGUNDOS_POR_ESCENARIO = 6
+
+
+@api.post("/dispatcher/rutas/escenarios")
+def evaluar_escenarios(request, payload: EscenariosIn):
+    if not payload.camiones:
+        return {"status": "error", "message": "Activa al menos un camión."}
+
+    total_pedidos = Remision.objects.filter(doc_date=payload.fecha).count()
+
+    def _cuantos_caben(camiones, horas, salida):
+        res = solve_vrp(
+            fecha=payload.fecha, placas=camiones, depot_coords=DEPOT_COORDS,
+            horas_turno=horas, hora_salida=salida,
+            simular=True, segundos_solver=SEGUNDOS_POR_ESCENARIO,
+        )
+        if res.get("status") != "success":
+            return None
+        return sum(r["pedidos"] for r in res.get("rutas", []))
+
+    base = _cuantos_caben(payload.camiones, payload.horas_turno, payload.hora_salida)
+    if base is None:
+        return {"status": "error", "message": "No se pudo evaluar el plan actual."}
+
+    opciones = []
+
+    # 1. Salir más temprano. Es la palanca más fuerte medida (ver docs/flota.md)
+    #    porque las ventanas de los clientes son horas de reloj fijas.
+    hora_actual = datetime.strptime(payload.hora_salida, "%H:%M")
+    if hora_actual.hour > 6:
+        una_hora_antes = (hora_actual - timedelta(hours=1)).strftime("%H:%M")
+        caben = _cuantos_caben(payload.camiones, payload.horas_turno, una_hora_antes)
+        if caben is not None:
+            opciones.append({
+                "accion": "salir_antes",
+                "titulo": f"Salir a las {una_hora_antes} en vez de {payload.hora_salida}",
+                "detalle": "Cargar más rápido en el CEDIS para que el primer camión salga una hora antes.",
+                "pedidos": caben,
+                "dificultad": "Depende del almacén, no del sistema",
+            })
+
+    # 2. Más turno: el máximo posible. Si ni con el máximo mejora, tampoco
+    #    mejoraría con un escalón intermedio, así que con una corrida basta.
+    if payload.horas_turno < 8:
+        caben = _cuantos_caben(payload.camiones, 8.0, payload.hora_salida)
+        if caben is not None:
+            opciones.append({
+                "accion": "mas_turno",
+                "valor": 8.0,
+                "titulo": "Ampliar el turno a 8 horas",
+                "detalle": f"Los choferes trabajarían {8 - payload.horas_turno:g} h más que hoy.",
+                "pedidos": caben,
+                "dificultad": "Hay que confirmarlo con los choferes",
+            })
+
+    # 3. Activar un camión más. Se prueba el de MAYOR capacidad de los apagados:
+    #    si ese no ayuda, ninguno de los más chicos va a ayudar. Probar los tres
+    #    triplicaba el tiempo de espera para dar casi la misma respuesta.
+    apagados = [c for c in fleet.CAMIONES if c["placa"] not in payload.camiones]
+    if apagados:
+        mejor_apagado = max(apagados, key=lambda c: (c["capacidad_kg"], c["max_paradas"]))
+        placa = mejor_apagado["placa"]
+        caben = _cuantos_caben(payload.camiones + [placa], payload.horas_turno, payload.hora_salida)
+        if caben is not None:
+            otros = len(apagados) - 1
+            opciones.append({
+                "accion": "activar_camion",
+                "valor": placa,
+                "titulo": f"Activar el {placa}",
+                "detalle": (
+                    f"{mejor_apagado['modelo']}, {mejor_apagado['capacidad_kg']:,} kg, "
+                    f"hasta {mejor_apagado['max_paradas']} paradas."
+                    + (f" Hay {otros} camión(es) apagado(s) más." if otros else "")
+                ),
+                "pedidos": caben,
+                "dificultad": "Requiere unidad y chofer disponibles",
+            })
+
+    # El "gana" es contra el plan actual. Se ordena por lo que más mete, y las
+    # que no mejoran nada se marcan pero NO se esconden: saber que ampliar el
+    # turno no sirve es tan útil como saber qué sí sirve.
+    for o in opciones:
+        o["gana"] = o["pedidos"] - base
+    opciones.sort(key=lambda o: -o["gana"])
+
+    mejor = opciones[0] if opciones and opciones[0]["gana"] > 0 else None
+    sin_asignar = total_pedidos - base
+
+    return {
+        "status": "success",
+        "total_pedidos": total_pedidos,
+        "asignados_ahora": base,
+        "sin_asignar": sin_asignar,
+        "opciones": opciones,
+        "recomendacion": (
+            f"{mejor['titulo']}: mete {mejor['gana']} pedido(s) más." if mejor
+            else "Ninguna de estas opciones mete más pedidos. Los que faltan hay que asignarlos a mano o moverlos a otro día."
+        ),
+    }
+
+
 # 4a. La flota de reparto. El frontend la pide al abrir el panel en vez de
 # mantener su propia copia de capacidades y topes de paradas, que era lo que
 # obligaba a editar dos archivos en el mismo orden cada vez que se confirmaba un
