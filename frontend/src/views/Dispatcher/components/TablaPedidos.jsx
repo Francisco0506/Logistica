@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Search, MapPin, Clock, Truck, X, Package, ChevronDown, Check } from 'lucide-react';
+import { Search, MapPin, Clock, Truck, X, Package, Check } from 'lucide-react';
 import MiniMapa from '../../../components/MiniMapa';
+import MenuSeleccion from '../../../components/MenuSeleccion';
 
 const FILTROS = ['todos', 'pendiente', 'asignado', 'en_camino', 'entregado'];
 
@@ -36,7 +37,6 @@ export default function TablaPedidos({
   camionesGPS = [],
 }) {
   const [detalle, setDetalle] = useState(null);
-  const [abrirCamiones, setAbrirCamiones] = useState(false);
 
   return (
     <div className="px-4 pb-4">
@@ -60,47 +60,16 @@ export default function TablaPedidos({
               renglones buscando su placa a ojo. Va como menú propio y no como
               lista del sistema, para que traiga el color de cada camión y se
               vea igual en cualquier computadora. */}
-          <div className="relative">
-            <button
-              onClick={() => setAbrirCamiones((v) => !v)}
-              className="flex items-center gap-2 bg-gray-50 border border-gray-200 hover:bg-gray-100 rounded-lg pl-2.5 pr-2 py-1.5 text-xs font-semibold text-gray-600 transition"
-            >
-              {camionFiltro !== 'todos' && camionFiltro !== 'sin_camion' && (
-                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colorDe(camionFiltro) }} />
-              )}
-              {camionFiltro === 'todos' ? 'Todos los camiones'
-                : camionFiltro === 'sin_camion' ? 'Sin camión'
-                : camionFiltro}
-              <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
-            </button>
-
-            {abrirCamiones && (
-              <>
-                {/* Capa para cerrar al hacer clic afuera. */}
-                <div className="fixed inset-0 z-10" onClick={() => setAbrirCamiones(false)} />
-                <div className="absolute right-0 mt-1 z-20 w-52 bg-white border border-gray-200 rounded-lg shadow-lg py-1 max-h-72 overflow-y-auto">
-                  {[
-                    { valor: 'todos', texto: 'Todos los camiones', n: pedidos.length },
-                    { valor: 'sin_camion', texto: 'Sin camión', n: null },
-                    ...camiones.map((c) => ({ valor: c.id, texto: c.id, color: c.color, n: null })),
-                  ].map((op) => (
-                    <button
-                      key={op.valor}
-                      onClick={() => { onCamionFiltro(op.valor); setAbrirCamiones(false); }}
-                      className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-left transition ${
-                        camionFiltro === op.valor ? 'bg-orange-50 text-orange-700' : 'text-gray-600 hover:bg-gray-50'
-                      }`}
-                    >
-                      {op.color
-                        ? <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: op.color }} />
-                        : <span className="w-2.5 flex-shrink-0" />}
-                      {op.texto}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
+          <MenuSeleccion
+            valor={camionFiltro}
+            onCambio={onCamionFiltro}
+            className="w-44 flex-shrink-0"
+            opciones={[
+              { valor: 'todos', texto: 'Todos los camiones', detalle: pedidos.length },
+              { valor: 'sin_camion', texto: 'Sin camión' },
+              ...camiones.map((c) => ({ valor: c.id, texto: c.id, color: c.color })),
+            ]}
+          />
 
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />

@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import LabenLogo from '../../components/LabenLogo';
 import { useAviso } from '../../components/useAviso';
+import MenuSeleccion from '../../components/MenuSeleccion';
 import { getVendedores, getPedidosVendedor, getCamionesGPS, getFlota } from '../../services/api';
 import TarjetaPedido from './components/TarjetaPedido';
 import MapaPedidos from './components/MapaPedidos';
@@ -175,15 +176,19 @@ export default function SalesPanel() {
             className="text-xs font-semibold text-gray-700 bg-gray-100 border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-orange-200"
           />
           {vendedores.length > 1 ? (
-            <select
-              value={slpCode}
-              onChange={(e) => setSlpCode(e.target.value)}
-              className="text-xs font-bold text-gray-700 bg-gray-100 border border-gray-200 rounded-lg px-2 py-1.5 max-w-[160px] focus:outline-none focus:ring-2 focus:ring-orange-200"
-            >
-              {vendedores.map((v) => (
-                <option key={v.slp_code} value={v.slp_code}>{v.slp_name} ({v.pedidos})</option>
-              ))}
-            </select>
+            /* Los vendedores salen de SAP: `SlpCode`/`SlpName` viajan en cada
+               remisión (ver sync.py) y el endpoint /ventas/vendedores devuelve
+               los que tienen pedidos ese día, con su cuenta. */
+            <MenuSeleccion
+              valor={slpCode}
+              onCambio={setSlpCode}
+              className="w-48"
+              opciones={vendedores.map((v) => ({
+                valor: v.slp_code,
+                texto: v.slp_name,
+                detalle: v.pedidos,
+              }))}
+            />
           ) : (
             <div className="hidden sm:flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-1.5">
               <User className="h-3.5 w-3.5 text-gray-500" />
@@ -262,16 +267,23 @@ export default function SalesPanel() {
               />
             </div>
             {/* Filtro por camión, encadenado con el de estado. Solo salen los
-                camiones que llevan pedidos de esta vendedora. */}
+                camiones que llevan pedidos de esta vendedora, y cada uno con su
+                color, el mismo del mapa y de la franja del renglón. */}
             {misCamiones.length > 1 && (
-              <select
-                value={camionFiltro}
-                onChange={(e) => setCamionFiltro(e.target.value)}
-                className="bg-gray-50 border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-200 flex-shrink-0"
-              >
-                <option value="todos">Todos los camiones</option>
-                {misCamiones.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+              <MenuSeleccion
+                valor={camionFiltro}
+                onCambio={setCamionFiltro}
+                className="flex-shrink-0 w-40"
+                opciones={[
+                  { valor: 'todos', texto: 'Todos los camiones', detalle: pedidos.filter((p) => p.camion).length },
+                  ...misCamiones.map((c) => ({
+                    valor: c,
+                    texto: c,
+                    color: colorDe(c),
+                    detalle: pedidos.filter((p) => p.camion === c).length,
+                  })),
+                ]}
+              />
             )}
             <button
               onClick={() => setVerMapa((v) => !v)}

@@ -41,9 +41,13 @@ const iconoCedis = L.divIcon({
   iconSize: [20, 20],
 });
 
-// Encuadra el mapa. La firma es el texto de los puntos: así solo se reencuadra
-// cuando cambian de verdad, y no en cada refresco que devuelve lo mismo — si
-// no, el mapa da un brinco mientras la vendedora lo está viendo.
+// Encuadra el mapa cuando cambian LOS PEDIDOS, no cuando se mueve el camión.
+//
+// La firma incluía la posición del GPS, que llega nueva cada 20 segundos: el
+// mapa se reencuadraba solo cada 20 s, así que si alguien había acercado o
+// arrastrado, se le brincaba de vuelta a media consulta. Ahora la firma son los
+// pedidos que se están viendo, o sea que solo se reencuadra al cambiar de
+// filtro, de fecha o de vendedora — que es cuando de verdad hace falta.
 function Encuadrar({ puntos, firma }) {
   const map = useMap();
   useEffect(() => {
@@ -138,6 +142,8 @@ export default function MapaPedidos({
     ...conUbicacion.map((p) => [p.lat, p.lng]),
     ...misCamiones.map((c) => [c.lat, c.lng]),
   ];
+  // Sin las posiciones del GPS: son las que cambian solas cada 20 s.
+  const firmaEncuadre = conUbicacion.map((p) => p.id).join(',');
 
   const contenedor = pantallaCompleta
     ? 'fixed inset-0 z-[2500] bg-white flex flex-col'
@@ -209,7 +215,7 @@ export default function MapaPedidos({
           zoomControl={false}
           scrollWheelZoom={pantallaCompleta}
         >
-          <Encuadrar puntos={puntos} firma={JSON.stringify(puntos)} />
+          <Encuadrar puntos={puntos} firma={firmaEncuadre} />
           <RecalcularTamano />
           <Controles pantallaCompleta={pantallaCompleta} onTogglePantalla={onTogglePantalla} />
           <TileLayer

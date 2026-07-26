@@ -110,10 +110,15 @@ export default function TarjetaPedido({ pedido, camion, color }) {
                 ) : (
                   <>
                     <p className="text-[11px] text-gray-700">
-                      Van <b>{pedido.paradas_antes} paradas</b> antes que ésta.
+                      {pedido.paradas_antes === 1
+                        ? <>Va <b>1 parada</b> antes que ésta.</>
+                        : <>Van <b>{pedido.paradas_antes} paradas</b> antes que ésta.</>}
                       {pedido.entregadas_antes > 0
-                        ? <> El camión ya hizo <b className="text-emerald-600">{pedido.entregadas_antes}</b>, faltan <b>{pedido.paradas_antes - pedido.entregadas_antes}</b>.</>
-                        : ' Todavía no empieza a entregarlas.'}
+                        ? <> El camión ya {pedido.entregadas_antes === 1 ? 'hizo' : 'hizo'} <b className="text-emerald-600">{pedido.entregadas_antes}</b>,
+                            {pedido.paradas_antes - pedido.entregadas_antes === 1
+                              ? <> falta <b>1</b>.</>
+                              : <> faltan <b>{pedido.paradas_antes - pedido.entregadas_antes}</b>.</>}</>
+                        : (pedido.paradas_antes === 1 ? ' Todavía no la entrega.' : ' Todavía no empieza a entregarlas.')}
                     </p>
                     <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden mt-1.5">
                       <div
