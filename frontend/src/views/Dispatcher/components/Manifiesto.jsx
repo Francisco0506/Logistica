@@ -12,6 +12,20 @@ import { Eye, AlertCircle } from 'lucide-react';
  * justo lo que haría sobrecargar un camión con confianza.
  */
 export default function Manifiesto({ camionesActivos, paradasDe, onVerPreview }) {
+  // Solo los camiones que traen carga. Un camión activo sin pedidos no tiene
+  // manifiesto que hacer, y llenaba la sección de tarjetas vacías.
+  const camionesConCarga = camionesActivos.filter((c) => paradasDe(c.id).length > 0);
+
+  if (!camionesConCarga.length) {
+    return (
+      <div className="px-4 py-8 text-center">
+        <p className="text-xs text-gray-400">
+          Todavía no hay rutas. Optimiza para generar los manifiestos de carga.
+        </p>
+      </div>
+    );
+  }
+
   return (
     // Sin scroll propio: fluye con la página.
     <div className="px-4 pb-4">
@@ -19,10 +33,10 @@ export default function Manifiesto({ camionesActivos, paradasDe, onVerPreview })
         Orden de carga <b>LIFO</b> — lo primero que se carga en almacén es lo último que se entrega en ruta.
       </p>
 
-      {/* En pantallas anchas los camiones van de dos en dos: uno debajo de otro
-          obligaba a recorrer mucho para comparar dos manifiestos. */}
-      <div className="grid grid-cols-1 2xl:grid-cols-2 gap-3">
-        {camionesActivos.map((camion) => {
+      {/* Cuadrícula: los manifiestos se comparan de lado a lado en vez de
+          obligar a recorrer toda la página para ver el siguiente camión. */}
+      <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-3 items-start">
+        {camionesConCarga.map((camion) => {
           const pedidos = paradasDe(camion.id);
           const ordenDeCarga = [...pedidos].reverse();
 

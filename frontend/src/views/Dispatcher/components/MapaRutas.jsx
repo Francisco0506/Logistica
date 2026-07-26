@@ -69,6 +69,7 @@ function CentrarMapa({ coords, token }) {
  */
 function ControlesMapa({ onEnfocarCedis, pantallaCompleta, onTogglePantallaCompleta }) {
   const map = useMap();
+  const [pista, setPista] = React.useState(false);
 
   useEffect(() => {
     if (!pantallaCompleta) return;
@@ -77,10 +78,49 @@ function ControlesMapa({ onEnfocarCedis, pantallaCompleta, onTogglePantallaCompl
     return () => window.removeEventListener('keydown', alPresionar);
   }, [pantallaCompleta, onTogglePantallaCompleta]);
 
+  // Zoom con la rueda SIN quitarle el scroll a la página: manteniendo Ctrl
+  // (o Cmd en Mac) la rueda hace zoom; sin Ctrl, la página baja normal. Es el
+  // mismo trato que hacen los mapas embebidos, y la primera vez que alguien
+  // gira la rueda sobre el mapa se le dice, porque si no nadie lo adivina.
+  useEffect(() => {
+    if (pantallaCompleta) return; // ahí la rueda ya hace zoom directo
+    const contenedor = map.getContainer();
+    let temporizador;
+
+    const alGirar = (e) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        if (e.deltaY < 0) map.zoomIn(1);
+        else map.zoomOut(1);
+        return;
+      }
+      setPista(true);
+      clearTimeout(temporizador);
+      temporizador = setTimeout(() => setPista(false), 1600);
+    };
+
+    contenedor.addEventListener('wheel', alGirar, { passive: false });
+    return () => { contenedor.removeEventListener('wheel', alGirar); clearTimeout(temporizador); };
+  }, [map, pantallaCompleta]);
+
   const boton = 'bg-white/95 border border-gray-200 shadow-sm hover:bg-gray-50 transition flex items-center justify-center text-gray-700';
 
+  // z-[1000]: Leaflet dibuja sus capas hasta z-index 700 (líneas en 400,
+  // marcadores en 600, popups en 700). Con z-400 los controles quedaban DEBAJO
+  // de las rutas y se perdían justo cuando el mapa tenía trazos encima.
   return (
-    <div className="absolute top-3 right-3 z-[400] flex flex-col items-end gap-2">
+    <>
+      {/* Aviso pasajero cuando alguien gira la rueda sobre el mapa esperando
+          hacer zoom. Sin él, la regla de Ctrl no se descubre nunca. */}
+      {pista && (
+        <div className="absolute inset-0 z-[999] flex items-center justify-center pointer-events-none">
+          <div className="bg-gray-900/80 text-white text-sm font-semibold px-4 py-2.5 rounded-lg shadow-lg">
+            Usa <kbd className="bg-white/20 rounded px-1.5 py-0.5 mx-0.5">Ctrl</kbd> + rueda para hacer zoom
+          </div>
+        </div>
+      )}
+
+      <div className="absolute top-3 right-3 z-[1000] flex flex-col items-end gap-2">
       <div className="flex items-center gap-1.5">
         <button
           onClick={onEnfocarCedis}
@@ -105,8 +145,9 @@ function ControlesMapa({ onEnfocarCedis, pantallaCompleta, onTogglePantallaCompl
         <button onClick={() => map.zoomOut()} title="Alejar" className={`${boton} w-8 h-8 border-0 rounded-none`}>
           <ZoomOut className="h-4 w-4" />
         </button>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -181,6 +222,9 @@ export default function MapaRutas({
     ? camionesActivos.filter((c) => placasSeleccionadas.includes(c.id))
     : camionesActivos;
 
+  // Solo los camiones que de verdad traen paradas hoy.
+  const camionesConRuta = camionesActivos.filter((c) => paradasDe(c.id).length > 0);
+
   const hayRutasEnRecta = rutasGeneradas && camionesDibujados.some(
     (c) => paradasDe(c.id).length > 0 && !rutasOsrm[c.id]
   );
@@ -193,13 +237,14 @@ export default function MapaRutas({
         ? 'fixed inset-0 z-[2500] bg-white'
         : `relative rounded-xl border border-gray-200 overflow-hidden bg-white shadow-sm ${alto}`
     }>
-      <div className="absolute top-3 left-3 z-[400] space-y-2 max-w-[60%]">
+      <div className="absolute top-3 left-3 z-[1000] space-y-2 max-w-[60%]">
         {/* Los camiones, sobre el mapa: se puede aislar una ruta sin salir de
             aquí, que hacía falta sobre todo en pantalla completa, donde la
-            lista de la derecha no se ve. */}
-        {rutasGeneradas && !!camionesActivos.length && (
+            lista de la derecha no se ve. Solo salen los que TIENEN ruta: un
+            camión activo pero sin paradas no pinta nada en el mapa. */}
+        {rutasGeneradas && !!camionesConRuta.length && (
           <div className="bg-white/95 backdrop-blur border border-gray-200 shadow-sm rounded-lg px-2 py-1.5 flex items-center gap-1.5 flex-wrap">
-            {camionesActivos.map((c) => {
+            {camionesConRuta.map((c) => {
               const encendida = !hayFiltro || placasSeleccionadas.includes(c.id);
               return (
                 <button

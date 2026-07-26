@@ -21,8 +21,10 @@ export default function PreviewManifiesto({ camion, paradas, fecha, onCerrar }) 
   const faltanPesos = paradas.length - conPeso.length;
 
   return (
-    <div className="fixed inset-0 z-[3000] bg-black/50 flex items-start justify-center p-4 overflow-y-auto print:bg-white print:p-0 print:overflow-visible">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl my-6 print:shadow-none print:my-0 print:max-w-none">
+    // `marco-impresion` en los dos contenedores: al imprimir dejan de flotar y
+    // de recortar, o la hoja saldría cortada en la primera página (ver index.css).
+    <div className="marco-impresion fixed inset-0 z-[3000] bg-black/50 flex items-start justify-center p-4 overflow-y-auto">
+      <div className="marco-impresion bg-white rounded-xl shadow-2xl w-full max-w-3xl my-6">
 
         {/* Barra de acciones — no se imprime */}
         <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-gray-200 print:hidden">

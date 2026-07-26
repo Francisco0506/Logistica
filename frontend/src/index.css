@@ -1,23 +1,55 @@
 @import "tailwindcss";
 
 /* Al imprimir la guía de carga sale SOLO la hoja, no el panel completo.
-   Se oculta todo y se vuelve a mostrar únicamente el contenedor marcado, que
-   además se saca de su posición flotante para que ocupe la página entera. */
+   Ocultar con `visibility` no basta: la hoja vive dentro de una ventana
+   flotante con su propio scroll, y al imprimir esos contenedores la recortan a
+   una sola página — el resto de los renglones se pierde. Por eso además se
+   neutralizan los contenedores de la ventana (`.marco-impresion`). */
 @media print {
-  body * {
-    visibility: hidden;
+  @page {
+    margin: 12mm;
   }
+
+  body * {
+    visibility: hidden !important;
+  }
+
   .hoja-imprimible,
   .hoja-imprimible * {
-    visibility: visible;
+    visibility: visible !important;
   }
+
+  /* La ventana flotante deja de flotar, de recortar y de pintar fondo. */
+  .marco-impresion {
+    position: static !important;
+    inset: auto !important;
+    overflow: visible !important;
+    background: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: none !important;
+    width: auto !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    display: block !important;
+  }
+
   .hoja-imprimible {
     position: absolute;
     left: 0;
     top: 0;
     width: 100%;
-    margin: 0;
-    padding: 0;
+    padding: 0 !important;
+  }
+
+  /* Que un renglón no se parta a la mitad entre dos hojas, y que el
+     encabezado de la tabla se repita en cada página. */
+  .hoja-imprimible tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .hoja-imprimible thead {
+    display: table-header-group;
   }
 }
 
