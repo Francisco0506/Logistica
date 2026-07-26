@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Eye, Search, MapPin, Clock, Truck, X, Package, ChevronDown } from 'lucide-react';
+import { Eye, Search, MapPin, Clock, Truck, X, Package, ChevronDown, Check } from 'lucide-react';
 
 const FILTROS = ['todos', 'pendiente', 'asignado', 'en_camino', 'entregado'];
 
@@ -161,9 +161,10 @@ export default function TablaPedidos({
                     ) : <span className="text-gray-300 italic text-[10px]">—</span>}
                   </td>
                   <td className="px-3 py-2">
-                    <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
                       CLASE_ESTADO[o.estado] || 'bg-gray-100 text-gray-500'
                     }`}>
+                      {entregado && <Check className="w-2.5 h-2.5" strokeWidth={3.5} />}
                       {o.estado?.replace('_', ' ')}
                     </span>
                   </td>

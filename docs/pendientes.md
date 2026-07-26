@@ -147,9 +147,36 @@ las respuestas de arriba.
   todas las rutas del día, **incluidas las ya despachadas**.
 - 🟡 **No hay entorno virtual ni versiones fijadas** de las librerías de Python.
   Hoy corre contra la instalación global (Python 3.14).
-- 🟡 **No hay ni una prueba automatizada** en todo el proyecto. El optimizador
-  tiene reglas delicadas (ventanas de medianoche, rutas congeladas, ETAs) que
-  hoy solo se verifican a mano.
+- 🔴 **Cero pruebas automatizadas.** `tests.py` sigue siendo la plantilla vacía
+  de Django, y `optimizer.py` ya son **859 líneas** con reglas delicadas. Todo
+  lo que se arregló hasta hoy se verificó a mano.
+
+  Las ~15 pruebas que harían falta, cada una por un bug que ya se cometió o se
+  estuvo a punto de cometer:
+  - Ventanas: medianoche (`00:00` como cierre), segunda ventana, horario
+    corrupto de SAP (`fin <= ini`), ventana que abre después del turno.
+  - Que una ruta despachada **jamás** se destruya al re-optimizar.
+  - Que la ETA del plan y la de `recalcular_etas_desde_salida` coincidan.
+  - Que apagar un camión y prender otro use las capacidades correctas.
+  - Que dos clientes en el mismo domicilio cuenten como **una** parada.
+  - Que un pedido que no cupo regrese a `Pendiente` y sin ruta.
+- 🔴 **Cero autenticación.** Ninguna mención de login, permisos ni sesión en los
+  587 renglones de `api.py`. Cualquiera en la red que sepa la dirección puede
+  rehacer el plan del día — o llamar a `/pedidos/cargar-prueba`, que **borra
+  todas las rutas de una fecha, incluidas las ya despachadas**.
+- 🔴 **Los errores se pierden en silencio.** No hay una sola línea de registro
+  en todo el backend: cada falla regresa un diccionario y ahí muere. Si SAP
+  truena a las 6 de la mañana nadie se entera hasta que alguien mire la
+  pantalla, y no queda constancia de qué pasó.
+- 🟡 **Dos despachadores al mismo tiempo se pisan.** Si dos aprietan Optimizar a
+  la vez, el segundo borra las rutas en borrador del primero a media corrida.
+- 🟡 **El optimizador bloquea la petición**: 20 s una corrida normal, ~30 s el
+  análisis de escenarios. Debería correr aparte y avisar al terminar.
+- ⚪ **Estructura del backend**: `optimizer.py` (859 líneas) hace cuatro
+  trabajos — armar el modelo, resolver, recalcular ETAs y asignar a mano — y
+  `api.py` va en 587. Convendría partirlos y agrupar lo que habla con el
+  exterior (SAP, Samsara, OSRM) en `integrations/`. Es cosmético al lado de lo
+  de arriba.
 - ⚪ **El Excel de direcciones tiene datos reales de clientes y está en el
   repositorio.** Si el repo es privado no pasa nada; si algún día se hace
   público, ahí va la lista de clientes de Laben.

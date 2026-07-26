@@ -1,5 +1,5 @@
 import React from 'react';
-import { Truck, ChevronDown, ChevronUp, MapPin, Clock, Power } from 'lucide-react';
+import { Truck, ChevronDown, ChevronUp, MapPin, Clock, Power, Check } from 'lucide-react';
 import EstadoDespacho from './EstadoDespacho';
 
 /**
@@ -211,34 +211,51 @@ export default function TarjetaCamion({
             </span>
             {paradas.length > 0 ? (
               <div className="space-y-1.5 max-h-[180px] overflow-y-auto pr-1">
-                {paradas.map((o, i) => (
+                {paradas.map((o, i) => {
+                  const entregado = o.estado === 'Entregado';
+                  return (
                   <div
                     key={o.id}
                     onClick={(e) => { e.stopPropagation(); onEnfocar([o.lat, o.lng]); }}
-                    className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-2.5 py-2 cursor-pointer hover:border-gray-300 transition"
+                    className={`flex items-center gap-2 border rounded-lg px-2.5 py-2 cursor-pointer transition ${
+                      entregado
+                        ? 'bg-emerald-50/50 border-emerald-100'
+                        : 'bg-white border-gray-200 hover:border-gray-300'
+                    }`}
                   >
-                    <span
-                      className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0"
-                      style={{ backgroundColor: camion.color }}
-                    >
-                      {i + 1}
-                    </span>
+                    {/* Entregado: palomita en vez del número. El número dice
+                        "en qué orden va"; una vez entregado ya no importa el
+                        orden, importa que está hecho. */}
+                    {entregado ? (
+                      <span className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 bg-emerald-500">
+                        <Check className="w-3 h-3 text-white" strokeWidth={3.5} />
+                      </span>
+                    ) : (
+                      <span
+                        className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0"
+                        style={{ backgroundColor: camion.color }}
+                      >
+                        {i + 1}
+                      </span>
+                    )}
+
                     <div className="flex-1 min-w-0">
-                      <div className="font-bold text-gray-700 text-[11px] truncate">
-                        <span className="text-gray-400">#{o.doc_num}</span> {o.card_name}
+                      <div className={`font-bold text-[11px] truncate ${entregado ? 'text-gray-500 line-through decoration-gray-300' : 'text-gray-700'}`}>
+                        <span className="text-gray-400 no-underline">#{o.doc_num}</span> {o.card_name}
                       </div>
                       <div className="text-[9px] text-gray-500 font-medium flex items-center gap-2">
-                        <span className="flex items-center gap-1">
-                          <Clock className="w-3 h-3" /> Llega {o.eta || '—'}
+                        <span className={`flex items-center gap-1 ${entregado ? 'text-emerald-600 font-bold' : ''}`}>
+                          <Clock className="w-3 h-3" /> {entregado ? 'Llegó' : 'Llega'} {o.eta || '—'}
                         </span>
                         {/* La ventana de recibo, que antes no se veía en ningún
                             lado: es lo que explica si la ETA es viable o no. */}
-                        {o.ventana && <span className="text-gray-400">· recibe {o.ventana}</span>}
+                        {o.ventana && !entregado && <span className="text-gray-400">· recibe {o.ventana}</span>}
                       </div>
                     </div>
                     <MapPin className="h-3 w-3 text-gray-300 flex-shrink-0" />
                   </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <p className="text-[10px] text-gray-400 italic">Sin paradas aún. Presiona Optimizar.</p>

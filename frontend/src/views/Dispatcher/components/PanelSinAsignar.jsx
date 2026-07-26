@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Truck, AlertCircle, ChevronDown, ChevronUp, Clock, Loader, RefreshCw, ShieldCheck, Lightbulb } from 'lucide-react';
+import { Truck, AlertCircle, ChevronDown, ChevronUp, Clock, Loader, RefreshCw, ShieldCheck, Lightbulb, MapPinOff } from 'lucide-react';
 
 /**
  * Los pedidos que no quedaron en ninguna ruta, con la sugerencia de a qué
@@ -31,7 +31,13 @@ export default function PanelSinAsignar({
   onAnalizar,
 }) {
   const [abrirTurnos, setAbrirTurnos] = useState(false);
-  const haySinAsignar = alertas.some((a) => a.motivo.startsWith('Pendiente'));
+  // Dos problemas distintos con soluciones distintas: los que no cupieron en
+  // ninguna ruta, y los que ni siquiera se pueden rutear por falta de
+  // coordenadas. Mezclarlos hacía que a estos últimos el panel les preguntara
+  // "¿a qué camión lo mando?", que no tiene respuesta posible.
+  const sinUbicacion = alertas.filter((a) => a.motivo.startsWith('Sin georreferencia'));
+  const noCupieron = alertas.filter((a) => !a.motivo.startsWith('Sin georreferencia'));
+  const haySinAsignar = noCupieron.length > 0;
   // Siguiente escalón de turno disponible, o null si ya va en el más largo.
   const siguienteTurno = TURNOS.find((h) => h > horasTurno) ?? null;
 
@@ -47,7 +53,7 @@ export default function PanelSinAsignar({
         <div className="bg-white border border-gray-200 rounded-xl shadow-sm">
           <div className="px-3 py-2.5 border-b border-gray-100">
             <p className="text-[12px] font-bold text-gray-800">
-              {alertas.length} pedido{alertas.length === 1 ? '' : 's'} sin lugar en ninguna ruta
+              {noCupieron.length} pedido{noCupieron.length === 1 ? '' : 's'} sin lugar en ninguna ruta
             </p>
             <p className="text-[10px] text-gray-500 mt-0.5">Estas son las salidas, de la más rápida a la más lenta:</p>
           </div>
@@ -180,7 +186,37 @@ export default function PanelSinAsignar({
         </div>
       )}
 
-      {alertas.map((a) => {
+      {/* Los pedidos SIN UBICACIÓN son otro problema: no es que no hayan
+          cabido, es que el sistema no sabe dónde entregarlos, así que no se
+          les puede sugerir camión ni sirve re-optimizar. Se separan porque la
+          acción es distinta y está en SAP, no aquí. */}
+      {sinUbicacion.length > 0 && (
+        <div className="bg-white border border-amber-200 rounded-xl shadow-sm overflow-hidden">
+          <div className="px-3 py-2.5 bg-amber-50 border-b border-amber-100">
+            <p className="text-[12px] font-bold text-amber-900 flex items-center gap-1.5">
+              <MapPinOff className="w-3.5 h-3.5" />
+              {sinUbicacion.length} pedido{sinUbicacion.length === 1 ? '' : 's'} sin ubicación
+            </p>
+            <p className="text-[10px] text-amber-800 mt-1 leading-snug">
+              Estos no se pueden rutear: al cliente le faltan las coordenadas en SAP.
+              No es que no hayan cabido — el sistema no sabe a dónde ir.
+              Hay que llenar <b>U_Latitud</b> y <b>U_Longitud</b> del Ship-To en SAP y volver a sincronizar.
+            </p>
+          </div>
+          <ul className="divide-y divide-gray-50">
+            {sinUbicacion.map((a) => (
+              <li key={a.doc_num} className="px-3 py-2 flex items-center gap-2">
+                <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded flex-shrink-0">
+                  #{a.doc_num}
+                </span>
+                <span className="text-[12px] font-semibold text-gray-800 truncate">{a.card_name}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {noCupieron.map((a) => {
         const abierta = alertaAbierta === a.id;
         return (
           <div
