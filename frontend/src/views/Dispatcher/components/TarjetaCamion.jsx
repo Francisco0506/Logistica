@@ -23,6 +23,37 @@ export default function TarjetaCamion({
   // La próxima parada es la primera que todavía no se entrega.
   const proxima = paradas.find((o) => o.estado !== 'Entregado');
 
+  // ── Carga a bordo ──
+  // Lo que el camión TODAVÍA lleva: el peso de lo que no se ha entregado. Baja
+  // conforme se entrega, así que la barra dice cuánto le queda encima, no
+  // cuánto salió cargado. Si SAP no manda pesos no se inventa nada: se oculta.
+  const conPeso = paradas.filter((o) => o.peso_kg != null);
+  const pesoSalida = conPeso.reduce((s, o) => s + o.peso_kg, 0);
+  const pesoABordo = conPeso
+    .filter((o) => o.estado !== 'Entregado')
+    .reduce((s, o) => s + o.peso_kg, 0);
+  const hayPesos = conPeso.length > 0 && !!camion.capacidadKg;
+  const pctCarga = hayPesos ? Math.min(100, (pesoABordo / camion.capacidadKg) * 100) : 0;
+  const sobrecargado = hayPesos && pesoSalida > camion.capacidadKg;
+
+  // ── Cuánto dura la ruta ──
+  // De la primera ETA a la última. Son las horas que ya calculó el optimizador,
+  // así que no cuesta nada de más y dice de un vistazo si la ruta cabe en el
+  // turno o se está pasando.
+  const horas = paradas
+    .map((o) => o.eta)
+    .filter((e) => e && /^\d{1,2}:\d{2}$/.test(e))
+    .sort();
+  const inicioRuta = horas[0];
+  const finRuta = horas.at(-1);
+  const duracionMin = inicioRuta && finRuta
+    ? (Number(finRuta.slice(0, 2)) * 60 + Number(finRuta.slice(3))) -
+      (Number(inicioRuta.slice(0, 2)) * 60 + Number(inicioRuta.slice(3)))
+    : null;
+  const duracionTexto = duracionMin != null && duracionMin > 0
+    ? `${Math.floor(duracionMin / 60)} h ${String(duracionMin % 60).padStart(2, '0')} min`
+    : null;
+
   return (
     // Abierto = es el que se está viendo en el mapa. El anillo lo conecta con
     // el trazo de allá, para que no haya que adivinar de quién es la línea.
@@ -93,8 +124,9 @@ export default function TarjetaCamion({
       {/* Avance SIN tener que abrir la tarjeta: cuántas entregó, en qué estado
           va la ruta y cuál es la próxima parada. Antes había que expandir cada
           camión, uno por uno, solo para saber cómo iba. */}
-      {camion.active && !abierto && paradas.length > 0 && (
+      {camion.active && paradas.length > 0 && (
         <div className="px-3 pb-2.5 -mt-1 space-y-1.5">
+          {/* Entregas */}
           <div className="flex items-center gap-2">
             <div className="flex-1 h-1 bg-gray-100 rounded-full overflow-hidden">
               <div
@@ -116,12 +148,41 @@ export default function TarjetaCamion({
               </span>
             )}
           </div>
-          {proxima && (
-            <div className="text-[9px] text-gray-500 truncate">
-              <span className="font-bold text-gray-400">Sigue:</span> {proxima.card_name}
-              {proxima.eta && <span className="text-gray-400"> · {proxima.eta}</span>}
+
+          {/* Peso a bordo: baja conforme entrega */}
+          {hayPesos && (
+            <div className="flex items-center gap-2">
+              <div className="flex-1 h-1 bg-gray-100 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all ${
+                    sobrecargado ? 'bg-red-500' : pctCarga > 85 ? 'bg-amber-500' : 'bg-slate-400'
+                  }`}
+                  style={{ width: `${pctCarga}%` }}
+                />
+              </div>
+              <span
+                className={`text-[9px] font-bold tabular-nums flex-shrink-0 ${sobrecargado ? 'text-red-600' : 'text-gray-400'}`}
+                title={`Salió con ${pesoSalida.toLocaleString('es-MX', { maximumFractionDigits: 0 })} kg de ${camion.capacidadKg.toLocaleString()} kg`}
+              >
+                {Math.round(pesoABordo).toLocaleString('es-MX')} kg a bordo
+              </span>
             </div>
           )}
+
+          <div className="flex items-center justify-between gap-2 text-[9px]">
+            {proxima ? (
+              <span className="text-gray-500 truncate">
+                <span className="font-bold text-gray-400">Sigue:</span> {proxima.card_name}
+                {proxima.eta && <span className="text-gray-400"> · {proxima.eta}</span>}
+              </span>
+            ) : <span className="text-emerald-600 font-bold">Todo entregado</span>}
+
+            {duracionTexto && (
+              <span className="text-gray-400 flex-shrink-0 tabular-nums" title={`De ${inicioRuta} a ${finRuta}`}>
+                {inicioRuta}–{finRuta} · {duracionTexto}
+              </span>
+            )}
+          </div>
         </div>
       )}
 

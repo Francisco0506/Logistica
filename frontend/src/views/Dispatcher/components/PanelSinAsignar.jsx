@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Truck, AlertCircle, ChevronDown, ChevronUp, Clock, Loader, RefreshCw, ShieldCheck } from 'lucide-react';
 
 /**
@@ -10,6 +10,8 @@ import { Truck, AlertCircle, ChevronDown, ChevronUp, Clock, Loader, RefreshCw, S
  * de qué lado se pasa y por cuánto (llegar antes de que abran se arregla
  * esperando, llegar después de que cierren no se arregla).
  */
+const TURNOS = [6, 6.5, 7, 7.5, 8];
+
 export default function PanelSinAsignar({
   alertas,
   alertaAbierta,
@@ -25,9 +27,9 @@ export default function PanelSinAsignar({
   optimizando,
   etiquetaCamion,
 }) {
+  const [abrirTurnos, setAbrirTurnos] = useState(false);
   const haySinAsignar = alertas.some((a) => a.motivo.startsWith('Pendiente'));
   // Siguiente escalón de turno disponible, o null si ya va en el más largo.
-  const TURNOS = [6, 6.5, 7, 7.5, 8];
   const siguienteTurno = TURNOS.find((h) => h > horasTurno) ?? null;
 
   return (
@@ -65,19 +67,36 @@ export default function PanelSinAsignar({
               >
                 <Truck className="w-3.5 h-3.5" /> Activar un camión
               </button>
-              {/* Tercera salida: darle más turno a los choferes. Se ofrece el
-                  siguiente escalón, no una lista, para que sea un solo clic. */}
-              <button
-                onClick={onAmpliarTurno}
-                disabled={!siguienteTurno}
-                title={siguienteTurno
-                  ? `Pasar el turno de ${horasTurno} h a ${siguienteTurno} h y volver a optimizar`
-                  : 'Ya está en el turno más largo'}
-                className="flex items-center justify-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 disabled:opacity-40 text-gray-600 font-semibold text-[11px] py-2 rounded-lg transition"
-              >
-                <Clock className="w-3.5 h-3.5" />
-                {siguienteTurno ? `Turno a ${siguienteTurno} h` : 'Turno al máximo'}
-              </button>
+              {/* Tercera salida: más turno. Se abre la lista completa para
+                  poder saltar directo a 8 h en vez de ir de escalón en
+                  escalón re-optimizando cada vez. */}
+              <div className="relative">
+                <button
+                  onClick={() => setAbrirTurnos((v) => !v)}
+                  disabled={!siguienteTurno}
+                  title={siguienteTurno ? 'Ampliar el turno y volver a optimizar' : 'Ya está en el turno más largo'}
+                  className="w-full flex items-center justify-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 disabled:opacity-40 text-gray-600 font-semibold text-[11px] py-2 rounded-lg transition"
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  {siguienteTurno ? `Ampliar turno (${horasTurno} h)` : 'Turno al máximo'}
+                  {siguienteTurno && <ChevronDown className="w-3 h-3" />}
+                </button>
+
+                {abrirTurnos && siguienteTurno && (
+                  <div className="absolute z-20 mt-1 left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+                    {TURNOS.filter((h) => h > horasTurno).map((h) => (
+                      <button
+                        key={h}
+                        onClick={() => { setAbrirTurnos(false); onAmpliarTurno(h); }}
+                        className="w-full text-left px-3 py-2 text-[11px] font-semibold text-gray-600 hover:bg-orange-50 hover:text-orange-700 transition"
+                      >
+                        {h} horas
+                        <span className="text-gray-400 font-normal"> · +{(h - horasTurno).toString().replace('.', ',')} h</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Lo que más preocupa al re-optimizar es perder lo que ya se

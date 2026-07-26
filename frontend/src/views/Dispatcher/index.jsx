@@ -285,9 +285,8 @@ export default function DispatcherPanel() {
   // Sube el turno al siguiente escalón y vuelve a optimizar de una vez: si el
   // despachador aprieta "Turno a 6.5 h" es porque quiere ver si así caben, no
   // para tener que apretar Optimizar aparte.
-  const ampliarTurnoYOptimizar = async () => {
-    const TURNOS = [6, 6.5, 7, 7.5, 8];
-    const siguiente = TURNOS.find((h) => h > horasTurno);
+  const ampliarTurnoYOptimizar = async (horas) => {
+    const siguiente = horas ?? [6, 6.5, 7, 7.5, 8].find((h) => h > horasTurno);
     if (!siguiente) return;
     setHorasTurno(siguiente);
     await optimize(siguiente);
