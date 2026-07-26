@@ -107,6 +107,7 @@ export default function DispatcherPanel() {
   const [confirmacion, setConfirmacion] = useState(null);
   const [analisis, setAnalisis] = useState(null);   // resultado de "¿qué hago para que quepan?"
   const [analizando, setAnalizando] = useState(false);
+  const [mandando, setMandando] = useState(null);   // id de la remisión que se está forzando
 
   // ── Formularios ──
   const [mostrarAgregarCamion, setMostrarAgregarCamion] = useState(false);
@@ -294,6 +295,32 @@ export default function DispatcherPanel() {
     if (!siguiente) return;
     setHorasTurno(siguiente);
     await optimize(siguiente);
+  };
+
+  // Mete el pedido al camión que menos se desvía, aunque llegue fuera de la
+  // ventana del cliente. Es el mismo "Forzar" de siempre, pero sin obligar a
+  // abrir, leer las cinco opciones y confirmar: cuando el despachador ya
+  // decidió que ese pedido sale hoy, esos pasos solo estorban.
+  const mandarDeTodosModos = async (alerta) => {
+    setMandando(alerta.id);
+    try {
+      const sug = await getSugerencias(alerta.id);
+      const opcion = sug.opciones?.[0];
+      if (!opcion) {
+        alert(sug.error || 'No hay ninguna ruta a la que se pueda mandar. Genera rutas primero.');
+        return;
+      }
+      const res = await asignarManual(alerta.id, {
+        rutaId: opcion.ruta_id, posicion: opcion.posicion_sugerida, forzar: true,
+      });
+      if (res.status === 'error') alert(res.message);
+      await fetchData();
+    } catch (e) {
+      console.error('Error al mandar de todos modos:', e);
+      alert('No se pudo mandar el pedido. Intenta de nuevo.');
+    } finally {
+      setMandando(null);
+    }
   };
 
   // Prueba qué pasaría si se cambiara una cosa a la vez. Tarda porque son
@@ -743,6 +770,8 @@ export default function DispatcherPanel() {
                 analisis={analisis}
                 analizando={analizando}
                 onAnalizar={analizarEscenarios}
+                onMandarDeTodosModos={mandarDeTodosModos}
+                mandando={mandando}
               />
             )}
           </div>

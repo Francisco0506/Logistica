@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Eye, Search, MapPin, Clock, Truck, X, Package, ChevronDown, Check } from 'lucide-react';
+import { Search, MapPin, Clock, Truck, X, Package, ChevronDown, Check } from 'lucide-react';
 import MiniMapa from '../../../components/MiniMapa';
 
 const FILTROS = ['todos', 'pendiente', 'asignado', 'en_camino', 'entregado'];
@@ -124,7 +124,6 @@ export default function TablaPedidos({
               <th className="px-3 py-2">Recibe</th>
               <th className="px-3 py-2">Llega</th>
               <th className="px-3 py-2">Estado</th>
-              <th className="px-3 py-2 text-center">Ver</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
@@ -170,22 +169,11 @@ export default function TablaPedidos({
                       {o.estado?.replace('_', ' ')}
                     </span>
                   </td>
-                  <td className="px-3 py-2 text-center">
-                    {o.lat && o.lng ? (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); onEnfocar([o.lat, o.lng]); }}
-                        title="Centrar el mapa en este cliente"
-                        className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-orange-600 transition"
-                      >
-                        <Eye className="h-3.5 w-3.5" />
-                      </button>
-                    ) : '—'}
-                  </td>
                 </tr>
               );
             })}
             {!pedidos.length && (
-              <tr><td colSpan="7" className="text-center py-8 text-gray-400 italic">Sin pedidos.</td></tr>
+              <tr><td colSpan="6" className="text-center py-8 text-gray-400 italic">Sin pedidos.</td></tr>
             )}
           </tbody>
         </table>

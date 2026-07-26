@@ -29,6 +29,8 @@ export default function PanelSinAsignar({
   analisis,
   analizando,
   onAnalizar,
+  onMandarDeTodosModos,
+  mandando,
 }) {
   const [abrirTurnos, setAbrirTurnos] = useState(false);
   // Dos problemas distintos con soluciones distintas: los que no cupieron en
@@ -240,6 +242,26 @@ export default function PanelSinAsignar({
                 ? <ChevronUp className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
                 : <ChevronDown className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />}
             </button>
+
+            {/* Atajo: mandarlo al camión que menos se desvía, aunque llegue
+                fuera de la ventana del cliente. Cuando son uno o dos pedidos no
+                vale la pena abrir, leer las cinco opciones y forzar una: se
+                decide igual y son tres clics menos. El camión sí espera o llega
+                tarde, por eso lo dice con todas sus letras y queda en gris, no
+                como la acción principal. */}
+            {!abierta && (
+              <div className="px-3 pb-2.5 -mt-1">
+                <button
+                  onClick={() => onMandarDeTodosModos(a)}
+                  disabled={mandando === a.id}
+                  className="w-full text-[10px] font-semibold text-gray-500 hover:text-orange-700 border border-gray-200 hover:border-orange-300 hover:bg-orange-50 rounded-lg py-1.5 transition disabled:opacity-50"
+                >
+                  {mandando === a.id
+                    ? 'Buscando el camión que menos se desvía…'
+                    : 'Mandarlo de todos modos, aunque llegue fuera de horario'}
+                </button>
+              </div>
+            )}
 
             {abierta && (
               <div className="bg-gray-50 border-t border-gray-100 p-2.5 space-y-1.5">

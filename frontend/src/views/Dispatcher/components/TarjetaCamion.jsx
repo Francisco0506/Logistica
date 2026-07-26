@@ -169,22 +169,31 @@ export default function TarjetaCamion({
             </div>
           )}
 
-          <div className="flex items-center justify-between gap-2 text-[9px]">
+          <div className="flex items-end justify-between gap-2">
             {proxima ? (
-              <span className="text-gray-500 truncate">
+              <span className="text-[9px] text-gray-500 truncate min-w-0">
                 <span className="font-bold text-gray-400">Sigue:</span> {proxima.card_name}
                 {proxima.eta && <span className="text-gray-400"> · {proxima.eta}</span>}
               </span>
-            ) : <span className="text-emerald-600 font-bold">Todo entregado</span>}
+            ) : <span className="text-[9px] text-emerald-600 font-bold">Todo entregado</span>}
 
+            {/* La jornada del camión se lee más grande: es el número con el que
+                el despachador decide si esa ruta cabe en el turno o se pasa. */}
             {duracionTexto && (
               <span
-                className={`flex-shrink-0 tabular-nums ${ruta?.hora_salida ? 'text-gray-500' : 'text-gray-400 italic'}`}
+                className="flex-shrink-0 text-right leading-none"
                 title={ruta?.hora_salida
                   ? `Horas recalculadas desde la salida real (${ruta.hora_salida})`
                   : 'Horas del PLAN: suponen que este camión sale a la hora configurada. Se recalculan solas al dar Salida.'}
               >
-                {!ruta?.hora_salida && '~'}{inicioRuta}–{finRuta} · {duracionTexto}
+                <span className={`text-[12px] font-extrabold tabular-nums ${
+                  duracionMin > 6 * 60 ? 'text-amber-600' : 'text-gray-700'
+                }`}>
+                  {duracionTexto}
+                </span>
+                <span className="block text-[9px] text-gray-400 tabular-nums mt-0.5">
+                  {!ruta?.hora_salida && '~'}{inicioRuta}–{finRuta}
+                </span>
               </span>
             )}
           </div>

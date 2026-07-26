@@ -1,5 +1,6 @@
 import React from 'react';
 import { X, Printer } from 'lucide-react';
+import LabenLogo from '../../../components/LabenLogo';
 
 /**
  * Vista previa de la guía de carga, tal como saldría impresa.
@@ -50,9 +51,12 @@ export default function PreviewManifiesto({ camion, paradas, fecha, onCerrar }) 
         {/* ── La hoja ── (`hoja-imprimible`: al imprimir solo sale esto, ver index.css) */}
         <div className="hoja-imprimible p-8 text-black">
           <div className="flex items-start justify-between border-b-2 border-black pb-3 mb-5">
-            <div>
-              <h1 className="text-xl font-extrabold tracking-tight">GUÍA DE CARGA</h1>
-              <p className="text-xs text-gray-600 mt-0.5">Laben Food Service · CEDIS Santa Catarina</p>
+            <div className="flex items-start gap-4">
+              <LabenLogo variant="horizontal" />
+              <div>
+                <h1 className="text-xl font-extrabold tracking-tight">GUÍA DE CARGA</h1>
+                <p className="text-xs text-gray-600 mt-0.5">CEDIS Santa Catarina</p>
+              </div>
             </div>
             <div className="text-right text-xs">
               <div className="font-bold text-base">{camion.id}</div>
@@ -96,7 +100,6 @@ export default function PreviewManifiesto({ camion, paradas, fecha, onCerrar }) 
                 <th className="text-left py-1.5 pr-2 w-24">Recibe</th>
                 <th className="text-left py-1.5 pr-2 w-16">Llega</th>
                 <th className="text-right py-1.5 w-16">Kg</th>
-                <th className="text-center py-1.5 w-20">Entregado</th>
               </tr>
             </thead>
             <tbody>
@@ -111,14 +114,10 @@ export default function PreviewManifiesto({ camion, paradas, fecha, onCerrar }) 
                   <td className="py-2 pr-2 text-[10px]">{o.ventana || '—'}</td>
                   <td className="py-2 pr-2">{o.eta || '—'}</td>
                   <td className="py-2 text-right">{o.peso_kg != null ? o.peso_kg : '—'}</td>
-                  {/* Casilla para palomear a mano en la calle. */}
-                  <td className="py-2">
-                    <div className="border border-black w-5 h-5 mx-auto" />
-                  </td>
                 </tr>
               ))}
               {!ordenDeCarga.length && (
-                <tr><td colSpan="7" className="py-6 text-center text-gray-500">Este camión no tiene pedidos asignados.</td></tr>
+                <tr><td colSpan="6" className="py-6 text-center text-gray-500">Este camión no tiene pedidos asignados.</td></tr>
               )}
             </tbody>
           </table>
