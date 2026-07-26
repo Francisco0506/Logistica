@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { ProveedorDeAvisos } from './components/Avisos';
 import Login from './views/Login';
 import DispatcherPanel from './views/Dispatcher';
 import SalesPanel from './views/Sales';
@@ -17,6 +18,7 @@ import DriverApp from './views/Driver';
  */
 export default function AppRouter() {
   return (
+    <ProveedorDeAvisos>
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Login />} />
@@ -26,5 +28,6 @@ export default function AppRouter() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
+    </ProveedorDeAvisos>
   );
 }

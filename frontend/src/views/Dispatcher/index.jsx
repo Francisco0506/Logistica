@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Truck, RefreshCw, Search, AlertCircle, Package, FileText, Clock, Loader, FlaskConical, Plus, ChevronDown, ChevronUp } from 'lucide-react';
 import { CEDIS, PALETA_COLORES_CAMION } from '../../config/fleet';
+import { useAviso } from '../../components/useAviso';
 import {
   syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado,
   getSugerencias, asignarManual, cargarPruebaPedidos, getCamionesGPS, getFlota,
@@ -54,6 +55,7 @@ const aCamionDelPanel = (c) => ({
 
 export default function DispatcherPanel() {
   const navigate = useNavigate();
+  const avisar = useAviso();
 
   // ── Flota (fuente única: backend/delivery/fleet.py) ──
   const [trucks, setTrucks]             = useState([]);
@@ -275,15 +277,15 @@ export default function DispatcherPanel() {
     // Se mandan las PLACAS activas, no un conteo: el backend saca de cada placa
     // su capacidad y su tope de paradas.
     const placasActivas = camionesActivos.map((t) => t.id);
-    if (!placasActivas.length) { alert('Activa al menos un camión.'); return; }
+    if (!placasActivas.length) { avisar('Activa al menos un camión antes de optimizar.', 'error'); return; }
     setIsOptimizing(true);
     setRoutesGenerated(false);
     try {
       setAnalisis(null); // el plan cambió: lo que se había probado ya no aplica
       const data = await generarRutas(selectedDate, placasActivas, turno ?? horasTurno);
       if (data.status === 'success') await fetchData();
-      else alert(data.message);
-    } catch { alert('Error del optimizador.'); }
+      else avisar(data.message, 'error');
+    } catch { avisar('El optimizador no respondió. Intenta de nuevo.', 'error'); }
     finally { setIsOptimizing(false); }
   };
 
@@ -307,17 +309,18 @@ export default function DispatcherPanel() {
       const sug = await getSugerencias(alerta.id);
       const opcion = sug.opciones?.[0];
       if (!opcion) {
-        alert(sug.error || 'No hay ninguna ruta a la que se pueda mandar. Genera rutas primero.');
+        avisar(sug.error || 'No hay ninguna ruta a la que mandarlo. Genera rutas primero.', 'error');
         return;
       }
       const res = await asignarManual(alerta.id, {
         rutaId: opcion.ruta_id, posicion: opcion.posicion_sugerida, forzar: true,
       });
-      if (res.status === 'error') alert(res.message);
+      if (res.status === 'error') avisar(res.message, 'error');
+      else avisar(`Pedido #${alerta.doc_num} mandado en el ${opcion.camion}.`, 'exito');
       await fetchData();
     } catch (e) {
       console.error('Error al mandar de todos modos:', e);
-      alert('No se pudo mandar el pedido. Intenta de nuevo.');
+      avisar('No se pudo mandar el pedido. Intenta de nuevo.', 'error');
     } finally {
       setMandando(null);
     }
@@ -333,30 +336,47 @@ export default function DispatcherPanel() {
     try {
       const res = await evaluarEscenarios(selectedDate, placas, horasTurno);
       if (res.status === 'success') setAnalisis(res);
-      else alert(res.message);
+      else avisar(res.message, 'error');
     } catch {
-      alert('No se pudieron probar las opciones.');
+      avisar('No se pudieron probar las opciones.', 'error');
     } finally {
       setAnalizando(false);
     }
   };
 
-  const toggleTruck = (id) =>
+  // Apagar un camión lo saca de la optimización Y esconde sus pedidos del
+  // panel. Si ese camión ya salió a la calle, sus entregas desaparecerían de la
+  // vista mientras el chofer las sigue haciendo: el despachador dejaría de ver
+  // pedidos que están ocurriendo. Por eso no se deja.
+  const ESTADOS_YA_DESPACHADOS = ['Cargando', 'Listo', 'En_Ruta'];
+
+  const toggleTruck = (id) => {
+    const camion = trucks.find((t) => t.id === id);
+    const ruta = rutaDe(id);
+    if (camion?.active && ruta && ESTADOS_YA_DESPACHADOS.includes(ruta.estado)) {
+      avisar(
+        `El ${id} ya está despachado (${ruta.estado.replace('_', ' ').toLowerCase()}). ` +
+        'No se puede apagar sin perder de vista sus entregas; primero cierra su ruta.',
+        'error',
+      );
+      return;
+    }
     setTrucks((prev) => prev.map((t) => (t.id === id ? { ...t, active: !t.active } : t)));
+  };
 
   const changeDriver = (id, d) =>
     setTrucks((prev) => prev.map((t) => (t.id === id ? { ...t, driver: d } : t)));
 
   const changeTruckState = async (placa, nuevoEstado) => {
     const ruta = rutaDe(placa);
-    if (!ruta) { alert('Este camión no tiene ruta todavía. Genera rutas primero.'); return; }
+    if (!ruta) { avisar('Este camión no tiene ruta todavía. Genera rutas primero.', 'error'); return; }
     setCambiandoEstado(placa);
     try {
       const res = await updateRutaEstado(ruta.id, nuevoEstado);
-      if (res.status === 'error') alert(res.message);
+      if (res.status === 'error') avisar(res.message, 'error');
       await fetchData();
     } catch (e) {
-      alert('Error cambiando estado: ' + e.message);
+      avisar('No se pudo cambiar el estado: ' + e.message, 'error');
     } finally {
       setCambiandoEstado(null);
     }
@@ -383,9 +403,12 @@ export default function DispatcherPanel() {
     setCargandoPrueba(true);
     try {
       const data = await cargarPruebaPedidos(selectedDate, n);
-      if (data.status === 'success') { setMostrarCargarPrueba(false); await fetchData(); }
-      else alert(data.message);
-    } catch { alert('Error al cargar pedidos de prueba.'); }
+      if (data.status === 'success') {
+        setMostrarCargarPrueba(false);
+        await fetchData();
+        avisar(`${n} pedidos de prueba cargados para ${selectedDate}.`, 'exito');
+      } else avisar(data.message, 'error');
+    } catch { avisar('No se pudieron cargar los pedidos de prueba.', 'error'); }
     finally { setCargandoPrueba(false); }
   };
 
@@ -413,7 +436,7 @@ export default function DispatcherPanel() {
       await fetchData();
     } catch (e) {
       console.error('Error al asignar manualmente:', e);
-      alert('No se pudo asignar el pedido. Intenta de nuevo.');
+      avisar('No se pudo asignar el pedido. Intenta de nuevo.', 'error');
     } finally {
       setAsignando(null);
     }
