@@ -45,9 +45,17 @@ const iconoCedis = L.divIcon({
   iconSize: [26, 26],
 });
 
-function CentrarMapa({ coords }) {
+// `token` cambia en CADA petición de centrado, aunque sea al mismo punto.
+// Antes el efecto dependía del arreglo de coordenadas: como el CEDIS es una
+// constante, la segunda vez que se apretaba el botón el arreglo era el mismo
+// objeto, React no veía cambio y el mapa se quedaba donde estaba. Por eso el
+// botón de CEDIS "no servía" salvo la primera vez.
+function CentrarMapa({ coords, token }) {
   const map = useMap();
-  useEffect(() => { map.setView(coords, 13, { animate: true }); }, [coords, map]);
+  useEffect(() => {
+    if (coords?.[0] && coords?.[1]) map.setView(coords, 14, { animate: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
   return null;
 }
 
@@ -114,10 +122,25 @@ function ControlesMapa({ onEnfocarCedis, pantallaCompleta, onTogglePantallaCompl
 function RecalcularTamano() {
   const map = useMap();
   useEffect(() => {
-    map.invalidateSize();
-    const raf = requestAnimationFrame(() => map.invalidateSize());
-    const observer = new ResizeObserver(() => map.invalidateSize());
-    observer.observe(map.getContainer());
+    const contenedor = map.getContainer();
+    let ultimo = { w: 0, h: 0 };
+
+    const recalcular = () => {
+      const { clientWidth: w, clientHeight: h } = contenedor;
+      // Solo si de verdad cambió de tamaño. invalidateSize() vuelve a pedir las
+      // imágenes del mapa, y como él mismo puede alterar el contenedor, sin
+      // este candado el observador se dispara a sí mismo en bucle: el mapa
+      // parpadea en blanco mientras el ratón está encima porque nunca termina
+      // de redibujar.
+      if (w === ultimo.w && h === ultimo.h) return;
+      ultimo = { w, h };
+      map.invalidateSize({ debounceMoveend: true });
+    };
+
+    recalcular();
+    const raf = requestAnimationFrame(recalcular);
+    const observer = new ResizeObserver(recalcular);
+    observer.observe(contenedor);
     return () => { cancelAnimationFrame(raf); observer.disconnect(); };
   }, [map]);
   return null;
@@ -145,7 +168,9 @@ export default function MapaRutas({
   onTogglePantallaCompleta,
   placasSeleccionadas = [],
   onLimpiarSeleccion,
+  onAlternarCamion,
   estadoRutaDe = () => null,
+  tokenEnfoque = 0,
 }) {
   // Al abrir un camión en la lista, el mapa se queda solo con su ruta. Con cinco
   // rutas encimadas no se alcanza a seguir ninguna: se cruzan por las mismas
@@ -168,20 +193,38 @@ export default function MapaRutas({
         ? 'fixed inset-0 z-[2500] bg-white'
         : `relative rounded-xl border border-gray-200 overflow-hidden bg-white shadow-sm ${alto}`
     }>
-      <div className="absolute top-3 left-3 z-[400] space-y-2 max-w-[320px]">
-        {/* Qué se está viendo, y cómo volver a verlas todas. */}
-        {hayFiltro && (
-          <div className="bg-white border border-gray-200 shadow-sm rounded-lg px-3 py-1.5 flex items-center gap-2">
-            <span className="text-[11px] font-bold text-gray-700">
-              Solo {placasSeleccionadas.join(', ')}
-            </span>
-            <button
-              onClick={onLimpiarSeleccion}
-              title="Ver todas las rutas"
-              className="text-gray-400 hover:text-gray-700 transition"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+      <div className="absolute top-3 left-3 z-[400] space-y-2 max-w-[60%]">
+        {/* Los camiones, sobre el mapa: se puede aislar una ruta sin salir de
+            aquí, que hacía falta sobre todo en pantalla completa, donde la
+            lista de la derecha no se ve. */}
+        {rutasGeneradas && !!camionesActivos.length && (
+          <div className="bg-white/95 backdrop-blur border border-gray-200 shadow-sm rounded-lg px-2 py-1.5 flex items-center gap-1.5 flex-wrap">
+            {camionesActivos.map((c) => {
+              const encendida = !hayFiltro || placasSeleccionadas.includes(c.id);
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => onAlternarCamion?.(c.id)}
+                  title={`${paradasDe(c.id).length} paradas · ${estadoRutaDe(c.id) || 'sin ruta'}`}
+                  className={`flex items-center gap-1.5 rounded-md px-1.5 py-1 transition ${
+                    encendida ? 'hover:bg-gray-100' : 'opacity-35 hover:opacity-70'
+                  }`}
+                >
+                  <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: c.color }} />
+                  <span className="text-[11px] font-bold text-gray-700">{c.id}</span>
+                  <span className="text-[10px] text-gray-400">{paradasDe(c.id).length}</span>
+                </button>
+              );
+            })}
+            {hayFiltro && (
+              <button
+                onClick={onLimpiarSeleccion}
+                title="Ver todas las rutas"
+                className="flex items-center gap-1 text-[10px] font-bold text-orange-600 hover:text-orange-700 px-1.5 py-1"
+              >
+                <X className="w-3 h-3" /> Ver todas
+              </button>
+            )}
           </div>
         )}
 
@@ -201,18 +244,19 @@ export default function MapaRutas({
         {mensajeEstado}
       </div>
 
-      {/* scrollWheelZoom en false: la página se recorre hacia abajo, y un mapa
-          que atrapa la rueda deja al usuario clavado en cuanto pasa el cursor
-          por encima. Con Ctrl + rueda sí hace zoom, que es el gesto conocido, y
-          para lo demás están los botones. */}
+      {/* La rueda hace zoom SOLO en pantalla completa, donde no hay página que
+          recorrer. Dentro de la página va apagada: si no, al pasar el cursor
+          por encima el mapa atrapa la rueda y ya no se puede bajar. Fuera de
+          pantalla completa el zoom va con los botones o con Ctrl + rueda. */}
       <MapContainer
+        key={pantallaCompleta ? 'completa' : 'normal'}
         center={CEDIS}
         zoom={13}
         className="w-full h-full"
         zoomControl={false}
-        scrollWheelZoom={false}
+        scrollWheelZoom={pantallaCompleta}
       >
-        <CentrarMapa coords={coordsEnfocadas} />
+        <CentrarMapa coords={coordsEnfocadas} token={tokenEnfoque} />
         <RecalcularTamano />
         <ControlesMapa
           onEnfocarCedis={onEnfocarCedis}

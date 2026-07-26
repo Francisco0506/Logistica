@@ -18,12 +18,17 @@ export default function PanelSinAsignar({
   asignando,
   onAbrirAlerta,
   onAsignar,
-  onIrAAgregarCamion,
+  onActivarCamion,
   onReoptimizar,
+  onAmpliarTurno,
+  horasTurno,
   optimizando,
   etiquetaCamion,
 }) {
   const haySinAsignar = alertas.some((a) => a.motivo.startsWith('Pendiente'));
+  // Siguiente escalón de turno disponible, o null si ya va en el más largo.
+  const TURNOS = [6, 6.5, 7, 7.5, 8];
+  const siguienteTurno = TURNOS.find((h) => h > horasTurno) ?? null;
 
   return (
     <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-red-50/20">
@@ -37,27 +42,41 @@ export default function PanelSinAsignar({
             <p className="text-[12px] font-bold text-gray-800">
               {alertas.length} pedido{alertas.length === 1 ? '' : 's'} sin lugar en ninguna ruta
             </p>
-            <p className="text-[10px] text-gray-500 mt-0.5">Tres formas de resolverlo, de la más rápida a la más lenta:</p>
+            <p className="text-[10px] text-gray-500 mt-0.5">Estas son las salidas, de la más rápida a la más lenta:</p>
           </div>
 
           <div className="p-3 space-y-2">
-            {/* Las dos acciones que se pueden disparar desde aquí mismo, sin ir
-                a buscar el botón a otra pestaña. */}
+            {/* Mismo estilo que el resto del panel: naranja de Laben para la
+                acción principal, neutras para las demás, con el icono en línea
+                y no apiladas. */}
+            <button
+              onClick={onReoptimizar}
+              disabled={optimizando}
+              className="w-full flex items-center justify-center gap-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-bold text-xs py-2.5 rounded-lg shadow-sm transition"
+            >
+              <RefreshCw className={`w-4 h-4 ${optimizando ? 'animate-spin' : ''}`} />
+              {optimizando ? 'Optimizando…' : 'Volver a optimizar'}
+            </button>
+
             <div className="grid grid-cols-2 gap-2">
               <button
-                onClick={onReoptimizar}
-                disabled={optimizando}
-                className="flex flex-col items-center gap-1 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white rounded-lg px-2 py-2.5 transition"
+                onClick={onActivarCamion}
+                className="flex items-center justify-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 text-gray-600 font-semibold text-[11px] py-2 rounded-lg transition"
               >
-                <RefreshCw className={`w-4 h-4 ${optimizando ? 'animate-spin' : ''}`} />
-                <span className="text-[11px] font-bold">{optimizando ? 'Optimizando…' : 'Volver a optimizar'}</span>
+                <Truck className="w-3.5 h-3.5" /> Activar un camión
               </button>
+              {/* Tercera salida: darle más turno a los choferes. Se ofrece el
+                  siguiente escalón, no una lista, para que sea un solo clic. */}
               <button
-                onClick={onIrAAgregarCamion}
-                className="flex flex-col items-center gap-1 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-lg px-2 py-2.5 transition"
+                onClick={onAmpliarTurno}
+                disabled={!siguienteTurno}
+                title={siguienteTurno
+                  ? `Pasar el turno de ${horasTurno} h a ${siguienteTurno} h y volver a optimizar`
+                  : 'Ya está en el turno más largo'}
+                className="flex items-center justify-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 disabled:opacity-40 text-gray-600 font-semibold text-[11px] py-2 rounded-lg transition"
               >
-                <Truck className="w-4 h-4 text-gray-500" />
-                <span className="text-[11px] font-bold">Activar otro camión</span>
+                <Clock className="w-3.5 h-3.5" />
+                {siguienteTurno ? `Turno a ${siguienteTurno} h` : 'Turno al máximo'}
               </button>
             </div>
 

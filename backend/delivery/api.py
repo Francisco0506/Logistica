@@ -2,6 +2,7 @@ from ninja import NinjaAPI, Schema
 from typing import List, Optional
 from datetime import date, datetime, timedelta
 from django.db.models import Count
+from django.utils import timezone
 from . import fleet
 from .models import Remision, Ruta
 from .optimizer import (
@@ -56,6 +57,10 @@ class RutaOut(Schema):
     estado: str
     pedidos_count: int
     hora_salida: Optional[str] = None
+    # Cuándo se generó esta ruta. Sirve para saber si el plan que se está
+    # viendo ya se quedó viejo: si llegaron pedidos de SAP después de esta
+    # hora, no están considerados y hay que volver a optimizar.
+    generada: Optional[str] = None
 
 # 1. Obtener todas las remisiones
 @api.get("/dispatcher/remisiones", response=List[RemisionOut])
@@ -170,6 +175,7 @@ def get_rutas(request, fecha: date):
             # Hora real en que el despachador dio "Salida" (botón En_Ruta), no
             # una hora teórica: null hasta que el camión de verdad se despache.
             "hora_salida": r.hora_salida.strftime("%H:%M") if r.hora_salida else None,
+            "generada": timezone.localtime(r.creado_en).strftime("%H:%M") if r.creado_en else None,
         })
     return result
 

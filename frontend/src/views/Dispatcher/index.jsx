@@ -85,7 +85,10 @@ export default function DispatcherPanel() {
   // Varios camiones abiertos a la vez. Antes solo cabía uno: comparar dos rutas
   // obligaba a cerrar una para abrir la otra, y volver a buscarla en la lista.
   const [expandedTrucks, setExpandedTrucks] = useState(() => new Set());
+  // `token` sube en cada petición de centrado: permite volver a centrar en el
+  // MISMO punto (apretar CEDIS dos veces), que antes no hacía nada.
   const [focusedCoords, setFocusedCoords] = useState(CEDIS);
+  const [focusToken, setFocusToken] = useState(0);
 
   // ── Optimización y despacho ──
   const [routesGenerated, setRoutesGenerated] = useState(false);
@@ -243,7 +246,15 @@ export default function DispatcherPanel() {
   const colorOf = (placa) => trucks.find((t) => t.id === placa)?.color || '#94a3b8';
   const rutaDe = (placa) => rutas.find((r) => r.camion === placa);
   const truckLabel = (placa) => ({ placa, chofer: trucks.find((t) => t.id === placa)?.driver || null });
-  const focus = (pos) => pos?.[0] && pos?.[1] && setFocusedCoords(pos);
+  const focus = (pos) => {
+    if (!pos?.[0] || !pos?.[1]) return;
+    setFocusedCoords(pos);
+    setFocusToken((n) => n + 1);
+  };
+
+  // La hora del plan más reciente: si se re-optimizó, todas las rutas nuevas
+  // traen la misma, y las congeladas conservan la de cuando se generaron.
+  const planGenerado = rutas.map((r) => r.generada).filter(Boolean).sort().at(-1) || null;
 
   // Resumen del día, para no tener que contar a ojo en la tabla.
   const resumen = {
@@ -254,7 +265,9 @@ export default function DispatcherPanel() {
   };
 
   // ── Acciones ──
-  const optimize = async () => {
+  // `turno` explícito para cuando se optimiza justo después de cambiarlo: el
+  // estado de React todavía no se actualizó en ese instante.
+  const optimize = async (turno) => {
     // Se mandan las PLACAS activas, no un conteo: el backend saca de cada placa
     // su capacidad y su tope de paradas.
     const placasActivas = camionesActivos.map((t) => t.id);
@@ -262,11 +275,22 @@ export default function DispatcherPanel() {
     setIsOptimizing(true);
     setRoutesGenerated(false);
     try {
-      const data = await generarRutas(selectedDate, placasActivas, horasTurno);
+      const data = await generarRutas(selectedDate, placasActivas, turno ?? horasTurno);
       if (data.status === 'success') await fetchData();
       else alert(data.message);
     } catch { alert('Error del optimizador.'); }
     finally { setIsOptimizing(false); }
+  };
+
+  // Sube el turno al siguiente escalón y vuelve a optimizar de una vez: si el
+  // despachador aprieta "Turno a 6.5 h" es porque quiere ver si así caben, no
+  // para tener que apretar Optimizar aparte.
+  const ampliarTurnoYOptimizar = async () => {
+    const TURNOS = [6, 6.5, 7, 7.5, 8];
+    const siguiente = TURNOS.find((h) => h > horasTurno);
+    if (!siguiente) return;
+    setHorasTurno(siguiente);
+    await optimize(siguiente);
   };
 
   const toggleTruck = (id) =>
@@ -386,6 +410,22 @@ export default function DispatcherPanel() {
           ))}
         </section>
 
+        {/* Cuándo se hizo el plan que se está viendo. Sin esto no hay forma de
+            saber si lo de la pantalla ya se quedó viejo: SAP sigue mandando
+            pedidos, y los que llegaron después de esa hora NO están en ninguna
+            ruta hasta que se vuelva a optimizar. */}
+        {planGenerado && (
+          <div className="flex items-center gap-2 text-[11px] text-gray-500 -mt-2 px-1">
+            <Clock className="w-3.5 h-3.5 text-gray-400" />
+            <span>Plan generado a las <b className="text-gray-700">{planGenerado}</b>.</span>
+            {resumen.sinAsignar > 0 && (
+              <span className="text-orange-600 font-semibold">
+                Hay {resumen.sinAsignar} pedido{resumen.sinAsignar === 1 ? '' : 's'} fuera del plan.
+              </span>
+            )}
+          </div>
+        )}
+
         {/* ═══ MAPA (izquierda, flotante) + OPERACIÓN (derecha) ═══ */}
         {/* items-stretch (el default) a propósito: así la columna del mapa mide
             lo mismo que la de camiones y el mapa crece para llenarla. Con
@@ -408,7 +448,9 @@ export default function DispatcherPanel() {
               onTogglePantallaCompleta={() => setMapaAncho((v) => !v)}
               placasSeleccionadas={[...expandedTrucks]}
               onLimpiarSeleccion={() => setExpandedTrucks(new Set())}
+              onAlternarCamion={alternarCamion}
               estadoRutaDe={(placa) => rutaDe(placa)?.estado}
+              tokenEnfoque={focusToken}
             />
 
             {/* Leyenda: de quién es cada color, cuántas paradas trae y cómo va.
@@ -592,8 +634,10 @@ export default function DispatcherPanel() {
                     ))}
                   </div>
                 </div>
+                {/* optimize() se envuelve: onClick pasa el evento como primer
+                    argumento, y ahí es donde optimize recibe el turno. */}
                 <button
-                  onClick={optimize}
+                  onClick={() => optimize()}
                   disabled={isOptimizing || !flotaCargada}
                   title={!flotaCargada ? 'Esperando la flota del servidor…' : undefined}
                   className="w-full flex items-center justify-center gap-2 bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 rounded-lg shadow-sm hover:shadow transition-all text-[13px] disabled:opacity-50 disabled:hover:bg-orange-500"
@@ -659,8 +703,13 @@ export default function DispatcherPanel() {
                 asignando={asignando}
                 onAbrirAlerta={toggleAlerta}
                 onAsignar={handleAsignar}
-                onIrAAgregarCamion={() => { setSidebarTab('camiones'); setMostrarAgregarCamion(true); }}
-                onReoptimizar={optimize}
+                // Manda a la pestaña de camiones, donde están los apagados
+                // listos para prender. Antes abría el formulario de dar de alta
+                // un camión nuevo, que es otra cosa.
+                onActivarCamion={() => { setSidebarTab('camiones'); setSearchQuery(''); }}
+                onReoptimizar={() => optimize()}
+                onAmpliarTurno={ampliarTurnoYOptimizar}
+                horasTurno={horasTurno}
                 optimizando={isOptimizing}
                 etiquetaCamion={truckLabel}
               />
