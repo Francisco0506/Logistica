@@ -4,7 +4,8 @@ from datetime import date, datetime, timedelta
 from django.db.models import Count
 from django.utils import timezone
 from . import fleet
-from .models import Remision, Ruta
+from django.db import transaction
+from .models import Remision, Ruta, LineaRemision
 from .optimizer import (
     solve_vrp, sugerir_camiones_para_remision, asignar_manualmente,
     recalcular_etas_desde_salida,
@@ -368,7 +369,22 @@ def update_ruta_estado(request, ruta_id: int, payload: RutaEstadoIn):
             "message": f"Camión en ruta. ETAs recalculadas desde la hora real de salida ({n} pedidos).",
         }
     elif payload.estado == 'Finalizada':
-        ruta.remisiones.update(estado='Entregado')
+        # Antes esto marcaba TODAS las remisiones como 'Entregado' de golpe, lo
+        # que convertia el dato en "alguien cerro la ruta" y no en "se entrego".
+        # Ahora solo toca las que el chofer no alcanzo a reportar, y las deja
+        # como 'No_Entregado' con su motivo: si nadie confirmo la entrega, no
+        # hay razon para suponer que ocurrio.
+        sin_reportar = ruta.remisiones.exclude(
+            estado__in=['Entregado', 'Entregado_Parcial', 'No_Entregado']
+        )
+        n = sin_reportar.count()
+        if n:
+            sin_reportar.update(estado='No_Entregado', motivo='otro',
+                                observaciones='Se cerró la ruta sin que el chofer reportara esta parada.')
+            return {
+                "status": "success",
+                "message": f"Ruta cerrada. {n} parada(s) quedaron sin confirmar y se marcaron como no entregadas.",
+            }
 
     return {"status": "success", "message": f"Estado de ruta actualizado a {payload.estado}"}
 
@@ -493,6 +509,16 @@ class PedidoVentasOut(Schema):
     # camión ya hizo 3 de las 8 que van antes— y no con una hora estimada.
     paradas_antes: Optional[int] = None
     entregadas_antes: Optional[int] = None
+    # ── Lo que el chofer reportó desde la calle ──
+    # Solo viene cuando la entrega ya se confirmó. Es lo que la vendedora
+    # necesita para contestarle al cliente qué le faltó y por qué, sin tener
+    # que llamarle al chofer.
+    entregado_en: Optional[str] = None
+    motivo: Optional[str] = None
+    motivo_texto: Optional[str] = None
+    observaciones: Optional[str] = None
+    recibio: Optional[str] = None
+    faltantes: List[str] = []
     # Explicación en lenguaje de vendedora de qué está pasando con su pedido.
     situacion: str
     # True cuando el pedido ya tiene lugar en una ruta del día.
@@ -520,6 +546,7 @@ def get_pedidos_vendedor(request, fecha: date, slp_code: str):
     remisiones = (
         Remision.objects.filter(doc_date=fecha, slp_code=slp_code)
         .select_related('destino', 'ruta')
+        .prefetch_related('lineas')
         .order_by('eta', 'doc_num')
     )
 
@@ -556,10 +583,33 @@ def get_pedidos_vendedor(request, fecha: date, slp_code: str):
                 if c['secuencia_ruta'] in secuencias_antes and c['estado'] == 'Entregado'
             })
 
+        # Qué renglones quedaron cortos, en palabras: "2 de 3 Queso manchego".
+        # Se arma aquí y no en el frontend porque es la misma frase que va a
+        # necesitar cualquier otra pantalla que muestre una entrega incompleta.
+        faltantes = []
+        if r.estado in ('Entregado_Parcial', 'No_Entregado'):
+            for l in r.lineas.all():
+                dejado = float(l.cantidad_entregada) if l.cantidad_entregada is not None else 0
+                pedido_ = float(l.cantidad)
+                if dejado < pedido_:
+                    unidad = f" {l.unidad}" if l.unidad else ""
+                    faltantes.append(
+                        f"{dejado:g} de {pedido_:g}{unidad} · {l.descripcion}"
+                    )
+
         # La situación dice qué está pasando Y por qué, para que la vendedora
         # pueda contestarle al cliente sin preguntarle a nadie más.
-        if r.estado == 'Entregado':
-            situacion = "Entregado"
+        hora_entrega = timezone.localtime(r.entregado_en).strftime("%H:%M") if r.entregado_en else None
+
+        if r.estado == 'Entregado_Parcial':
+            situacion = (
+                f"Entregado incompleto a las {hora_entrega}: faltaron {len(faltantes)} producto(s)"
+                if hora_entrega else "Entregado incompleto"
+            )
+        elif r.estado == 'No_Entregado':
+            situacion = f"NO se pudo entregar" + (f" (se reportó a las {hora_entrega})" if hora_entrega else "")
+        elif r.estado == 'Entregado':
+            situacion = f"Entregado completo a las {hora_entrega}" if hora_entrega else "Entregado"
         elif r.estado == 'En_Camino':
             situacion = (
                 f"En camino en el {camion}, llega entre {eta_desde} y {eta_hasta}"
@@ -593,8 +643,209 @@ def get_pedidos_vendedor(request, fecha: date, slp_code: str):
             "posicion": r.secuencia_ruta,
             "paradas_antes": antes,
             "entregadas_antes": entregadas,
+            "entregado_en": hora_entrega,
+            "motivo": r.motivo,
+            "motivo_texto": dict(Remision.MOTIVOS).get(r.motivo),
+            "observaciones": r.observaciones,
+            "recibio": r.recibio,
+            "faltantes": faltantes,
         })
     return resultado
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# APP DEL CHOFER
+# ══════════════════════════════════════════════════════════════════════════
+# El chofer ve las paradas de SU camión, en orden, con los productos de cada
+# pedido, y confirma qué dejó. Es la única pieza que le dice al sistema qué pasó
+# de verdad en la calle: sin ella, "Entregado" solo significa que alguien en la
+# oficina cerró la ruta.
+
+class LineaOut(Schema):
+    id: int
+    item_code: str
+    descripcion: str
+    unidad: Optional[str] = None
+    cantidad: float
+    cantidad_entregada: Optional[float] = None
+
+
+class ParadaChoferOut(Schema):
+    id: int
+    doc_num: int
+    card_name: str
+    estado: str
+    secuencia_ruta: Optional[int] = None
+    address: str = ""
+    ventana: Optional[str] = None
+    eta: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    telefono: Optional[str] = None
+    contacto: Optional[str] = None
+    referencias: Optional[str] = None
+    lineas: List[LineaOut] = []
+    # Lo que ya se reportó, si es que se reportó.
+    motivo: Optional[str] = None
+    observaciones: Optional[str] = None
+    recibio: Optional[str] = None
+    entregado_en: Optional[str] = None
+
+
+class RutaChoferOut(Schema):
+    ruta_id: int
+    camion: str
+    chofer: str
+    estado: str
+    hora_salida: Optional[str] = None
+    paradas: List[ParadaChoferOut]
+
+
+@api.get("/chofer/ruta", response=RutaChoferOut)
+def get_ruta_chofer(request, fecha: date, camion: str):
+    """
+    La ruta del día de UN camión, con todo lo que el chofer necesita en la calle.
+
+    Va por camión y no por chofer porque hoy el sistema no sabe quién maneja qué
+    (ver docs/pendientes.md §1). Cuando haya usuarios de chofer, la placa saldrá
+    de su sesión.
+    """
+    try:
+        ruta = Ruta.objects.get(fecha=fecha, camion=camion)
+    except Ruta.DoesNotExist:
+        return api.create_response(
+            request,
+            {"detail": f"El {camion} no tiene ruta para el {fecha}."},
+            status=404,
+        )
+
+    remisiones = (
+        ruta.remisiones.select_related('destino')
+        .prefetch_related('lineas')
+        .order_by('secuencia_ruta', 'doc_num')
+    )
+
+    paradas = []
+    for r in remisiones:
+        d = r.destino
+        paradas.append({
+            "id": r.id,
+            "doc_num": r.doc_num,
+            "card_name": r.card_name,
+            "estado": r.estado,
+            "secuencia_ruta": r.secuencia_ruta,
+            "address": (d.street or "") if d else "",
+            "ventana": _texto_ventana(d),
+            "eta": r.eta,
+            "lat": d.latitude if d else None,
+            "lng": d.longitude if d else None,
+            "telefono": d.telefono if d else None,
+            "contacto": d.contacto if d else None,
+            "referencias": d.referencias if d else None,
+            "lineas": [
+                {
+                    "id": l.id,
+                    "item_code": l.item_code,
+                    "descripcion": l.descripcion,
+                    "unidad": l.unidad,
+                    "cantidad": float(l.cantidad),
+                    "cantidad_entregada": float(l.cantidad_entregada) if l.cantidad_entregada is not None else None,
+                }
+                for l in r.lineas.all()
+            ],
+            "motivo": r.motivo,
+            "observaciones": r.observaciones,
+            "recibio": r.recibio,
+            "entregado_en": timezone.localtime(r.entregado_en).strftime("%H:%M") if r.entregado_en else None,
+        })
+
+    return {
+        "ruta_id": ruta.id,
+        "camion": ruta.camion,
+        "chofer": ruta.chofer,
+        "estado": ruta.estado,
+        "hora_salida": ruta.hora_salida.strftime("%H:%M") if ruta.hora_salida else None,
+        "paradas": paradas,
+    }
+
+
+class LineaEntregadaIn(Schema):
+    linea_id: int
+    cantidad_entregada: float
+
+
+class ConfirmarEntregaIn(Schema):
+    # Qué se dejó de cada renglón. Si viene vacío se entiende que se entregó
+    # todo completo, que es el caso normal y no debería costar trabajo.
+    lineas: List[LineaEntregadaIn] = []
+    motivo: Optional[str] = None
+    observaciones: Optional[str] = None
+    recibio: Optional[str] = None
+
+
+@api.post("/chofer/paradas/{remision_id}/entregar")
+def confirmar_entrega(request, remision_id: int, payload: ConfirmarEntregaIn):
+    """
+    El chofer confirma qué dejó en una parada.
+
+    El estado NO se manda desde el celular: se DEDUCE de las cantidades. Si se
+    dejó todo, es 'Entregado'; si se dejó algo, 'Entregado_Parcial'; si no se
+    dejó nada, 'No_Entregado'. Así no puede quedar un pedido marcado como
+    entregado completo con renglones a medias, que es justo el error que haría
+    inútil el dato para facturación.
+    """
+    try:
+        remision = Remision.objects.prefetch_related('lineas').get(id=remision_id)
+    except Remision.DoesNotExist:
+        return {"status": "error", "message": "Ese pedido no existe."}
+
+    with transaction.atomic():
+        lineas = {l.id: l for l in remision.lineas.all()}
+
+        if payload.lineas:
+            for entrada in payload.lineas:
+                linea = lineas.get(entrada.linea_id)
+                if not linea:
+                    continue
+                # Acotado entre 0 y lo que traía: no se puede entregar de más.
+                linea.cantidad_entregada = max(0, min(entrada.cantidad_entregada, float(linea.cantidad)))
+            LineaRemision.objects.bulk_update(lineas.values(), ['cantidad_entregada'])
+        else:
+            # Sin detalle = todo completo.
+            for linea in lineas.values():
+                linea.cantidad_entregada = linea.cantidad
+            LineaRemision.objects.bulk_update(lineas.values(), ['cantidad_entregada'])
+
+        pedido_completo = all(l.completa for l in lineas.values()) if lineas else not payload.motivo
+        nada_entregado = (
+            all((l.cantidad_entregada or 0) == 0 for l in lineas.values()) if lineas
+            else False
+        )
+
+        if nada_entregado:
+            remision.estado = 'No_Entregado'
+        elif pedido_completo:
+            remision.estado = 'Entregado'
+        else:
+            remision.estado = 'Entregado_Parcial'
+
+        remision.entregado_en = timezone.now()
+        remision.motivo = payload.motivo or None
+        remision.observaciones = (payload.observaciones or "").strip() or None
+        remision.recibio = (payload.recibio or "").strip() or None
+        remision.save(update_fields=[
+            'estado', 'entregado_en', 'motivo', 'observaciones', 'recibio',
+        ])
+
+    return {
+        "status": "success",
+        "estado": remision.estado,
+        "message": {
+            'Entregado': f"Pedido #{remision.doc_num} entregado completo.",
+            'Entregado_Parcial': f"Pedido #{remision.doc_num} entregado incompleto.",
+            'No_Entregado': f"Pedido #{remision.doc_num} marcado como no entregado.",
+        }[remision.estado],
+    }
 
 
 # 7. Sugerir en qué camión conviene meter un pedido que quedó sin asignar.

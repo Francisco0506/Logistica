@@ -1,7 +1,7 @@
 import os
 from datetime import date
 from django.db import transaction
-from .models import Remision, Destino
+from .models import Remision, Destino, LineaRemision
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -124,7 +124,29 @@ def sync_from_sap(fecha: date):
         """
         cursor.execute(query, str(fecha))
         rows = cursor.fetchall()
-        
+
+        # Las LÍNEAS de cada pedido (RDR1): qué producto y cuánto. Sin esto el
+        # chofer no tiene qué marcar cuando una entrega sale incompleta —
+        # "entregué el 60%" no le sirve a nadie; lo que sirve es "de las 2
+        # bolsas de queso rallado solo aceptó 1.5".
+        #
+        # Va en UNA sola consulta para todos los pedidos del día en vez de una
+        # por pedido: con 80 pedidos serían 80 viajes a SAP.
+        doc_entries = [row.DocEntry for row in rows]
+        lineas_por_pedido = {}
+        if doc_entries:
+            marcadores = ",".join("?" * len(doc_entries))
+            cursor.execute(f"""
+                SELECT L.DocEntry, L.LineNum, L.ItemCode, L.Dscription,
+                       L.Quantity, L.unitMsr, I.SWeight1
+                FROM RDR1 L
+                LEFT JOIN OITM I ON I.ItemCode = L.ItemCode
+                WHERE L.DocEntry IN ({marcadores})
+                ORDER BY L.DocEntry, L.LineNum
+            """, *doc_entries)
+            for linea in cursor.fetchall():
+                lineas_por_pedido.setdefault(linea.DocEntry, []).append(linea)
+
         imported_count = 0
         for row in rows:
             # Crear o actualizar Destino, usando el AdresID real de SAP como clave estable
@@ -173,7 +195,7 @@ def sync_from_sap(fecha: date):
             # que el optimizador ya había dejado "Asignado" segundos antes. El
             # modelo ya trae default='Pendiente' para cuando el registro es
             # nuevo; en un update simplemente no se toca el estado actual.
-            Remision.objects.update_or_create(
+            remision, _ = Remision.objects.update_or_create(
                 doc_entry=row.DocEntry,
                 defaults={
                     "doc_num": row.DocNum,
@@ -187,6 +209,23 @@ def sync_from_sap(fecha: date):
                     "peso_kg": float(row.PesoTotalKg) if getattr(row, "PesoTotalKg", None) else None,
                 }
             )
+
+            # Las líneas del pedido. `cantidad_entregada` NO va en defaults: el
+            # auto-sync corre cada 45 s y borraría lo que el chofer ya confirmó
+            # en la calle. Es el mismo cuidado que se tiene con `estado`.
+            for linea in lineas_por_pedido.get(row.DocEntry, []):
+                LineaRemision.objects.update_or_create(
+                    remision=remision,
+                    line_num=linea.LineNum,
+                    defaults={
+                        "item_code": linea.ItemCode,
+                        "descripcion": linea.Dscription or linea.ItemCode,
+                        "unidad": linea.unitMsr,
+                        "cantidad": linea.Quantity,
+                        "peso_unitario_kg": float(linea.SWeight1) if linea.SWeight1 else None,
+                    },
+                )
+
             imported_count += 1
             
         conn.close()
