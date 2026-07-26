@@ -74,16 +74,16 @@ export default function MapaPedidos({ pedidos, camionesGPS }) {
 
   if (!conUbicacion.length) {
     return (
-      <div className="bg-white rounded-xl border border-slate-200 h-[320px] flex items-center justify-center">
-        <p className="text-sm text-slate-400">Sin pedidos que ubicar en el mapa.</p>
+      <div className="bg-white rounded-xl border border-gray-200 h-[320px] flex items-center justify-center">
+        <p className="text-sm text-gray-400">Sin pedidos que ubicar en el mapa.</p>
       </div>
     );
   }
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-      <div className="px-4 py-2.5 border-b border-slate-100 flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-3 text-[10px] font-semibold text-slate-500 flex-wrap">
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3 text-[10px] font-semibold text-gray-500 flex-wrap">
           {[
             ['En camino', COLOR_ESTADO.En_Camino],
             ['Programado', COLOR_ESTADO.Asignado],
@@ -106,7 +106,7 @@ export default function MapaPedidos({ pedidos, camionesGPS }) {
         )}
       </div>
 
-      <div className="h-[340px]">
+      <div className="h-[440px]">
         <MapContainer center={CEDIS} zoom={11} className="w-full h-full" zoomControl={false}>
           <Encuadrar puntos={puntos} firma={JSON.stringify(puntos)} />
           <TileLayer

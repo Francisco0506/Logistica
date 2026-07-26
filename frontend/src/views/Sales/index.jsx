@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search, LogOut, User, RefreshCw, Truck, CheckCircle2, Package, AlertCircle,
-  Map as MapIcon, List, ChevronDown, ChevronUp, Clock,
+  Map as MapIcon, List, Clock,
 } from 'lucide-react';
 import LabenLogo from '../../components/LabenLogo';
 import { useAviso } from '../../components/useAviso';
@@ -21,16 +21,15 @@ const hoy = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 
-// Los pedidos se agrupan por lo que la vendedora necesita saber, en el orden en
-// que le urge: lo que está pasando ahora, lo que ya quedó programado, lo que NO
-// va a salir (que es lo que tiene que resolver), y al final lo entregado — ese
-// va CERRADO, porque ya no hay nada que hacer con él y es el que más se
-// acumula conforme avanza el día.
-const GRUPOS = [
-  { id: 'En_Camino', titulo: 'En camino', icono: Truck, clase: 'text-blue-600', abierto: true },
-  { id: 'Asignado', titulo: 'Programados hoy', icono: Package, clase: 'text-orange-600', abierto: true },
-  { id: 'Pendiente', titulo: 'Sin programar', icono: AlertCircle, clase: 'text-red-600', abierto: true },
-  { id: 'Entregado', titulo: 'Entregados', icono: CheckCircle2, clase: 'text-emerald-600', abierto: false },
+// Filtros en el orden en que le urgen a la vendedora: primero lo que está
+// pasando ahora, luego lo programado, luego lo que NO va a salir (que es lo que
+// tiene que resolver) y al final lo entregado, que ya no requiere nada.
+const FILTROS = [
+  { id: 'todos', texto: 'Todos', icono: List, color: 'text-gray-500' },
+  { id: 'En_Camino', texto: 'En camino', icono: Truck, color: 'text-blue-600' },
+  { id: 'Asignado', texto: 'Programados', icono: Package, color: 'text-orange-600' },
+  { id: 'Pendiente', texto: 'Sin programar', icono: AlertCircle, color: 'text-red-600' },
+  { id: 'Entregado', texto: 'Entregados', icono: CheckCircle2, color: 'text-emerald-600' },
 ];
 
 export default function SalesPanel() {
@@ -43,12 +42,10 @@ export default function SalesPanel() {
   const [pedidos, setPedidos]       = useState([]);
   const [camionesGPS, setCamionesGPS] = useState([]);
   const [busqueda, setBusqueda]     = useState('');
+  const [filtro, setFiltro]         = useState('todos');
   const [cargando, setCargando]     = useState(true);
   const [verMapa, setVerMapa]       = useState(true);
   const [actualizado, setActualizado] = useState(null);
-  const [gruposAbiertos, setGruposAbiertos] = useState(
-    () => new Set(GRUPOS.filter((g) => g.abierto).map((g) => g.id))
-  );
 
   // ── Vendedores del día ──
   // El selector es temporal: hoy el login no valida nada, así que no hay forma
@@ -104,29 +101,33 @@ export default function SalesPanel() {
 
   const vendedor = vendedores.find((v) => v.slp_code === slpCode);
 
-  const filtrados = useMemo(() => {
-    if (!busqueda.trim()) return pedidos;
-    const q = busqueda.toLowerCase();
-    return pedidos.filter(
-      (p) => p.card_name?.toLowerCase().includes(q)
-        || String(p.doc_num).includes(q)
-        || p.camion?.toLowerCase().includes(q)
-    );
-  }, [pedidos, busqueda]);
+  const cuenta = useMemo(() => {
+    const c = { todos: pedidos.length };
+    for (const f of FILTROS.slice(1)) c[f.id] = pedidos.filter((p) => p.estado === f.id).length;
+    return c;
+  }, [pedidos]);
 
-  const resumen = useMemo(() => ({
-    total: pedidos.length,
-    enCamino: pedidos.filter((p) => p.estado === 'En_Camino').length,
-    sinProgramar: pedidos.filter((p) => p.estado === 'Pendiente').length,
-    entregados: pedidos.filter((p) => p.estado === 'Entregado').length,
-  }), [pedidos]);
+  const visibles = useMemo(() => {
+    let lista = filtro === 'todos' ? pedidos : pedidos.filter((p) => p.estado === filtro);
+    if (busqueda.trim()) {
+      const q = busqueda.toLowerCase();
+      lista = lista.filter(
+        (p) => p.card_name?.toLowerCase().includes(q)
+          || String(p.doc_num).includes(q)
+          || p.camion?.toLowerCase().includes(q)
+          || p.address?.toLowerCase().includes(q)
+      );
+    }
+    return lista;
+  }, [pedidos, filtro, busqueda]);
 
-  const alternarGrupo = (id) =>
-    setGruposAbiertos((prev) => {
-      const s = new Set(prev);
-      if (s.has(id)) s.delete(id); else s.add(id);
-      return s;
-    });
+  // El que urge: lo primero que va a llegar de lo que todavía no llega.
+  const proximo = useMemo(() => {
+    const enCurso = pedidos
+      .filter((p) => p.eta_desde && p.estado !== 'Entregado')
+      .sort((a, b) => a.eta_desde.localeCompare(b.eta_desde));
+    return enCurso[0] || null;
+  }, [pedidos]);
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-800" style={{ fontFamily: "'Inter', sans-serif" }}>
@@ -139,7 +140,7 @@ export default function SalesPanel() {
           </span>
         </div>
 
-        <div className="flex items-center gap-2 sm:gap-4">
+        <div className="flex items-center gap-2 sm:gap-3">
           <input
             type="date"
             value={fecha}
@@ -147,12 +148,22 @@ export default function SalesPanel() {
             title="Día que se está consultando"
             className="text-xs font-semibold text-gray-700 bg-gray-100 border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-orange-200"
           />
-          <div className="hidden sm:flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-1.5">
-            <User className="h-3.5 w-3.5 text-gray-500" />
-            <span className="text-xs font-bold text-gray-700 truncate max-w-[140px]">
-              {vendedor?.slp_name || '—'}
-            </span>
-          </div>
+          {vendedores.length > 1 ? (
+            <select
+              value={slpCode}
+              onChange={(e) => setSlpCode(e.target.value)}
+              className="text-xs font-bold text-gray-700 bg-gray-100 border border-gray-200 rounded-lg px-2 py-1.5 max-w-[160px] focus:outline-none focus:ring-2 focus:ring-orange-200"
+            >
+              {vendedores.map((v) => (
+                <option key={v.slp_code} value={v.slp_code}>{v.slp_name} ({v.pedidos})</option>
+              ))}
+            </select>
+          ) : (
+            <div className="hidden sm:flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-1.5">
+              <User className="h-3.5 w-3.5 text-gray-500" />
+              <span className="text-xs font-bold text-gray-700 truncate max-w-[140px]">{vendedor?.slp_name || '—'}</span>
+            </div>
+          )}
           <button
             onClick={() => navigate('/')}
             className="flex items-center gap-1.5 text-xs font-bold text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg px-2.5 py-1.5 transition"
@@ -162,147 +173,130 @@ export default function SalesPanel() {
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-5 space-y-5">
+      <main className="max-w-[1500px] mx-auto px-4 sm:px-6 py-4 space-y-4">
 
-        {/* ═══ RESUMEN — mismas tarjetas que el dispatcher ═══ */}
-        <section className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {[
-            { etiqueta: 'Mis pedidos', valor: resumen.total, clase: 'text-gray-800' },
-            { etiqueta: 'En camino', valor: resumen.enCamino, clase: resumen.enCamino ? 'text-blue-600' : 'text-gray-300' },
-            { etiqueta: 'Sin programar', valor: resumen.sinProgramar, clase: resumen.sinProgramar ? 'text-red-600' : 'text-gray-300' },
-            { etiqueta: 'Entregados', valor: resumen.entregados, clase: resumen.entregados ? 'text-emerald-600' : 'text-gray-300' },
-          ].map((m) => (
-            <div key={m.etiqueta} className="bg-white rounded-xl border border-gray-200 px-4 py-3 shadow-sm">
-              <div className={`text-2xl font-extrabold leading-none ${m.clase}`}>{m.valor}</div>
-              <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide mt-1.5">{m.etiqueta}</div>
+        {/* ═══ LO QUE SIGUE + resumen en una sola franja ═══ */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-4 py-3 flex items-center gap-5 flex-wrap">
+          {proximo ? (
+            <div className="min-w-0">
+              <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">Lo próximo en llegar</div>
+              <div className="text-sm font-bold text-gray-800 truncate">
+                {proximo.card_name}
+                <span className="text-orange-600 ml-2 tabular-nums">{proximo.eta_desde}–{proximo.eta_hasta}</span>
+              </div>
             </div>
-          ))}
-        </section>
-
-        {/* Quién soy y cuándo se actualizó — misma línea de contexto que el
-            "Plan generado a las…" del dispatcher. */}
-        <div className="flex items-center gap-2 text-[11px] text-gray-500 -mt-2 px-1 flex-wrap">
-          <User className="w-3.5 h-3.5 text-gray-400" />
-          {vendedores.length > 1 ? (
-            <>
-              <span>Pedidos de</span>
-              <select
-                value={slpCode}
-                onChange={(e) => setSlpCode(e.target.value)}
-                className="font-bold text-gray-700 bg-transparent border-0 p-0 focus:outline-none focus:ring-2 focus:ring-orange-200 rounded cursor-pointer"
-              >
-                {vendedores.map((v) => (
-                  <option key={v.slp_code} value={v.slp_code}>{v.slp_name} ({v.pedidos})</option>
-                ))}
-              </select>
-            </>
           ) : (
-            <span>Pedidos de <b className="text-gray-700">{vendedor?.slp_name || '—'}</b></span>
+            <div>
+              <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">Lo próximo en llegar</div>
+              <div className="text-sm font-bold text-gray-300">Nada pendiente</div>
+            </div>
           )}
-          {actualizado && (
-            <span className="text-gray-400">
-              · actualizado {actualizado.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
-            </span>
-          )}
+
+          <div className="flex items-stretch gap-5 ml-auto border-l border-gray-100 pl-5">
+            {[
+              { t: 'Pedidos', n: cuenta.todos, c: 'text-gray-800' },
+              { t: 'En camino', n: cuenta.En_Camino, c: cuenta.En_Camino ? 'text-blue-600' : 'text-gray-300' },
+              { t: 'Sin programar', n: cuenta.Pendiente, c: cuenta.Pendiente ? 'text-red-600' : 'text-gray-300' },
+              { t: 'Entregados', n: cuenta.Entregado, c: cuenta.Entregado ? 'text-emerald-600' : 'text-gray-300' },
+            ].map((m) => (
+              <div key={m.t}>
+                <div className={`text-xl font-extrabold leading-none ${m.c}`}>{m.n}</div>
+                <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide mt-1">{m.t}</div>
+              </div>
+            ))}
+          </div>
         </div>
 
-        {/* ═══ BUSCADOR + MAPA ═══ */}
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="flex-1 bg-white rounded-xl border border-gray-200 px-4 py-3 flex items-center focus-within:ring-2 focus-within:ring-orange-200 transition">
-            <Search className="text-gray-400 w-4 h-4 mr-3 flex-shrink-0" />
-            <input
-              type="text"
-              placeholder="Buscar por cliente, remisión o placa…"
-              className="w-full text-sm outline-none text-gray-700 bg-transparent"
-              value={busqueda}
-              onChange={(e) => setBusqueda(e.target.value)}
-            />
-            {busqueda && (
-              <button onClick={() => setBusqueda('')} className="text-[11px] font-bold text-gray-400 hover:text-gray-600 ml-2">
-                Limpiar
+        {/* ═══ FILTROS + BUSCADOR ═══ */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-3 py-2.5 flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-1 flex-wrap">
+            {FILTROS.map(({ id, texto, icono: Icono, color }) => (
+              <button
+                key={id}
+                onClick={() => setFiltro(id)}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition ${
+                  filtro === id ? 'bg-gray-800 text-white' : 'text-gray-500 hover:bg-gray-100'
+                }`}
+              >
+                <Icono className={`w-3.5 h-3.5 ${filtro === id ? 'text-white' : color}`} />
+                {texto}
+                <span className={filtro === id ? 'text-gray-300' : 'text-gray-400'}>{cuenta[id] ?? 0}</span>
               </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2 ml-auto flex-1 min-w-[220px] justify-end">
+            <div className="relative flex-1 max-w-xs">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+              <input
+                value={busqueda}
+                onChange={(e) => setBusqueda(e.target.value)}
+                placeholder="Cliente, remisión, placa o calle…"
+                className="w-full pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-orange-200"
+              />
+            </div>
+            <button
+              onClick={() => setVerMapa((v) => !v)}
+              title={verMapa ? 'Ocultar el mapa' : 'Ver el mapa'}
+              className="flex items-center gap-1.5 border border-gray-200 hover:bg-gray-50 rounded-lg px-2.5 py-1.5 text-[11px] font-bold text-gray-600 transition flex-shrink-0"
+            >
+              {verMapa ? <List className="w-3.5 h-3.5" /> : <MapIcon className="w-3.5 h-3.5" />}
+              <span className="hidden sm:inline">{verMapa ? 'Ocultar mapa' : 'Ver mapa'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* ═══ LISTA + MAPA, lado a lado ═══
+            El mapa a la derecha y flotante, igual que en el dispatcher: así no
+            se come la pantalla y la lista aprovecha el ancho. */}
+        <div className={verMapa ? 'grid grid-cols-1 lg:grid-cols-[1fr_420px] gap-4 items-start' : ''}>
+          <div className="space-y-1.5">
+            {cargando && !pedidos.length && (
+              <div className="bg-white rounded-xl border border-gray-200 text-center py-16 text-gray-400">
+                <RefreshCw className="w-6 h-6 mx-auto mb-2 animate-spin" />
+                <p className="text-sm">Cargando pedidos…</p>
+              </div>
+            )}
+
+            {!cargando && !pedidos.length && (
+              <div className="bg-white rounded-xl border border-gray-200 text-center py-16 px-4">
+                <Package className="w-8 h-8 mx-auto mb-3 text-gray-200" />
+                <p className="text-sm font-semibold text-gray-600">No hay pedidos para este día</p>
+                <p className="text-xs text-gray-400 mt-1">Prueba con otra fecha.</p>
+              </div>
+            )}
+
+            {!!pedidos.length && !visibles.length && (
+              <div className="bg-white rounded-xl border border-gray-200 text-center py-10 px-4">
+                <p className="text-sm text-gray-500">
+                  {busqueda ? `Ningún pedido coincide con «${busqueda}».` : 'No hay pedidos en este filtro.'}
+                </p>
+              </div>
+            )}
+
+            {visibles.map((p) => (
+              <TarjetaPedido
+                key={p.id}
+                pedido={p}
+                camion={p.camion ? camionesGPS.find((c) => c.placa === p.camion) : null}
+              />
+            ))}
+
+            {!!pedidos.length && (
+              <p className="text-[10px] text-gray-400 flex items-center gap-1.5 pt-2 pb-4">
+                <Clock className="w-3 h-3" />
+                Las horas son estimadas; se ajustan cuando el camión sale del CEDIS.
+                {actualizado && ` Actualizado ${actualizado.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}.`}
+              </p>
             )}
           </div>
-          <button
-            onClick={() => setVerMapa((v) => !v)}
-            className="flex items-center justify-center gap-2 bg-white border border-gray-200 hover:bg-gray-50 rounded-xl px-4 py-3 text-xs font-bold text-gray-600 transition flex-shrink-0"
-          >
-            {verMapa ? <><List className="w-4 h-4" /> Ocultar mapa</> : <><MapIcon className="w-4 h-4" /> Ver en el mapa</>}
-          </button>
+
+          {verMapa && !!pedidos.length && (
+            <div className="lg:sticky lg:top-[76px]">
+              <MapaPedidos pedidos={visibles} camionesGPS={camionesGPS} />
+            </div>
+          )}
         </div>
-
-        {verMapa && !!pedidos.length && (
-          <MapaPedidos pedidos={filtrados} camionesGPS={camionesGPS} />
-        )}
-
-        {/* ═══ ESTADOS ═══ */}
-        {cargando && !pedidos.length && (
-          <div className="text-center py-16 text-gray-400">
-            <RefreshCw className="w-6 h-6 mx-auto mb-2 animate-spin" />
-            <p className="text-sm">Cargando pedidos…</p>
-          </div>
-        )}
-
-        {!cargando && !pedidos.length && (
-          <div className="bg-white rounded-xl border border-gray-200 text-center py-16 px-4">
-            <Package className="w-8 h-8 mx-auto mb-3 text-gray-200" />
-            <p className="text-sm font-semibold text-gray-600">No hay pedidos para este día</p>
-            <p className="text-xs text-gray-400 mt-1">Prueba con otra fecha.</p>
-          </div>
-        )}
-
-        {/* ═══ PEDIDOS AGRUPADOS — secciones que se abren y cierran, igual que
-            Pedidos y Manifiesto en el dispatcher ═══ */}
-        {GRUPOS.map(({ id, titulo, icono: Icono, clase }) => {
-          const delGrupo = filtrados.filter((p) => p.estado === id);
-          if (!delGrupo.length) return null;
-          const abierto = gruposAbiertos.has(id);
-
-          return (
-            <section key={id} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-              <button
-                onClick={() => alternarGrupo(id)}
-                className="w-full flex items-center gap-2 px-4 py-3 hover:bg-gray-50 transition text-left"
-              >
-                <Icono className={`w-4 h-4 ${clase}`} />
-                <h2 className="text-sm font-bold text-gray-800">{titulo}</h2>
-                <span className="text-[10px] font-bold text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
-                  {delGrupo.length}
-                </span>
-                <span className="ml-auto text-gray-400">
-                  {abierto ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                </span>
-              </button>
-
-              {abierto && (
-                <div className="p-3 pt-0 space-y-2">
-                  {delGrupo.map((p) => (
-                    <TarjetaPedido
-                      key={p.id}
-                      pedido={p}
-                      camion={p.camion ? camionesGPS.find((c) => c.placa === p.camion) : null}
-                    />
-                  ))}
-                </div>
-              )}
-            </section>
-          );
-        })}
-
-        {busqueda && !filtrados.length && pedidos.length > 0 && (
-          <p className="text-center text-sm text-gray-400 py-10">
-            Ningún pedido coincide con «{busqueda}».
-          </p>
-        )}
-
-        {/* Las horas son estimadas, igual que en el dispatcher. Aquí importa
-            todavía más: la vendedora es justo quien se las promete al cliente. */}
-        {!!pedidos.length && (
-          <p className="text-[11px] text-gray-400 flex items-center gap-1.5 px-1 pb-4">
-            <Clock className="w-3.5 h-3.5" />
-            Las horas son estimadas. Se ajustan solas cuando el camión sale del CEDIS.
-          </p>
-        )}
       </main>
     </div>
   );

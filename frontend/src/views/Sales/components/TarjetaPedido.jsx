@@ -1,138 +1,128 @@
 import React, { useState } from 'react';
-import { Truck, Clock, MapPin, CheckCircle2, AlertCircle, Package, Eye } from 'lucide-react';
+import { Truck, Clock, MapPin, CheckCircle2, AlertCircle, Package, ChevronDown } from 'lucide-react';
 import MiniMapa from '../../../components/MiniMapa';
 
 /**
- * Un pedido como lo ve la vendedora: qué es, a qué hora llega y qué está
- * pasando con él. La idea es que pueda contestarle al cliente sin preguntarle
- * a nadie más.
+ * Un pedido como lo ve la vendedora, en un renglón compacto.
  *
- * La hora se muestra como RANGO ("entre 09:00 y 09:15") y no como hora exacta:
- * una hora al minuto suena a promesa que no se puede cumplir.
+ * Antes era una tarjeta alta con mucho aire: cabían cuatro en pantalla y para
+ * ver los 80 había que recorrer mucho. Ahora cabe el triple sin perder nada,
+ * porque lo que se necesita de un vistazo son cuatro datos —quién, en qué
+ * camión, a qué hora llega y si eso cae dentro de su horario— y todo lo demás
+ * se abre al hacer clic.
+ *
+ * La hora va como RANGO ("09:04 – 09:19") y no como hora exacta: una hora al
+ * minuto suena a promesa que no se puede cumplir.
  */
 
 const ESTILOS = {
-  Entregado: {
-    icono: CheckCircle2,
-    pill: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    barra: 'bg-emerald-500',
-    texto: 'Entregado',
-  },
-  En_Camino: {
-    icono: Truck,
-    pill: 'bg-blue-50 text-blue-700 border-blue-200',
-    barra: 'bg-blue-500',
-    texto: 'En camino',
-  },
-  Asignado: {
-    icono: Package,
-    pill: 'bg-orange-50 text-orange-700 border-orange-200',
-    barra: 'bg-orange-400',
-    texto: 'Programado',
-  },
-  Pendiente: {
-    icono: AlertCircle,
-    pill: 'bg-gray-100 text-gray-600 border-gray-200',
-    barra: 'bg-gray-300',
-    texto: 'Sin programar',
-  },
+  Entregado: { icono: CheckCircle2, pill: 'bg-emerald-50 text-emerald-700', barra: 'bg-emerald-500', texto: 'Entregado' },
+  En_Camino: { icono: Truck,        pill: 'bg-blue-50 text-blue-700',       barra: 'bg-blue-500',    texto: 'En camino' },
+  Asignado:  { icono: Package,      pill: 'bg-orange-50 text-orange-700',   barra: 'bg-orange-400',  texto: 'Programado' },
+  Pendiente: { icono: AlertCircle,  pill: 'bg-gray-100 text-gray-600',      barra: 'bg-gray-300',    texto: 'Sin programar' },
 };
 
 export default function TarjetaPedido({ pedido, camion }) {
   const estilo = ESTILOS[pedido.estado] || ESTILOS.Pendiente;
   const Icono = estilo.icono;
-  const [verMapa, setVerMapa] = useState(false);
+  const [abierto, setAbierto] = useState(false);
+  const entregado = pedido.estado === 'Entregado';
 
   return (
-    <article className="bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow overflow-hidden">
-      <div className="flex">
-      {/* Franja de color: el estado se lee de reojo sin buscar la etiqueta */}
-      <div className={`w-1.5 flex-shrink-0 ${estilo.barra}`} />
+    <div className={`rounded-lg border transition ${
+      abierto ? 'border-orange-300 shadow-sm' : 'border-gray-200 hover:border-gray-300'
+    } bg-white overflow-hidden`}>
 
-      <div className="flex-1 min-w-0 p-4 flex flex-col sm:flex-row sm:items-center gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[11px] font-bold text-slate-400 font-mono">#{pedido.doc_num}</span>
-            <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border ${estilo.pill}`}>
-              <Icono className="w-3 h-3" /> {estilo.texto}
-            </span>
-            {pedido.camion && (
-              <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
-                {pedido.camion}
+      <button
+        onClick={() => setAbierto((v) => !v)}
+        className="w-full flex items-stretch text-left"
+      >
+        {/* Franja de color: el estado se lee de reojo sin buscar la etiqueta */}
+        <div className={`w-1 flex-shrink-0 ${estilo.barra}`} />
+
+        <div className="flex-1 min-w-0 px-3 py-2.5 flex items-center gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] font-mono font-bold text-gray-400">#{pedido.doc_num}</span>
+              <span className={`inline-flex items-center gap-1 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${estilo.pill}`}>
+                <Icono className="w-2.5 h-2.5" /> {estilo.texto}
               </span>
+              {pedido.camion && (
+                <span className="text-[9px] font-bold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
+                  {pedido.camion}
+                </span>
+              )}
+            </div>
+            <div className={`text-[13px] font-bold truncate mt-0.5 ${entregado ? 'text-gray-500' : 'text-gray-800'}`}>
+              {pedido.card_name}
+            </div>
+            <div className="text-[10px] text-gray-400 truncate">
+              {pedido.address || 'Sin dirección'}
+              {pedido.ventana && <> · recibe {pedido.ventana}</>}
+            </div>
+          </div>
+
+          {/* La hora, que es el dato que se pregunta por teléfono */}
+          <div className="text-right flex-shrink-0">
+            {pedido.eta_desde ? (
+              <>
+                <div className={`text-[13px] font-extrabold tabular-nums leading-tight ${
+                  entregado ? 'text-emerald-600' : 'text-gray-800'
+                }`}>
+                  {entregado && <span className="text-[9px] uppercase mr-1">Llegó</span>}
+                  {pedido.eta_desde}<span className="text-gray-300 font-bold"> – </span>{pedido.eta_hasta}
+                </div>
+                <div className="text-[10px] text-gray-400">${pedido.doc_total?.toLocaleString('es-MX')}</div>
+              </>
+            ) : (
+              <>
+                <div className="text-[11px] font-bold text-gray-300 italic leading-tight">Sin hora</div>
+                <div className="text-[10px] text-gray-400">${pedido.doc_total?.toLocaleString('es-MX')}</div>
+              </>
             )}
           </div>
 
-          <h3 className="text-[15px] font-bold text-slate-800 mt-1 truncate" title={pedido.card_name}>
-            {pedido.card_name}
-          </h3>
-
-          {pedido.address && (
-            <p className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5 truncate">
-              <MapPin className="w-3 h-3 flex-shrink-0" /> {pedido.address}
-            </p>
-          )}
-
-          <p className="text-[12px] text-slate-600 mt-1.5 leading-snug">{pedido.situacion}</p>
+          <ChevronDown className={`w-4 h-4 text-gray-300 flex-shrink-0 transition-transform ${abierto ? 'rotate-180' : ''}`} />
         </div>
+      </button>
 
-        {/* Bloque de horas */}
-        <div className="sm:w-44 flex-shrink-0 sm:text-right space-y-1">
-          {pedido.eta_desde ? (
+      {abierto && (
+        <div className="border-t border-gray-100 bg-gray-50/60 p-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="space-y-2 text-[11px]">
             <div>
-              <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wide">Llega entre</div>
-              <div className="text-lg font-extrabold text-slate-800 leading-tight tabular-nums">
-                {pedido.eta_desde} – {pedido.eta_hasta}
+              <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">Qué está pasando</div>
+              <p className="text-gray-700 leading-snug mt-0.5">{pedido.situacion}</p>
+            </div>
+            <div className="flex items-start gap-1.5 text-gray-600">
+              <MapPin className="w-3.5 h-3.5 text-gray-400 flex-shrink-0 mt-px" />
+              <span>{pedido.address || 'Sin dirección en SAP'}</span>
+            </div>
+            {pedido.ventana && (
+              <div className="flex items-start gap-1.5 text-gray-600">
+                <Clock className="w-3.5 h-3.5 text-gray-400 flex-shrink-0 mt-px" />
+                <span>El cliente recibe {pedido.ventana}</span>
               </div>
-            </div>
-          ) : (
-            <div>
-              <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wide">Llega</div>
-              <div className="text-sm font-bold text-slate-300 italic leading-tight">Sin hora aún</div>
-            </div>
-          )}
-
-          {pedido.ventana && (
-            <div className="text-[10px] text-slate-400 flex items-center gap-1 sm:justify-end">
-              <Clock className="w-3 h-3" /> El cliente recibe {pedido.ventana}
-            </div>
-          )}
-
-          <div className="text-[11px] font-bold text-slate-500">
-            ${pedido.doc_total?.toLocaleString('es-MX')}
+            )}
+            {camion && (
+              <div className="flex items-start gap-1.5 text-gray-600">
+                <span className="w-2 h-2 rounded-full bg-green-600 flex-shrink-0 mt-1" />
+                <span>
+                  El camión {camion.placa} {camion.velocidad_kmh > 2 ? 'va circulando' : 'está detenido'}
+                  {camion.direccion ? ` por ${camion.direccion}` : ''}.
+                </span>
+              </div>
+            )}
           </div>
 
-          {/* El ojo: ver dónde queda el cliente y por dónde va el camión, sin
-              salir de la lista. Es la pregunta que sigue después de "¿a qué
-              hora llega?" cuando el cliente está llamando. */}
-          <button
-            onClick={() => setVerMapa((v) => !v)}
-            className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-500 hover:text-orange-600 transition"
-          >
-            <Eye className="w-3.5 h-3.5" /> {verMapa ? 'Ocultar mapa' : 'Ver en el mapa'}
-          </button>
-        </div>
-      </div>
-      </div>
-
-      {verMapa && (
-        <div className="px-4 pb-4">
           <MiniMapa
             lat={pedido.lat}
             lng={pedido.lng}
             nombre={pedido.card_name}
             camion={camion}
-            alto="h-52"
+            alto="h-40"
           />
-          {camion && (
-            <p className="text-[10px] text-slate-500 mt-1.5 flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full bg-green-600" />
-              El camión {camion.placa} {camion.velocidad_kmh > 2 ? 'va circulando' : 'está detenido'}
-              {camion.direccion ? ` por ${camion.direccion}` : ''}.
-            </p>
-          )}
         </div>
       )}
-    </article>
+    </div>
   );
 }
