@@ -65,6 +65,42 @@ export async function getRutas(fecha, { signal } = {}) {
 }
 
 /**
+ * La ruta del día de UN camión, para la app del chofer: sus paradas en orden,
+ * con los productos de cada pedido y los datos de contacto del cliente.
+ *
+ * Va por camión y no por chofer porque el sistema todavía no sabe quién maneja
+ * qué (ver docs/pendientes.md §1). Cuando haya usuarios, la placa saldrá de la
+ * sesión del chofer.
+ */
+export async function getRutaChofer(fecha, camion, { signal } = {}) {
+  const res = await fetch(`/api/chofer/ruta?fecha=${fecha}&camion=${encodeURIComponent(camion)}`, { signal });
+  if (res.status === 404) return null;   // ese camión no tiene ruta hoy
+  if (!res.ok) throw new Error(`Ruta chofer failed: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * El chofer confirma qué dejó en una parada.
+ *
+ * Si no se manda detalle de líneas, el backend entiende que se entregó todo
+ * completo — que es el caso normal y no debe costar trabajo. Para una entrega
+ * incompleta van las cantidades por renglón, el motivo y la nota.
+ *
+ * El ESTADO no se manda: el backend lo deduce de las cantidades, para que no
+ * pueda quedar un pedido "completo" con renglones a medias.
+ */
+export async function confirmarEntrega(remisionId, { lineas = [], motivo, observaciones, recibio } = {}, { signal } = {}) {
+  const res = await fetch(`/api/chofer/paradas/${remisionId}/entregar`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ lineas, motivo, observaciones, recibio }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`Confirmar entrega failed: ${res.status}`);
+  return res.json();
+}
+
+/**
  * "¿Qué hago para que quepan todos?" — corre el optimizador varias veces
  * cambiando UNA cosa cada vez (salir antes, más turno, otro camión) y regresa
  * cuántos pedidos entrarían en cada caso, ordenado por el que más ayuda.
