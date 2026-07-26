@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search, LogOut, User, RefreshCw, Truck, CheckCircle2, Package, AlertCircle,
-  Map as MapIcon, List, Clock,
+  Map as MapIcon, List, Clock, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import LabenLogo from '../../components/LabenLogo';
 import { useAviso } from '../../components/useAviso';
@@ -44,7 +44,9 @@ export default function SalesPanel() {
   const [busqueda, setBusqueda]     = useState('');
   const [filtro, setFiltro]         = useState('todos');
   const [cargando, setCargando]     = useState(true);
-  const [verMapa, setVerMapa]       = useState(false);
+  const [verMapa, setVerMapa]       = useState(true);
+  const [mapaCompleto, setMapaCompleto] = useState(false);
+  const [verLista, setVerLista]     = useState(true);
   const [actualizado, setActualizado] = useState(null);
   const [flota, setFlota] = useState([]);
   const [camionFiltro, setCamionFiltro] = useState('todos');
@@ -271,16 +273,13 @@ export default function SalesPanel() {
                 {misCamiones.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             )}
-            {/* El mapa se abre grande, no vive en una esquina: con 80 pedidos
-                los marcadores se encimaban en la columna y no se leían. */}
             <button
-              onClick={() => setVerMapa(true)}
-              title="Ver los pedidos en el mapa"
-              className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-white rounded-lg px-3 py-1.5 text-[11px] font-bold transition flex-shrink-0"
+              onClick={() => setVerMapa((v) => !v)}
+              title={verMapa ? 'Ocultar el mapa' : 'Ver el mapa'}
+              className="flex items-center gap-1.5 border border-gray-200 hover:bg-gray-50 rounded-lg px-2.5 py-1.5 text-[11px] font-bold text-gray-600 transition flex-shrink-0"
             >
-              <MapIcon className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Ver en el mapa</span>
-              <span className="text-gray-400 font-semibold">{visibles.length}</span>
+              {verMapa ? <List className="w-3.5 h-3.5" /> : <MapIcon className="w-3.5 h-3.5" />}
+              <span className="hidden sm:inline">{verMapa ? 'Ocultar mapa' : 'Ver mapa'}</span>
             </button>
           </div>
         </div>
@@ -288,8 +287,37 @@ export default function SalesPanel() {
         {/* ═══ LISTA + MAPA, lado a lado ═══
             El mapa a la derecha y flotante, igual que en el dispatcher: así no
             se come la pantalla y la lista aprovecha el ancho. */}
-        <div>
-          <div className="space-y-1.5">
+        {/* ═══ MAPA, a todo lo ancho ═══
+            Aquí sí hay espacio para separar 80 marcadores; en la columna
+            angosta de antes se encimaban y no se distinguía cuál era cuál. */}
+        {verMapa && !!pedidos.length && (
+          <MapaPedidos
+            pedidos={visibles}
+            camionesGPS={camionesGPS}
+            colorDe={colorDe}
+            pantallaCompleta={mapaCompleto}
+            onTogglePantalla={() => setMapaCompleto((v) => !v)}
+          />
+        )}
+
+        {/* ═══ LA LISTA, abajo y colapsable ═══ */}
+        <section className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <button
+            onClick={() => setVerLista((v) => !v)}
+            className="w-full flex items-center gap-2 px-4 py-3 border-b border-gray-100 hover:bg-gray-50 transition text-left"
+          >
+            <Package className="h-4 w-4 text-orange-500" />
+            <h2 className="text-sm font-bold text-gray-800">Mis pedidos</h2>
+            <span className="text-[10px] font-bold text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+              {visibles.length}
+            </span>
+            <span className="ml-auto text-gray-400">
+              {verLista ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </span>
+          </button>
+
+          {verLista && (
+          <div className="p-3 space-y-1.5">
             {cargando && !pedidos.length && (
               <div className="bg-white rounded-xl border border-gray-200 text-center py-16 text-gray-400">
                 <RefreshCw className="w-6 h-6 mx-auto mb-2 animate-spin" />
@@ -322,26 +350,16 @@ export default function SalesPanel() {
               />
             ))}
 
-            {!!pedidos.length && (
-              <p className="text-[10px] text-gray-400 flex items-center gap-1.5 pt-2 pb-4">
-                <Clock className="w-3 h-3" />
-                Las horas son estimadas; se ajustan cuando el camión sale del CEDIS.
-                {actualizado && ` Actualizado ${actualizado.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}.`}
-              </p>
-            )}
           </div>
+          )}
+        </section>
 
-        </div>
-
-        {/* El mapa, a pantalla completa. Se cierra con el botón o con Esc. */}
-        {verMapa && !!pedidos.length && (
-          <MapaPedidos
-            pedidos={visibles}
-            camionesGPS={camionesGPS}
-            colorDe={colorDe}
-            pantallaCompleta
-            onTogglePantalla={() => setVerMapa(false)}
-          />
+        {!!pedidos.length && (
+          <p className="text-[10px] text-gray-400 flex items-center gap-1.5 pb-4 px-1">
+            <Clock className="w-3 h-3" />
+            Las horas son estimadas; se ajustan cuando el camión sale del CEDIS.
+            {actualizado && ` Actualizado ${actualizado.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}.`}
+          </p>
         )}
       </main>
     </div>
