@@ -151,6 +151,7 @@ export default function TarjetaPedido({ pedido, camion, color }) {
             lng={pedido.lng}
             nombre={pedido.card_name}
             camion={camion}
+            color={color || undefined}
             alto="h-40"
           />
         </div>

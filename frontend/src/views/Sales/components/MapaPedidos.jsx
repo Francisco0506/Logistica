@@ -2,20 +2,18 @@ import React, { useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
+import { MapPin, Maximize2, Minimize2, ZoomIn, ZoomOut, Compass, Truck } from 'lucide-react';
 import { CEDIS } from '../../../config/fleet';
 
 /**
  * Mapa del panel de ventas.
  *
- * Cada pedido se pinta CON EL COLOR DE SU CAMIÓN y con su número de parada.
- * Antes todos eran puntos naranjas iguales, que no decían nada: con 80 pedidos
- * en pantalla no se distinguía qué iba junto con qué ni en qué orden. Ahora se
- * lee de un vistazo "estos cinco los lleva el mismo camión, y el mío es la
- * parada 12".
+ * Cada pedido se pinta CON EL COLOR DE SU CAMIÓN y con su número de parada, así
+ * que se lee de un vistazo "estos cinco los lleva el mismo camión y el mío es
+ * la parada 12". Antes todos eran puntos naranjas iguales y no decían nada.
  *
- * Los ya entregados van apagados, y el camión en vivo (GPS de Samsara) va en
- * verde encima de todo. No dibuja rutas: la vendedora no necesita el trazo,
- * necesita poder decirle a su cliente "el camión ya viene, va por Guadalupe".
+ * No dibuja rutas: la vendedora no necesita el trazo, necesita poder decirle a
+ * su cliente "el camión ya viene, va por Guadalupe".
  */
 
 const GRIS = '#94a3b8';
@@ -56,13 +54,84 @@ function Encuadrar({ puntos, firma }) {
   return null;
 }
 
-export default function MapaPedidos({ pedidos, camionesGPS, colorDe, alto = 'h-[440px]' }) {
+/**
+ * Leaflet mide su contenedor UNA sola vez, al crearse, y se queda con esa
+ * medida. En una columna flotante que cambia de alto según la lista, se queda
+ * chico y deja franjas sin dibujar o parpadea al pasar el ratón.
+ *
+ * El candado del tamaño es indispensable: invalidateSize() vuelve a pedir las
+ * imágenes y puede alterar el contenedor, lo que dispararía al observador otra
+ * vez en un bucle que nunca termina de redibujar.
+ */
+function RecalcularTamano() {
+  const map = useMap();
+  useEffect(() => {
+    const contenedor = map.getContainer();
+    let ultimo = { w: 0, h: 0 };
+    const recalcular = () => {
+      const { clientWidth: w, clientHeight: h } = contenedor;
+      if (w === ultimo.w && h === ultimo.h) return;
+      ultimo = { w, h };
+      map.invalidateSize({ debounceMoveend: true });
+    };
+    recalcular();
+    const raf = requestAnimationFrame(recalcular);
+    const observer = new ResizeObserver(recalcular);
+    observer.observe(contenedor);
+    return () => { cancelAnimationFrame(raf); observer.disconnect(); };
+  }, [map]);
+  return null;
+}
+
+function Controles({ pantallaCompleta, onTogglePantalla }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!pantallaCompleta) return;
+    const alPresionar = (e) => { if (e.key === 'Escape') onTogglePantalla(); };
+    window.addEventListener('keydown', alPresionar);
+    return () => window.removeEventListener('keydown', alPresionar);
+  }, [pantallaCompleta, onTogglePantalla]);
+
+  const boton = 'bg-white/95 border border-gray-200 shadow-sm hover:bg-gray-50 transition flex items-center justify-center text-gray-700';
+
+  // z-[1000]: Leaflet dibuja sus capas hasta 700, así que con menos los
+  // controles quedan debajo de los marcadores.
+  return (
+    <div className="absolute top-2.5 right-2.5 z-[1000] flex flex-col items-end gap-1.5">
+      <div className="flex items-center gap-1.5">
+        <button onClick={() => map.setView(CEDIS, 12, { animate: true })} title="Centrar en el CEDIS" className={`${boton} gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-bold`}>
+          <Compass className="h-3.5 w-3.5 text-orange-500" /> CEDIS
+        </button>
+        <button onClick={onTogglePantalla} title={pantallaCompleta ? 'Salir (Esc)' : 'Pantalla completa'} className={`${boton} w-7 h-7 rounded-lg`}>
+          {pantallaCompleta ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+        </button>
+      </div>
+      <div className="flex flex-col rounded-lg overflow-hidden border border-gray-200 shadow-sm">
+        <button onClick={() => map.zoomIn()} title="Acercar" className={`${boton} w-7 h-7 border-0 border-b border-gray-200 rounded-none`}>
+          <ZoomIn className="h-3.5 w-3.5" />
+        </button>
+        <button onClick={() => map.zoomOut()} title="Alejar" className={`${boton} w-7 h-7 border-0 rounded-none`}>
+          <ZoomOut className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default function MapaPedidos({
+  pedidos,
+  camionesGPS,
+  colorDe,
+  pantallaCompleta = false,
+  onTogglePantalla,
+}) {
   const conUbicacion = pedidos.filter((p) => p.lat && p.lng);
   const sinUbicacion = pedidos.length - conUbicacion.length;
 
-  // Solo los camiones que llevan pedidos de esta vendedora.
   const misPlacas = [...new Set(pedidos.map((p) => p.camion).filter(Boolean))].sort();
   const misCamiones = camionesGPS.filter((c) => misPlacas.includes(c.placa));
+  const entregados = pedidos.filter((p) => p.estado === 'Entregado').length;
 
   const puntos = [
     CEDIS,
@@ -70,39 +139,70 @@ export default function MapaPedidos({ pedidos, camionesGPS, colorDe, alto = 'h-[
     ...misCamiones.map((c) => [c.lat, c.lng]),
   ];
 
+  const contenedor = pantallaCompleta
+    ? 'fixed inset-0 z-[2500] bg-white flex flex-col'
+    : 'bg-white rounded-xl border border-gray-200 overflow-hidden';
+
   if (!conUbicacion.length) {
     return (
-      <div className={`bg-white rounded-xl border border-gray-200 ${alto} flex items-center justify-center`}>
+      <div className="bg-white rounded-xl border border-gray-200 h-[420px] flex items-center justify-center">
         <p className="text-sm text-gray-400">Sin pedidos que ubicar en el mapa.</p>
       </div>
     );
   }
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      {/* La leyenda son los CAMIONES, que es lo que distingue un punto de otro.
-          Antes eran los estados, y con todos los pedidos programados salían
-          todos del mismo color naranja. */}
-      <div className="px-3 py-2 border-b border-gray-100 flex items-center gap-2.5 flex-wrap">
-        {misPlacas.map((placa) => (
-          <span key={placa} className="flex items-center gap-1.5 text-[10px] font-bold text-gray-600">
-            <span className="w-2.5 h-2.5 rounded-full border border-white shadow-sm" style={{ backgroundColor: colorDe(placa) }} />
-            {placa}
+    <div className={contenedor}>
+      {/* Cabecera: qué se está viendo, en números. Antes solo había una tira de
+          colores sin contexto — no decía cuántas paradas eran ni cuántas ya se
+          habían hecho, que es lo primero que se quiere saber. */}
+      <div className="px-3 py-2.5 border-b border-gray-100 flex-shrink-0">
+        <div className="flex items-baseline gap-2 flex-wrap">
+          <MapPin className="w-3.5 h-3.5 text-orange-500 self-center" />
+          <span className="text-[13px] font-extrabold text-gray-800">
+            {conUbicacion.length} {conUbicacion.length === 1 ? 'parada' : 'paradas'}
           </span>
-        ))}
-        {!misPlacas.length && (
-          <span className="text-[10px] font-semibold text-gray-400">Todavía sin camión asignado</span>
-        )}
-        {sinUbicacion > 0 && (
-          <span className="ml-auto text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
-            {sinUbicacion} sin ubicación
-          </span>
-        )}
+          {entregados > 0 && (
+            <span className="text-[11px] font-bold text-emerald-600">{entregados} entregadas</span>
+          )}
+          {sinUbicacion > 0 && (
+            <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+              {sinUbicacion} sin ubicación
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2.5 flex-wrap mt-1.5">
+          {misPlacas.map((placa) => {
+            const n = pedidos.filter((p) => p.camion === placa).length;
+            const enVivo = misCamiones.some((c) => c.placa === placa);
+            return (
+              <span key={placa} className="flex items-center gap-1.5 text-[10px] font-bold text-gray-600">
+                <span className="w-2.5 h-2.5 rounded-full border border-white shadow-sm" style={{ backgroundColor: colorDe(placa) }} />
+                {placa}
+                <span className="text-gray-400 font-semibold">{n}</span>
+                {enVivo && <Truck className="w-2.5 h-2.5 text-green-600" title="Reportando posición" />}
+              </span>
+            );
+          })}
+          {!misPlacas.length && (
+            <span className="text-[10px] font-semibold text-gray-400">Todavía sin camión asignado</span>
+          )}
+        </div>
       </div>
 
-      <div className={alto}>
-        <MapContainer center={CEDIS} zoom={11} className="w-full h-full" zoomControl={false} scrollWheelZoom={false}>
+      <div className={`relative ${pantallaCompleta ? 'flex-1' : 'h-[460px]'}`}>
+        <MapContainer
+          key={pantallaCompleta ? 'completa' : 'normal'}
+          center={CEDIS}
+          zoom={11}
+          className="w-full h-full"
+          zoomControl={false}
+          scrollWheelZoom={pantallaCompleta}
+        >
           <Encuadrar puntos={puntos} firma={JSON.stringify(puntos)} />
+          <RecalcularTamano />
+          <Controles pantallaCompleta={pantallaCompleta} onTogglePantalla={onTogglePantalla} />
           <TileLayer
             attribution='&copy; <a href="https://carto.com">CARTO</a>'
             url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
@@ -127,7 +227,7 @@ export default function MapaPedidos({ pedidos, camionesGPS, colorDe, alto = 'h-[
                 </span>
                 {p.eta_desde && (
                   <><br /><span style={{ fontSize: 11, color: '#64748b' }}>
-                    Llega entre {p.eta_desde} y {p.eta_hasta}
+                    {p.estado === 'Entregado' ? 'Llegó' : 'Llega'} entre {p.eta_desde} y {p.eta_hasta}
                   </span></>
                 )}
               </Popup>

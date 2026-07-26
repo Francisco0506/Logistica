@@ -48,6 +48,7 @@ export default function SalesPanel() {
   const [actualizado, setActualizado] = useState(null);
   const [flota, setFlota] = useState([]);
   const [camionFiltro, setCamionFiltro] = useState('todos');
+  const [mapaCompleto, setMapaCompleto] = useState(false);
 
   // ── Vendedores del día ──
   // El selector es temporal: hoy el login no valida nada, así que no hay forma
@@ -329,7 +330,13 @@ export default function SalesPanel() {
 
           {verMapa && !!pedidos.length && (
             <div className="lg:sticky lg:top-[76px]">
-              <MapaPedidos pedidos={visibles} camionesGPS={camionesGPS} colorDe={colorDe} />
+              <MapaPedidos
+                pedidos={visibles}
+                camionesGPS={camionesGPS}
+                colorDe={colorDe}
+                pantallaCompleta={mapaCompleto}
+                onTogglePantalla={() => setMapaCompleto((v) => !v)}
+              />
             </div>
           )}
         </div>
