@@ -2,12 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Truck, MapPin, Clock, Phone, Navigation, Check, AlertTriangle,
-  ChevronRight, LogOut, RefreshCw, PackageCheck,
+  ChevronRight, ChevronDown, ChevronUp, LogOut, RefreshCw, PackageCheck, Map as MapIcon,
 } from 'lucide-react';
 import LabenLogo from '../../components/LabenLogo';
 import { useAviso } from '../../components/useAviso';
-import { getFlota, getRutaChofer, confirmarEntrega } from '../../services/api';
+import { getFlota, getRutaChofer, confirmarEntrega, getCamionesGPS } from '../../services/api';
 import HojaEntrega from './components/HojaEntrega';
+import MapaRuta from './components/MapaRuta';
 
 /**
  * La app del chofer.
@@ -50,12 +51,25 @@ export default function DriverApp() {
   const [cargando, setCargando] = useState(false);
   const [abierta, setAbierta] = useState(null);   // parada con la hoja de entrega abierta
   const [guardando, setGuardando] = useState(false);
+  const [gps, setGps] = useState([]);
+  const [verMapa, setVerMapa] = useState(true);
+  const [verHechas, setVerHechas] = useState(false);   // lo ya reportado no estorba
   const fecha = hoy();
 
   useEffect(() => {
     const c = new AbortController();
     getFlota({ signal: c.signal }).then(setFlota).catch(() => {});
     return () => c.abort();
+  }, []);
+
+  // Su propia posición, para verse en el mapa. Aparte de la ruta: si Samsara
+  // falla, la lista de paradas sigue funcionando.
+  useEffect(() => {
+    const c = new AbortController();
+    const traer = () => getCamionesGPS({ signal: c.signal }).then(setGps).catch(() => {});
+    traer();
+    const i = setInterval(traer, 20_000);
+    return () => { c.abort(); clearInterval(i); };
   }, []);
 
   useEffect(() => {
@@ -79,6 +93,10 @@ export default function DriverApp() {
   // elementos y `paradas` se recrea en cada render, así que memorizarlo no
   // ahorraría nada y solo escondería la dependencia.
   const siguiente = paradas.find((p) => !ESTILO_ESTADO[p.estado]);
+  const pendientes = paradas.filter((p) => !ESTILO_ESTADO[p.estado]);
+  const reportadas = paradas.filter((p) => ESTILO_ESTADO[p.estado]);
+  const incompletas = paradas.filter((p) => p.estado === 'Entregado_Parcial' || p.estado === 'No_Entregado').length;
+  const miPosicion = gps.find((c) => c.placa === camion) || null;
 
   const confirmar = async (datos) => {
     setGuardando(true);
@@ -135,27 +153,36 @@ export default function DriverApp() {
       <header className="sticky top-0 z-20 bg-white border-b border-gray-200">
         <div className="px-4 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
-            <Truck className="w-5 h-5 text-orange-500 flex-shrink-0" />
-            <div className="min-w-0">
-              <div className="text-[15px] font-extrabold text-gray-800 leading-none">{camion}</div>
-              <div className="text-[10px] text-gray-400 mt-0.5">
-                {ruta?.hora_salida ? `Salió ${ruta.hora_salida}` : 'Sin salir del CEDIS'}
-              </div>
-            </div>
+            <LabenLogo variant="horizontal" />
+            <span className="text-[9px] text-gray-300 font-bold tracking-[.2em] uppercase self-end pb-0.5 hidden sm:inline">
+              · Chofer
+            </span>
           </div>
-          <button
-            onClick={() => setParams({})}
-            className="text-[11px] font-bold text-gray-400 hover:text-gray-600 px-2 py-1"
-          >
-            Cambiar
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setParams({})}
+              title="Cambiar de camión"
+              className="flex items-center gap-1.5 bg-gray-100 rounded-lg px-2.5 py-1.5"
+            >
+              <Truck className="w-3.5 h-3.5 text-orange-500" />
+              <span className="text-xs font-extrabold text-gray-700">{camion}</span>
+            </button>
+            <button
+              onClick={() => navigate('/')}
+              className="flex items-center gap-1.5 text-xs font-bold text-gray-400 active:text-red-600 px-2 py-1.5"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
 
         {!!paradas.length && (
           <div className="px-4 pb-3">
             <div className="flex items-center justify-between text-[11px] font-bold mb-1.5">
               <span className="text-gray-500">{hechas} de {paradas.length} entregas</span>
-              <span className="text-gray-400">{paradas.length - hechas} por hacer</span>
+              <span className="text-gray-400">
+                {ruta?.hora_salida ? `Salió ${ruta.hora_salida}` : 'Sin salir del CEDIS'}
+              </span>
             </div>
             <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
               <div
@@ -183,34 +210,95 @@ export default function DriverApp() {
           </div>
         )}
 
-        {!!paradas.length && hechas === paradas.length && (
-          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center">
-            <PackageCheck className="w-7 h-7 mx-auto mb-2 text-emerald-600" />
-            <p className="text-sm font-extrabold text-emerald-800">Terminaste tus {paradas.length} entregas</p>
-            <p className="text-xs text-emerald-700 mt-0.5">Ya puedes regresar al CEDIS.</p>
-          </div>
-        )}
-
-        {/* ── LA QUE SIGUE, destacada ── */}
-        {siguiente && (
-          <section>
-            <h2 className="text-[11px] font-bold text-gray-400 uppercase tracking-wide mb-2 px-1">La que sigue</h2>
-            <TarjetaParada parada={siguiente} destacada onAbrir={() => setAbierta(siguiente)} />
-          </section>
-        )}
-
-        {/* ── TODAS ── */}
-        {paradas.length > 1 && (
-          <section>
-            <h2 className="text-[11px] font-bold text-gray-400 uppercase tracking-wide mb-2 px-1">
-              Todas tus paradas
-            </h2>
-            <div className="space-y-2">
-              {paradas.map((p) => (
-                <TarjetaParada key={p.id} parada={p} onAbrir={() => setAbierta(p)} />
+        {!!paradas.length && (
+          <>
+            {/* ═══ RESUMEN — mismas tarjetas que el dispatcher y ventas, en dos
+                columnas porque esto se ve en un celular ═══ */}
+            <section className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              {[
+                { etiqueta: 'Por entregar', valor: pendientes.length, clase: pendientes.length ? 'text-orange-600' : 'text-gray-300' },
+                { etiqueta: 'Entregadas', valor: hechas - incompletas, clase: 'text-emerald-600' },
+                { etiqueta: 'Con problema', valor: incompletas, clase: incompletas ? 'text-amber-600' : 'text-gray-300' },
+                { etiqueta: 'Total del día', valor: paradas.length, clase: 'text-gray-800' },
+              ].map((m) => (
+                <div key={m.etiqueta} className="bg-white rounded-xl border border-gray-200 px-3 py-2.5 shadow-sm">
+                  <div className={`text-2xl font-extrabold leading-none ${m.clase}`}>{m.valor}</div>
+                  <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide mt-1.5">{m.etiqueta}</div>
+                </div>
               ))}
-            </div>
-          </section>
+            </section>
+
+            {/* ═══ LA QUE SIGUE ═══ */}
+            {siguiente ? (
+              <section>
+                <h2 className="text-[11px] font-bold text-gray-400 uppercase tracking-wide mb-2 px-1">La que sigue</h2>
+                <TarjetaParada parada={siguiente} destacada onAbrir={() => setAbierta(siguiente)} />
+              </section>
+            ) : (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center">
+                <PackageCheck className="w-7 h-7 mx-auto mb-2 text-emerald-600" />
+                <p className="text-sm font-extrabold text-emerald-800">Terminaste tus {paradas.length} entregas</p>
+                <p className="text-xs text-emerald-700 mt-0.5">Ya puedes regresar al CEDIS.</p>
+              </div>
+            )}
+
+            {/* ═══ MAPA — al centro, igual que en ventas ═══ */}
+            <section className="space-y-2">
+              <button
+                onClick={() => setVerMapa((v) => !v)}
+                className="w-full flex items-center gap-2 px-1"
+              >
+                <MapIcon className="w-3.5 h-3.5 text-orange-500" />
+                <h2 className="text-[11px] font-bold text-gray-400 uppercase tracking-wide">Mi ruta en el mapa</h2>
+                <span className="ml-auto text-gray-400">
+                  {verMapa ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                </span>
+              </button>
+              {verMapa && (
+                <MapaRuta paradas={paradas} siguiente={siguiente} miPosicion={miPosicion} />
+              )}
+            </section>
+
+            {/* ═══ POR ENTREGAR ═══ */}
+            {pendientes.length > 1 && (
+              <section>
+                <h2 className="text-[11px] font-bold text-gray-400 uppercase tracking-wide mb-2 px-1">
+                  Por entregar ({pendientes.length})
+                </h2>
+                <div className="space-y-2">
+                  {pendientes.map((p) => (
+                    <TarjetaParada key={p.id} parada={p} onAbrir={() => setAbierta(p)} />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* ═══ YA REPORTADAS — cerrado: ya no hay nada que hacer con ellas ═══ */}
+            {!!reportadas.length && (
+              <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                <button
+                  onClick={() => setVerHechas((v) => !v)}
+                  className="w-full flex items-center gap-2 px-4 py-3 active:bg-gray-50 text-left"
+                >
+                  <Check className="h-4 w-4 text-emerald-600" />
+                  <h2 className="text-sm font-bold text-gray-800">Ya reportadas</h2>
+                  <span className="text-[10px] font-bold text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                    {reportadas.length}
+                  </span>
+                  <span className="ml-auto text-gray-400">
+                    {verHechas ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                  </span>
+                </button>
+                {verHechas && (
+                  <div className="p-3 pt-0 space-y-2">
+                    {reportadas.map((p) => (
+                      <TarjetaParada key={p.id} parada={p} onAbrir={() => setAbierta(p)} />
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
+          </>
         )}
       </main>
 
