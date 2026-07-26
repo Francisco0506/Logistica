@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { MapPin, Maximize2, Minimize2, ZoomIn, ZoomOut, Compass, Truck } from 'lucide-react';
+import { MapPin, Minimize2, ZoomIn, ZoomOut, Compass, Truck, X } from 'lucide-react';
 import { CEDIS } from '../../../config/fleet';
 
 /**
@@ -103,8 +103,8 @@ function Controles({ pantallaCompleta, onTogglePantalla }) {
         <button onClick={() => map.setView(CEDIS, 12, { animate: true })} title="Centrar en el CEDIS" className={`${boton} gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-bold`}>
           <Compass className="h-3.5 w-3.5 text-orange-500" /> CEDIS
         </button>
-        <button onClick={onTogglePantalla} title={pantallaCompleta ? 'Salir (Esc)' : 'Pantalla completa'} className={`${boton} w-7 h-7 rounded-lg`}>
-          {pantallaCompleta ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+        <button onClick={onTogglePantalla} title="Cerrar el mapa (Esc)" className={`${boton} w-7 h-7 rounded-lg`}>
+          <Minimize2 className="h-3.5 w-3.5" />
         </button>
       </div>
       <div className="flex flex-col rounded-lg overflow-hidden border border-gray-200 shadow-sm">
@@ -156,7 +156,7 @@ export default function MapaPedidos({
       {/* Cabecera: qué se está viendo, en números. Antes solo había una tira de
           colores sin contexto — no decía cuántas paradas eran ni cuántas ya se
           habían hecho, que es lo primero que se quiere saber. */}
-      <div className="px-3 py-2.5 border-b border-gray-100 flex-shrink-0">
+      <div className="px-4 py-2.5 border-b border-gray-100 flex-shrink-0">
         <div className="flex items-baseline gap-2 flex-wrap">
           <MapPin className="w-3.5 h-3.5 text-orange-500 self-center" />
           <span className="text-[13px] font-extrabold text-gray-800">
@@ -169,6 +169,15 @@ export default function MapaPedidos({
             <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
               {sinUbicacion} sin ubicación
             </span>
+          )}
+
+          {pantallaCompleta && (
+            <button
+              onClick={onTogglePantalla}
+              className="ml-auto flex items-center gap-1.5 text-[11px] font-bold text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-lg px-2.5 py-1.5 transition"
+            >
+              <X className="w-3.5 h-3.5" /> Cerrar mapa
+            </button>
           )}
         </div>
 

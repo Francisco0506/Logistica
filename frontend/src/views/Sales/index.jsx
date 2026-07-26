@@ -44,11 +44,11 @@ export default function SalesPanel() {
   const [busqueda, setBusqueda]     = useState('');
   const [filtro, setFiltro]         = useState('todos');
   const [cargando, setCargando]     = useState(true);
-  const [verMapa, setVerMapa]       = useState(true);
+  const [verMapa, setVerMapa]       = useState(false);
   const [actualizado, setActualizado] = useState(null);
   const [flota, setFlota] = useState([]);
   const [camionFiltro, setCamionFiltro] = useState('todos');
-  const [mapaCompleto, setMapaCompleto] = useState(false);
+
 
   // ── Vendedores del día ──
   // El selector es temporal: hoy el login no valida nada, así que no hay forma
@@ -271,13 +271,16 @@ export default function SalesPanel() {
                 {misCamiones.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             )}
+            {/* El mapa se abre grande, no vive en una esquina: con 80 pedidos
+                los marcadores se encimaban en la columna y no se leían. */}
             <button
-              onClick={() => setVerMapa((v) => !v)}
-              title={verMapa ? 'Ocultar el mapa' : 'Ver el mapa'}
-              className="flex items-center gap-1.5 border border-gray-200 hover:bg-gray-50 rounded-lg px-2.5 py-1.5 text-[11px] font-bold text-gray-600 transition flex-shrink-0"
+              onClick={() => setVerMapa(true)}
+              title="Ver los pedidos en el mapa"
+              className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-white rounded-lg px-3 py-1.5 text-[11px] font-bold transition flex-shrink-0"
             >
-              {verMapa ? <List className="w-3.5 h-3.5" /> : <MapIcon className="w-3.5 h-3.5" />}
-              <span className="hidden sm:inline">{verMapa ? 'Ocultar mapa' : 'Ver mapa'}</span>
+              <MapIcon className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Ver en el mapa</span>
+              <span className="text-gray-400 font-semibold">{visibles.length}</span>
             </button>
           </div>
         </div>
@@ -285,7 +288,7 @@ export default function SalesPanel() {
         {/* ═══ LISTA + MAPA, lado a lado ═══
             El mapa a la derecha y flotante, igual que en el dispatcher: así no
             se come la pantalla y la lista aprovecha el ancho. */}
-        <div className={verMapa ? 'grid grid-cols-1 lg:grid-cols-[1fr_420px] gap-4 items-start' : ''}>
+        <div>
           <div className="space-y-1.5">
             {cargando && !pedidos.length && (
               <div className="bg-white rounded-xl border border-gray-200 text-center py-16 text-gray-400">
@@ -328,18 +331,18 @@ export default function SalesPanel() {
             )}
           </div>
 
-          {verMapa && !!pedidos.length && (
-            <div className="lg:sticky lg:top-[76px]">
-              <MapaPedidos
-                pedidos={visibles}
-                camionesGPS={camionesGPS}
-                colorDe={colorDe}
-                pantallaCompleta={mapaCompleto}
-                onTogglePantalla={() => setMapaCompleto((v) => !v)}
-              />
-            </div>
-          )}
         </div>
+
+        {/* El mapa, a pantalla completa. Se cierra con el botón o con Esc. */}
+        {verMapa && !!pedidos.length && (
+          <MapaPedidos
+            pedidos={visibles}
+            camionesGPS={camionesGPS}
+            colorDe={colorDe}
+            pantallaCompleta
+            onTogglePantalla={() => setVerMapa(false)}
+          />
+        )}
       </main>
     </div>
   );
