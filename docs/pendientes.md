@@ -60,6 +60,27 @@ las respuestas de arriba.
   VIN que reporta Samsara contra la ficha de Isuzu México. Los 8 VIN están en
   [`flota.md` §6](flota.md). Ojo con el **013**: se tenía como 2 ton y el VIN
   dice ELF 100 = **1.5 ton**.
+- 🔴 **No salen 5 camiones: salen 4, y en promedio 3.** Medido con GPS de
+  Samsara, 20 al 27-jul:
+
+  | Día | Salieron | Cuáles |
+  |---|---|---|
+  | lunes 20 | 4 | 027, 023, 017, 013 |
+  | martes 21 | 4 | 013, 017, 027, 023 |
+  | miércoles 22 | 4 | 027, 013, 017, 023 |
+  | jueves 23 | 4 | 027, 023, 013, 017 |
+  | viernes 24 | 3 | 027, 023, 013 |
+  | sábado 25 | 2 | 013, 023 |
+
+  **El 016 (RJ97892) no tiene UN SOLO punto de GPS en 7 días**, y sin embargo
+  `fleet.py` lo trae con `activo_default: True`, así que el panel arranca
+  contando con él. Hay que averiguar si está descompuesto, si el GPS está
+  desconectado, o si simplemente no opera — y apagarlo mientras tanto.
+
+  **Esto cambia la cuenta de capacidad:** con 4 camiones son ~80 paradas por
+  turno, no ~100. El lunes pico pide 133. El hueco es más grande de lo que decía
+  el cálculo con 5 unidades.
+
 - 🟡 **Decidir qué pasa con 024, 015 y 012.** El 024 lleva parado en Guadalupe
   desde el 14-jul; el 015 y el 012 llevan dos meses sin operar (9 km y 0 km en
   60 días). ¿Descompuestos, vendidos, reserva? Si no van a operar, conviene
