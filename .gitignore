@@ -29,3 +29,6 @@ media/
 # Reportes con datos reales de clientes: se generan localmente, no se suben.
 entregas_pesos.csv
 *.csv
+
+# Reportes de cobertura con datos de clientes
+backend/delivery/data/DESGLOSE_COBERTURA.xlsx

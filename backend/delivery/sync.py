@@ -124,7 +124,22 @@ def sync_from_sap(fecha: date):
         # eran de contado y solo 2 estaban pagadas, así que se rutean 66.
         #
         # NO se filtra por DocStatus: una entrega cerrada es una ya facturada, y
-        # esas también van en el camión. Filtrarlas dejaba fuera 8 de las 73.
+        # esas también van en el camión. Verificado con el lunes 20-jul, un día
+        # ya cerrado: sus 181 entregas siguen en SAP, todas en estado "Cerrado".
+        # La entrega no desaparece al facturarse, solo cambia de estado.
+        #
+        # SE EXCLUYE lo que no es reparto, aunque SAP lo registre como entrega:
+        #
+        #   - Ventas a EMPLEADOS. El dato no está donde se ve en la pantalla de
+        #     SAP ("Nombre Comercial"), sino en `OCRD.AliasName`. Son ~50 cada
+        #     14 días y el empleado se lleva su mercancía él mismo.
+        #   - "Recoge en LABEN": el cliente pasa por su pedido al CEDIS, así que
+        #     no ocupa lugar en ningún camión. ~24 cada 14 días.
+        #   - Muestras comerciales (C794, C794-1, C1444). ~2 al día.
+        #
+        # Sin estos filtros el promedio diario sale en 106 entregas; con ellos,
+        # en 100, que es el número de reparto real. No cambia el panorama pero sí
+        # mete paradas que el camión nunca va a hacer.
         #
         # A.Address es el ID real de la dirección del Ship-To en SAP (AdresID),
         # usado como identificador estable en vez del texto libre de la calle.
@@ -180,12 +195,16 @@ def sync_from_sap(fecha: date):
                 {extra_cols}
             FROM ODLN O
             INNER JOIN CRD1 A ON O.CardCode = A.CardCode AND O.ShipToCode = A.Address AND A.AdresType = 'S'
+            INNER JOIN OCRD C ON C.CardCode = O.CardCode
             LEFT JOIN OCTG G ON G.GroupNum = O.GroupNum
             WHERE O.DocDate = ?
               AND (
                     ISNULL(G.PymntGroup, '') NOT LIKE '%CONTADO%'
                     OR ISNULL(O.PaidToDate, 0) > 0
                   )
+              AND ISNULL(C.AliasName, '') NOT LIKE '%EMPLEADO%'
+              AND ISNULL(O.ShipToCode, '') NOT LIKE '%Recoge%'
+              AND ISNULL(O.CardName, '') NOT LIKE '%MUESTRA%'
         """
         cursor.execute(query, str(fecha))
         rows = cursor.fetchall()
