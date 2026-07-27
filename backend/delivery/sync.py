@@ -108,12 +108,29 @@ def sync_from_sap(fecha: date):
         if existe(udf_referencias):
             extra_cols += f", A.{udf_referencias} AS UdfReferencias"
 
-        # Consulta SQL segura de lectura (SELECT) para obtener pedidos pendientes.
+        # Se rutean las ÓRDENES DE ENTREGA (ODLN), no las órdenes de venta.
+        #
+        # Antes esto leía ORDR/RDR1 y por eso el panel se veía casi vacío: para
+        # el 27-jul-2026 había 17 órdenes de venta abiertas contra 73 órdenes de
+        # entrega. La orden de venta es lo que el cliente pidió; la entrega es lo
+        # que de verdad sale del CEDIS ese día, que es lo que hay que repartir.
+        # Un día normal trae entre 70 y 180 entregas.
+        #
+        # EL CONTADO SOLO ENTRA SI YA SE PAGÓ. Si el cliente es de contado y no
+        # hay pago registrado (`ODLN.PaidToDate`), la mercancía no debe subir al
+        # camión. Las condiciones de contado en esta instalación son tres —
+        # CONTADO, CONTADO - TARJETA y CONTADO - CHEQUE— por eso se busca por
+        # texto y no por número de grupo. Medido el 27-jul: de 73 entregas, 9
+        # eran de contado y solo 2 estaban pagadas, así que se rutean 66.
+        #
+        # NO se filtra por DocStatus: una entrega cerrada es una ya facturada, y
+        # esas también van en el camión. Filtrarlas dejaba fuera 8 de las 73.
+        #
         # A.Address es el ID real de la dirección del Ship-To en SAP (AdresID),
         # usado como identificador estable en vez del texto libre de la calle.
         #
         # El peso NO existe como campo de cabecera en SAP: se calcula sumando las
-        # líneas del pedido (RDR1). Si un artículo no tiene peso capturado en su
+        # líneas de la entrega (DLN1). Si un artículo no tiene peso capturado en su
         # ficha, cuenta como 0 y el pedido queda con el peso parcial de lo que sí
         # está capturado (mejor una subestimación que un peso 100% inventado).
         #
@@ -144,6 +161,7 @@ def sync_from_sap(fecha: date):
                 O.DocDueDate,
                 O.DocTotal,
                 O.SlpCode,
+                O.DocStatus,
                 (SELECT SlpName FROM OSLP WHERE SlpCode = O.SlpCode) as SlpName,
                 A.Address,
                 A.Street,
@@ -155,19 +173,24 @@ def sync_from_sap(fecha: date):
                         ISNULL(L.InvQty, L.Quantity)
                         * (ISNULL(I.SWeight1, 0) / NULLIF(ISNULL(I.NumInSale, 1), 0))
                     )
-                    FROM RDR1 L
+                    FROM DLN1 L
                     LEFT JOIN OITM I ON I.ItemCode = L.ItemCode
                     WHERE L.DocEntry = O.DocEntry
                 ) AS PesoTotalKg
                 {extra_cols}
-            FROM ORDR O
+            FROM ODLN O
             INNER JOIN CRD1 A ON O.CardCode = A.CardCode AND O.ShipToCode = A.Address AND A.AdresType = 'S'
-            WHERE O.DocStatus = 'O' AND O.DocDueDate = ?
+            LEFT JOIN OCTG G ON G.GroupNum = O.GroupNum
+            WHERE O.DocDate = ?
+              AND (
+                    ISNULL(G.PymntGroup, '') NOT LIKE '%CONTADO%'
+                    OR ISNULL(O.PaidToDate, 0) > 0
+                  )
         """
         cursor.execute(query, str(fecha))
         rows = cursor.fetchall()
 
-        # Las LÍNEAS de cada pedido (RDR1): qué producto y cuánto. Sin esto el
+        # Las LÍNEAS de cada entrega (DLN1): qué producto y cuánto. Sin esto el
         # chofer no tiene qué marcar cuando una entrega sale incompleta —
         # "entregué el 60%" no le sirve a nadie; lo que sirve es "de las 2
         # bolsas de queso rallado solo aceptó 1.5".
@@ -185,7 +208,7 @@ def sync_from_sap(fecha: date):
                        -- misma corrección de unidades que el total de arriba.
                        (ISNULL(I.SWeight1, 0) / NULLIF(ISNULL(I.NumInSale, 1), 0))
                            * ISNULL(L.NumPerMsr, 1) AS SWeight1
-                FROM RDR1 L
+                FROM DLN1 L
                 LEFT JOIN OITM I ON I.ItemCode = L.ItemCode
                 WHERE L.DocEntry IN ({marcadores})
                 ORDER BY L.DocEntry, L.LineNum
