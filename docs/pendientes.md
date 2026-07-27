@@ -7,6 +7,15 @@ El detalle de alcance de los paneles de Vendedor y Chofer está aparte, en
 
 Prioridad: 🔴 bloquea · 🟡 importante · ⚪ cuando se pueda
 
+> **Lo más importante de todo, medido el 27-jul-2026:** el proyecto no está
+> trabado en programación, está trabado en **captura de direcciones**. El
+> optimizador acomoda el 98% de lo que alcanza a ver y los camiones van al 14%
+> de su capacidad de peso; lo que no puede es rutear a un cliente sin
+> coordenada, y hoy son dos de cada tres. Ver §3.
+>
+> El otro dato que cambia el plan: los 5 camiones dan para ~100 paradas por
+> turno y el lunes pico pide 133. Hoy no se nota porque solo se ven 57.
+
 ---
 
 ## 1. Choferes — quién maneja qué
@@ -69,14 +78,49 @@ las respuestas de arriba.
   datos de verdad. El `.env` quedó apuntando de vuelta a la base de pruebas para
   no jalar producción sin querer.
 
-- 🔴 **A la mitad de los clientes les falta la coordenada en SAP.** De los 17
-  pedidos reales del 27-jul, **9 no se pudieron rutear** por eso: Pizzas Urbanas,
-  Lomar Industrias, Operaciones y Servicios, Abastecedora Integral. Es el
-  pendiente que ahora manda: da igual qué tan bueno sea el optimizador si no
-  sabe a dónde llevar la mitad de la carga.
+- 🔴 **LAS DIRECCIONES SON EL ÚNICO TAPÓN DEL PROYECTO.** No es exageración: el
+  sistema funciona y los camiones van vacíos, pero no sabe a dónde llevar dos
+  terceras partes de la carga.
 
-  **Falta revisar** si esas coordenadas ya están en el Excel de direcciones que
-  se importó y solo no se están cruzando, o si de plano no están capturadas.
+  SAP productiva tiene coordenada en **1 Ship-To de 3,528**. Las que usa el
+  sistema vienen del Excel que se importó, no de SAP.
+
+  El desglose de cobertura (`DESGLOSE_COBERTURA.xlsx`, hecho con órdenes de
+  entrega de junio-julio, corte al 21-jul — verificado contra SAP destino por
+  destino: 579 de 620 cuadran exactos) reparte los 620 destinos así:
+
+  | Etapa | Destinos | Paradas del lunes pico | Cobertura acumulada |
+  |---|---|---|---|
+  | YA CARGADA EN SAP | 217 | 57 | **43%** |
+  | LISTA PARA CARGAR | 136 | 38 | **71%** |
+  | FALTA HORARIO | 40 | 15 | **83%** |
+  | SIN TRABAJAR | 227 | 23 | **100%** |
+
+  **El paso que más rinde es cargar las 136 que ya están listas: sube la
+  cobertura de 43% a 71% sin escribir una línea de código.**
+
+  Medido con el lunes 20-jul (día pico, 171 entregas): el optimizador ruteó 59
+  de las 60 que tenían coordenada, con el camión más cargado en 840 kg de 6,000.
+  Ni la capacidad ni el algoritmo son el problema.
+
+- 🔴 **La orden de entrega se captura DESPUÉS de repartir.** El sistema ya lee
+  órdenes de entrega (ODLN) en vez de órdenes de venta, que es lo correcto: para
+  el 27-jul había 17 órdenes de venta abiertas contra 73 entregas, y un día
+  normal trae ~100 entregas de reparto real.
+
+  Pero medido el lunes 20-jul: **a las 9 de la mañana, cuando salieron los
+  camiones, existía UNA sola orden de entrega**. Las 181 del día se capturaron
+  entre las 12 y las 7 de la noche.
+
+  Así que el documento correcto para el ruteo nace *después* del ruteo. Hay dos
+  salidas y la decisión es de operación:
+
+  1. Planear con órdenes de venta (que sí existen antes, con `DocDueDate`) y
+     usar las entregas para verificar lo que salió.
+  2. Adelantar la captura de las entregas a antes de las 9 am.
+
+  **Pendiente de confirmar con Sebastián:** a qué hora se sabe qué va a llevar
+  cada camión. Esa respuesta define cuál de las dos es la buena.
 
 - 🔴 **La base productiva NO tiene las ventanas de recibo ni los días de
   entrega.** Los UDF `U_IniRecibo1`, `U_FinRecibo1`, `U_EntLun`…`U_EntSab`
@@ -151,7 +195,10 @@ las respuestas de arriba.
   `Pizza Deprizza Juárez Centro` / `PIZZA DEPRIZZA JUAREZ CENTRO`,
   `Valle de Lincoln` con `DEPRRIZZA` (R de más). El ruteo ya no se ve afectado
   —agrupa por coordenada— pero ensucian reportes y listados.
-- 🔴 **Los días de entrega no se respetan.** `Destino` guarda `ent_lun`…`ent_sab`
+- 🔴 **Los días de entrega no se respetan — y ahora sí va a doler.** Con 57
+  paradas visibles sobra capacidad y mandar un camión a un cliente cerrado no se
+  nota. Cuando la cobertura suba a 95 o 133 paradas contra las ~100 que dan los
+  cinco camiones, cada parada desperdiciada es una que sí ocupaba otro cliente. `Destino` guarda `ent_lun`…`ent_sab`
   y se llenan desde SAP y desde el Excel, pero **el optimizador nunca los lee**.
   Hoy **68 de 195 destinos** tienen algún día restringido (casi todos "no reciben
   sábado") y el sistema les planea entregas ese día igual.
