@@ -81,6 +81,49 @@ def osrm_table(locations):
     return None, motivo
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Calibración contra viajes reales (27-jul-2026)
+#
+# OSRM entrega tiempo de manejo ideal: no sabe de semáforos, de tráfico, ni de
+# la vuelta a la manzana buscando dónde estacionarse. Medido con 307 tramos
+# reales reconstruidos del GPS de Samsara (7 días, camiones 013/016/017/023/027):
+# se detectó cada parada de 2.5 min o más, y se comparó el tiempo real de puerta
+# a puerta contra lo que OSRM dice del MISMO tramo.
+#
+#      tramo        n     min OSRM    min real    factor
+#      0-2 km      76         183        421       2.30
+#      2-5 km      99         529        921       1.74
+#      5-10 km     55         488        987       2.02
+#      10-20 km    30         474        734       1.55
+#      20+ km      47       1,522      2,178       1.43
+#      TODOS      307       3,196      5,242       1.64
+#
+# El factor NO es parejo: cae conforme el tramo se alarga, porque en un tramo
+# corto el semáforo y la maniobra pesan más que el manejo. Por eso se interpola
+# por distancia en vez de usar un solo número —un factor plano de 1.64 dejaría
+# los tramos cortos 30% flojos y los largos 15% apretados.
+#
+# El umbral de 2.5 min para considerar "parada" importa: una entrega dura ~12
+# min, así que nunca se cuenta como viaje; y una espera de semáforo dura menos,
+# así que sí cuenta como viaje, que es lo correcto. Subirlo a 8 min inflaba el
+# factor a 2.12 porque se empezaba a tragar el tiempo de entrega.
+#
+# Cómo re-medirlo: el script vive en docs/ y se corre contra Samsara. Hay que
+# repetirlo si cambia el perfil de OSRM o la operación.
+_CALIBRACION = [(2, 2.10), (5, 1.80), (10, 1.70), (20, 1.55), (40, 1.45)]
+
+
+def factor_trafico(distancia_km):
+    """Cuánto hay que multiplicar el tiempo de OSRM para ese tramo."""
+    if distancia_km <= _CALIBRACION[0][0]:
+        return _CALIBRACION[0][1]
+    for (km_a, f_a), (km_b, f_b) in zip(_CALIBRACION, _CALIBRACION[1:]):
+        if distancia_km <= km_b:
+            avance = (distancia_km - km_a) / (km_b - km_a)
+            return f_a + (f_b - f_a) * avance
+    return _CALIBRACION[-1][1]
+
+
 def build_distance_time_matrices(locations, velocidad_kmh_fallback):
     """
     Intenta construir las matrices con OSRM (calles reales). Si el servicio no
@@ -101,7 +144,14 @@ def build_distance_time_matrices(locations, velocidad_kmh_fallback):
     if osrm_result:
         distances_m, durations_s, evito_casetas = osrm_result
         distance_matrix = [[int(d) for d in row] for row in distances_m]
-        time_matrix_min = [[int(d / 60) for d in row] for row in durations_s]
+        # round() y no int(): truncar regalaba hasta 59 s por tramo (medido: 0.50
+        # min en promedio), y con ~20 tramos por ruta son 10 minutos por camión
+        # que desaparecían del plan.
+        time_matrix_min = [
+            [round((seg / 60) * factor_trafico(distance_matrix[i][j] / 1000.0))
+             for j, seg in enumerate(fila)]
+            for i, fila in enumerate(durations_s)
+        ]
         fuente = "osrm_sin_casetas" if evito_casetas else "osrm"
         return distance_matrix, time_matrix_min, fuente
 
@@ -112,5 +162,5 @@ def build_distance_time_matrices(locations, velocidad_kmh_fallback):
         for j in range(n):
             dist_km = haversine_distance(locations[i][0], locations[i][1], locations[j][0], locations[j][1])
             distance_matrix[i][j] = int(dist_km * 1000)
-            time_matrix_min[i][j] = int((dist_km / velocidad_kmh_fallback) * 60)
+            time_matrix_min[i][j] = round((dist_km / velocidad_kmh_fallback) * 60)
     return distance_matrix, time_matrix_min, f"haversine_{motivo}"

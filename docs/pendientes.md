@@ -63,40 +63,65 @@ las respuestas de arriba.
 
 ## 3. Datos que faltan de SAP
 
-- 🔴 **Conectar SAP en producción.** En la computadora personal las credenciales
-  están vacías y todo corre con pedidos de prueba.
-- 🔴 **Peso real por pedido — este pendiente marca el calendario.**
+- ✅ ~~**Conectar SAP en producción.**~~ Probado el 27-jul contra
+  `DB_LABEN_PRODUCTIVA`: se bajaron **17 pedidos reales**, el optimizador armó
+  rutas con ellos y los kilos cuadraron. Es la primera corrida del sistema con
+  datos de verdad. El `.env` quedó apuntando de vuelta a la base de pruebas para
+  no jalar producción sin querer.
 
-  **Qué falta exactamente:** que cada artículo tenga capturado su peso en la
-  ficha de SAP (`OITM.SWeight1`). **Del lado del código no falta nada**: la
-  consulta ya está escrita y probada (suma de `cantidad × OITM.SWeight1` por
-  línea, en `sync.py`); en el momento que los pesos existan, el sistema los
-  empieza a usar solo.
+- 🔴 **A la mitad de los clientes les falta la coordenada en SAP.** De los 17
+  pedidos reales del 27-jul, **9 no se pudieron rutear** por eso: Pizzas Urbanas,
+  Lomar Industrias, Operaciones y Servicios, Abastecedora Integral. Es el
+  pendiente que ahora manda: da igual qué tan bueno sea el optimizador si no
+  sabe a dónde llevar la mitad de la carga.
 
-  **Por qué es lo más serio de esta lista:** sin pesos, la restricción de kilos
-  del optimizador corre con `PESO_ESTIMADO_KG = 150` **inventado**. Eso quiere
-  decir que el sistema **no puede garantizar que un camión no salga
-  sobrecargado**, y peor: entrega un plan que se ve confiable. Un número
-  inventado que se presenta como medido es exactamente lo que haría cargar de
-  más con toda confianza.
+  **Falta revisar** si esas coordenadas ya están en el Excel de direcciones que
+  se importó y solo no se están cruzando, o si de plano no están capturadas.
 
-  **Quién lo hace:** no es trabajo de programación ni de una tarde. Es captura
-  en el catálogo, artículo por artículo, por alguien del equipo con acceso a
-  SAP. **Ese es el plazo que manda**, no el código: la parte de programar cabe
-  en días, esta captura no se sabe hasta contar cuántos artículos son.
+- 🔴 **La base productiva NO tiene las ventanas de recibo ni los días de
+  entrega.** Los UDF `U_IniRecibo1`, `U_FinRecibo1`, `U_EntLun`…`U_EntSab`
+  existen en `CRD1` de la base de **pruebas** —se crearon para este proyecto—
+  pero **en productiva solo están `U_Latitud` y `U_Longitud`**. O sea que contra
+  producción el sistema planea como si todos los clientes recibieran a cualquier
+  hora y cualquier día.
 
-  **Primer paso, y es chico:** contar cuántos artículos activos NO tienen
-  `SWeight1` capturado. Con ese número ya se puede estimar de verdad cuánto
-  tarda y decidir si se captura todo o solo lo que más se mueve.
+  Esto además tumbaba el sync entero con "Invalid column name" y el despachador
+  se quedaba sin pedidos sin saber por qué. Ya se corrigió: `sync.py` pregunta
+  primero qué columnas existen y trabaja con lo que haya. Pero **el dato sigue
+  sin existir en producción** y hay que crearlo ahí.
+- ✅ ~~**Peso real por pedido — este pendiente marca el calendario.**~~
+  **Resuelto el 27-jul-2026, y no era lo que parecía.**
 
-  **Mientras tanto se puede operar así:** en un piloto de uno o dos camiones,
-  donde el cargador todavía revisa la carga a ojo, se aguanta sin pesos. Lo que
-  **no** se puede es dejar al sistema decidir solo la carga. El manifiesto ya
-  avisa "SAP no manda el peso: no se sabe cuánto lleva" en vez de inventar un
-  total, justamente para que nadie confíe de más.
+  Se creía que faltaba capturar el peso de ~900 artículos y que esa captura
+  mandaba el calendario. Medido contra la base **productiva**: de los **340
+  artículos que de verdad se mueven, solo 11 no tienen peso**, y de esos 7 se
+  rescatan de otras fuentes (peso de compra, o el peso que ya viene en la
+  descripción: "1 / 1.89 KG"). **Faltan 4 por capturar**, y dos ni son producto:
 
-  **Cómo saber que quedó:** el manifiesto de carga deja de mostrar el aviso
-  ámbar y muestra kilos reales contra la capacidad de la unidad.
+  | Renglones | Código | Qué es |
+  |---|---|---|
+  | 8 | `1330071` | Salsa Red Hot Buffalo Wing 3.78 LT |
+  | 1 | `2122079` | Queso Edam cuña 1 KG |
+  | 2 | `HC` | datos bancarios metidos como artículo |
+  | 1 | `A0356` | una cubicadora (activo, no mercancía) |
+
+  **El problema real era otro, y era del código:** `OITM.SWeight1` no es el peso
+  de la pieza, es el de la **unidad de venta** (la caja). Y `RDR1.Quantity` viene
+  en la unidad del renglón, que no siempre es esa — el mismo artículo se pide
+  unas veces por caja y otras por pieza suelta. La fórmula
+  `Quantity × SWeight1` contaba 2 barras de mantequilla como 2 cajas de 30.
+
+  Medido sobre 12,937 renglones de 60 días: reportaba **1,457,832 kg contra
+  808,469 kg reales (1.8x)**, con hasta **36x** en el peor pedido. Solo el 4% de
+  los renglones estaba mal, pero eran justo los de miles de piezas.
+
+  Corregido en `sync.py`: `InvQty × (SWeight1 / NumInSale)`. Verificado contra
+  los pedidos reales del 27-jul — los kilos cuadran con lo que anuncia la
+  descripción de cada producto (una caja de 6 quesos de 2.3 kg = 13.62 kg).
+
+  **Pendiente chico:** revisar el peso del paquete de cajas para pizza
+  (`CAJA PARA PIZZA PDP`), que da 15 kg por paquete y en un solo pedido suma
+  900 kg. Puede estar bien o mal capturado.
 - 🟡 **Corregir 4 destinos con la hora mal capturada** (les falta el PM):
   LA PARMESANA "08:00-06:00", Santo Chickn Gpe "09:00-03:00", WYNDHAM MONTERREY
   "09:00-05:00", BARBARO "08:00-00:00". El optimizador las ignora y usa el turno
@@ -143,27 +168,40 @@ las respuestas de arriba.
 
 ## 4. Ruteo (OSRM)
 
-- 🔴 **Procesar el mapa y prender el OSRM propio.** El archivo
-  `mexico-latest.osm.pbf` está descargado (357 MB) pero **nunca se procesó**, así
-  que `OSRM_BASE` sigue comentado y todo corre contra el servidor público de
-  demostración.
-- 🔴 **Consecuencia directa:** el público **acepta máximo 100 paradas**. Con ~77
-  pedidos de día normal se va raspando; un día pico de 139 lo cruza. Es decir,
-  **el día más cargado —justo cuando más se ocupa el optimizador— es el día que
-  se cae a línea recta**, y entrega rutas de aspecto normal con el orden de las
-  paradas mal.
-- 🔴 **Aplicar el factor de calibración (~1.3).** Re-medido el 26-jul con la API
-  de Samsara: OSRM implica **53.7 km/h** contra los **42.7 km/h** reales de
-  45,825 lecturas de GPS. El plan mete ~27 paradas donde caben ~18.
+- ✅ ~~**Procesar el mapa y prender el OSRM propio.**~~ Ya estaba hecho desde el
+  21-jul; el documento se quedó atrás. Verificado el 27-jul: el servidor propio
+  responde en `localhost:5001` y `OSRM_BASE` está puesto en el `.env`.
+- ✅ ~~**El límite de 100 paradas.**~~ Probado con **200 paradas: responde en
+  2.1 s**. El límite era del servidor público, y ya no se usa.
+- ✅ ~~**Hoy tampoco se evitan casetas.**~~ El servidor propio sí acepta
+  `exclude=motorway`, así que la exclusión de autopistas de cuota ya es real.
+- ✅ ~~**Aplicar el factor de calibración (~1.3).**~~ Aplicado el 27-jul, pero
+  **el 1.3 se quedaba corto y el factor no es plano**.
 
-  Va en un solo lugar, `routing_service.build_distance_time_matrices`, y son DOS
-  cambios: el factor, y `round()` en vez de `int()` — que truncaba hacia abajo y
-  regalaba hasta 59 segundos por tramo.
+  Medido contra **307 viajes reales** reconstruidos del GPS de Samsara (7 días):
+  se detectó cada parada de 2.5 min o más y se comparó el tiempo real de puerta
+  a puerta contra lo que dice OSRM del mismo tramo.
 
-  **Cómo saber que quedó:** el plan debe dar 15-18 paradas por camión.
-  **Hay que re-medirlo al prender el OSRM propio** (`python manage.py
-  medir_velocidad_real 7`), porque otro perfil da otros tiempos. Todo el detalle
-  en [`calibracion-tiempos-osrm.md`](calibracion-tiempos-osrm.md).
+  | Tramo | min OSRM | min real | Factor |
+  |---|---|---|---|
+  | 0–2 km | 183 | 421 | 2.30 |
+  | 2–5 km | 529 | 921 | 1.74 |
+  | 5–10 km | 488 | 987 | 2.02 |
+  | 10–20 km | 474 | 734 | 1.55 |
+  | 20+ km | 1,522 | 2,178 | 1.43 |
+  | **Todos** | 3,196 | 5,242 | **1.64** |
+
+  Entre más corto el tramo, más castigado: el semáforo y la maniobra pesan más
+  que el manejo. Por eso se interpola por distancia en vez de usar un número
+  solo. Va en `routing_service.factor_trafico`, junto con el `round()` en vez de
+  `int()` (medido: truncar regalaba 0.50 min por tramo).
+
+  **Ojo con el umbral de parada:** subirlo a 8 min inflaba el factor a 2.12
+  porque empezaba a contar tiempo de entrega como viaje. A 2.5 min una entrega
+  (~12 min) nunca se cuenta como viaje y un semáforo sí, que es lo correcto.
+
+  **Falta afinarlo:** son 7 días de datos y el bucket de 5–10 km rompe la
+  tendencia con solo 55 tramos — puede ser ruido. Con 21 días quedaría firme.
 - 🔴 **La hora de salida no es 09:00.** Medido: 07:03, 07:11, 09:25 y 13:49 en
   días consecutivos, y hasta 2.5 h de diferencia entre camiones el mismo día. Las
   ETAs ya se corrigen al dar Salida, pero **las ventanas de recibo se evalúan

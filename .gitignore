@@ -15,6 +15,10 @@ dist/
 build/
 .npm/
 
+# Ajustes de Docker propios de cada máquina (ej. publicar Postgres en otro
+# puerto porque el 5432 ya lo ocupa una instalación nativa).
+docker/docker-compose.override.yml
+
 # IDEs y OS
 .vscode/
 .idea/

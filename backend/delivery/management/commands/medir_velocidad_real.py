@@ -15,7 +15,7 @@ from math import radians, sin, cos, asin, sqrt
 import requests
 from dotenv import load_dotenv
 
-load_dotenv(r"C:\Proyecto\Logistica\backend\.env")
+load_dotenv()   # el .env del backend; antes tenía una ruta absoluta de otra máquina
 H = {"Authorization": f"Bearer {os.getenv('SAMSARA_API_TOKEN')}"}
 BASE = "https://api.samsara.com"
 

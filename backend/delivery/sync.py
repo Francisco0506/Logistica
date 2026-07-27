@@ -64,38 +64,77 @@ def sync_from_sap(fecha: date):
     udf_telefono = os.getenv("SAP_UDF_TELEFONO", "")
     udf_referencias = os.getenv("SAP_UDF_REFERENCIAS", "")
 
-    has_geo_udf = bool(udf_lat and udf_lng)
-    has_window_udf = bool(udf_ini1 and udf_fin1)
-
-    extra_cols = ""
-    if has_geo_udf:
-        extra_cols += f", A.{udf_lat} AS UdfLat, A.{udf_lng} AS UdfLng"
-    if has_window_udf:
-        extra_cols += f", A.{udf_ini1} AS UdfIni1, A.{udf_fin1} AS UdfFin1"
-    extra_cols += f", A.{udf_ini2} AS UdfIni2, A.{udf_fin2} AS UdfFin2"
-    for campo, udf in udf_dias.items():
-        extra_cols += f", A.{udf} AS Udf_{campo}"
-    if udf_contacto:
-        extra_cols += f", A.{udf_contacto} AS UdfContacto"
-    if udf_telefono:
-        extra_cols += f", A.{udf_telefono} AS UdfTelefono"
-    if udf_referencias:
-        extra_cols += f", A.{udf_referencias} AS UdfReferencias"
-
     try:
         conn = pyodbc.connect(conn_str, timeout=5)
         cursor = conn.cursor()
+
+        # Qué UDF existen DE VERDAD en esta base, en vez de darlos por hecho.
+        #
+        # No todas las instalaciones tienen los mismos: la base de pruebas tiene
+        # las ventanas de recibo y los días de entrega (U_IniRecibo1, U_EntLun…)
+        # porque se crearon para este proyecto, pero LA PRODUCTIVA NO LOS TIENE
+        # — ahí solo están U_Latitud y U_Longitud. Pedir una columna que no
+        # existe tumba la consulta entera con "Invalid column name" y el
+        # despachador se queda sin pedidos, sin saber por qué.
+        #
+        # Preguntando primero, la misma consulta sirve en las dos bases: donde
+        # el campo existe se usa, y donde no, el destino queda sin ventana y el
+        # optimizador lo trata como disponible todo el turno.
+        cursor.execute(
+            "SELECT name FROM sys.columns WHERE object_id = OBJECT_ID('CRD1')"
+        )
+        columnas_crd1 = {r[0].lower() for r in cursor.fetchall()}
+
+        def existe(udf):
+            return bool(udf) and udf.lower() in columnas_crd1
+
+        has_geo_udf = existe(udf_lat) and existe(udf_lng)
+        has_window_udf = existe(udf_ini1) and existe(udf_fin1)
+
+        extra_cols = ""
+        if has_geo_udf:
+            extra_cols += f", A.{udf_lat} AS UdfLat, A.{udf_lng} AS UdfLng"
+        if has_window_udf:
+            extra_cols += f", A.{udf_ini1} AS UdfIni1, A.{udf_fin1} AS UdfFin1"
+        if existe(udf_ini2) and existe(udf_fin2):
+            extra_cols += f", A.{udf_ini2} AS UdfIni2, A.{udf_fin2} AS UdfFin2"
+        for campo, udf in udf_dias.items():
+            if existe(udf):
+                extra_cols += f", A.{udf} AS Udf_{campo}"
+        if existe(udf_contacto):
+            extra_cols += f", A.{udf_contacto} AS UdfContacto"
+        if existe(udf_telefono):
+            extra_cols += f", A.{udf_telefono} AS UdfTelefono"
+        if existe(udf_referencias):
+            extra_cols += f", A.{udf_referencias} AS UdfReferencias"
 
         # Consulta SQL segura de lectura (SELECT) para obtener pedidos pendientes.
         # A.Address es el ID real de la dirección del Ship-To en SAP (AdresID),
         # usado como identificador estable en vez del texto libre de la calle.
         #
-        # El peso NO existe como campo de cabecera en SAP: se calcula sumando, por
-        # cada línea del pedido (RDR1), la cantidad pedida por el peso unitario real
-        # del artículo (OITM.SWeight1, campo estándar del maestro de artículos de
-        # SAP B1 — no requiere UDF). Si un artículo no tiene peso capturado en su
+        # El peso NO existe como campo de cabecera en SAP: se calcula sumando las
+        # líneas del pedido (RDR1). Si un artículo no tiene peso capturado en su
         # ficha, cuenta como 0 y el pedido queda con el peso parcial de lo que sí
         # está capturado (mejor una subestimación que un peso 100% inventado).
+        #
+        # OJO CON LAS UNIDADES — aquí había un error que inflaba los kilos hasta
+        # 36 veces. `OITM.SWeight1` no es el peso de la pieza: es el peso de la
+        # UNIDAD DE VENTA, que casi siempre es la caja. Y `RDR1.Quantity` viene
+        # en la unidad DEL RENGLÓN, que no siempre es esa: el mismo artículo se
+        # pide unas veces por caja y otras por pieza suelta.
+        #
+        # Ejemplo real (2000001, mantequilla "Caja 30 Pz", SWeight1 = 14.04 kg):
+        #   renglón "1 Caja 30 Pz" -> 1 x 14.04  = 14 kg   correcto
+        #   renglón "2 Pieza"      -> 2 x 14.04  = 28 kg   son 2 barras de 454 g
+        #
+        # `InvQty` siempre viene en unidad de inventario (la pieza), así que
+        # dividir SWeight1 entre NumInSale (piezas por unidad de venta) da el
+        # peso de la pieza y la cuenta cuadra en los dos casos.
+        #
+        # Medido contra 12,937 renglones de 60 días de la base productiva: la
+        # fórmula anterior reportaba 1,457,832 kg contra los 808,469 kg reales
+        # —1.8x— y en el peor pedido se equivocaba por 36x. Solo el 4% de los
+        # renglones estaba mal, pero eran justo los de miles de piezas.
         query = f"""
             SELECT
                 O.DocEntry,
@@ -112,7 +151,10 @@ def sync_from_sap(fecha: date):
                 A.City,
                 A.ZipCode,
                 (
-                    SELECT SUM(L.Quantity * ISNULL(I.SWeight1, 0))
+                    SELECT SUM(
+                        ISNULL(L.InvQty, L.Quantity)
+                        * (ISNULL(I.SWeight1, 0) / NULLIF(ISNULL(I.NumInSale, 1), 0))
+                    )
                     FROM RDR1 L
                     LEFT JOIN OITM I ON I.ItemCode = L.ItemCode
                     WHERE L.DocEntry = O.DocEntry
@@ -138,7 +180,11 @@ def sync_from_sap(fecha: date):
             marcadores = ",".join("?" * len(doc_entries))
             cursor.execute(f"""
                 SELECT L.DocEntry, L.LineNum, L.ItemCode, L.Dscription,
-                       L.Quantity, L.unitMsr, I.SWeight1
+                       L.Quantity, L.unitMsr,
+                       -- peso de UNA unidad de este renglón, no de la caja:
+                       -- misma corrección de unidades que el total de arriba.
+                       (ISNULL(I.SWeight1, 0) / NULLIF(ISNULL(I.NumInSale, 1), 0))
+                           * ISNULL(L.NumPerMsr, 1) AS SWeight1
                 FROM RDR1 L
                 LEFT JOIN OITM I ON I.ItemCode = L.ItemCode
                 WHERE L.DocEntry IN ({marcadores})
