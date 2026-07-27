@@ -108,7 +108,14 @@ def sync_from_sap(fecha: date):
         if existe(udf_referencias):
             extra_cols += f", A.{udf_referencias} AS UdfReferencias"
 
-        # Se rutean las ÓRDENES DE ENTREGA (ODLN), no las órdenes de venta.
+        # Se rutean las ÓRDENES DE ENTREGA (ODLN), SIEMPRE.
+        #
+        # Decisión de operación (Francisco y Sebastián, 27-jul-2026): el
+        # planeador trabaja con órdenes de entrega y nada más. No agregar aquí un
+        # respaldo por órdenes de venta "para cuando no haya entregas": si el
+        # panel se ve vacío en la mañana es porque la entrega todavía no se ha
+        # capturado, y eso se arregla adelantando la captura, no cambiando la
+        # fuente. Ver docs/pendientes.md §3.
         #
         # Antes esto leía ORDR/RDR1 y por eso el panel se veía casi vacío: para
         # el 27-jul-2026 había 17 órdenes de venta abiertas contra 73 órdenes de

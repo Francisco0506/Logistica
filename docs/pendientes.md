@@ -103,24 +103,25 @@ las respuestas de arriba.
   de las 60 que tenían coordenada, con el camión más cargado en 840 kg de 6,000.
   Ni la capacidad ni el algoritmo son el problema.
 
-- 🔴 **La orden de entrega se captura DESPUÉS de repartir.** El sistema ya lee
-  órdenes de entrega (ODLN) en vez de órdenes de venta, que es lo correcto: para
-  el 27-jul había 17 órdenes de venta abiertas contra 73 entregas, y un día
-  normal trae ~100 entregas de reparto real.
+- 🔴 **La captura de la entrega tiene que adelantarse a antes de la salida.**
 
-  Pero medido el lunes 20-jul: **a las 9 de la mañana, cuando salieron los
-  camiones, existía UNA sola orden de entrega**. Las 181 del día se capturaron
-  entre las 12 y las 7 de la noche.
+  **Decidido (Francisco y Sebastián, 27-jul-2026): el planeador trabaja SIEMPRE
+  con órdenes de entrega. No es negociable y no hay ruta alterna por órdenes de
+  venta.** Es lo correcto: la entrega es la mercancía que de verdad sube al
+  camión, y para el 27-jul había 17 órdenes de venta abiertas contra 73
+  entregas. Un día normal trae ~100 entregas de reparto real.
 
-  Así que el documento correcto para el ruteo nace *después* del ruteo. Hay dos
-  salidas y la decisión es de operación:
+  El código ya quedó así. Lo que falta es del lado de la operación: medido el
+  lunes 20-jul, **a las 9 de la mañana —cuando salieron los camiones— existía
+  UNA sola orden de entrega**. Las 181 del día se capturaron entre las 12 y las
+  7 de la noche.
 
-  1. Planear con órdenes de venta (que sí existen antes, con `DocDueDate`) y
-     usar las entregas para verificar lo que salió.
-  2. Adelantar la captura de las entregas a antes de las 9 am.
+  Mientras la captura siga siendo por la tarde, **el panel se ve vacío justo en
+  la mañana, que es cuando se ocupa**. No es una falla del sistema: es que el
+  documento con el que se planea todavía no existe a esa hora.
 
-  **Pendiente de confirmar con Sebastián:** a qué hora se sabe qué va a llevar
-  cada camión. Esa respuesta define cuál de las dos es la buena.
+  **Lo que hay que definir:** a qué hora queda capturada la entrega, y que esa
+  hora sea antes de que salgan los camiones.
 
 - 🔴 **La base productiva NO tiene las ventanas de recibo ni los días de
   entrega.** Los UDF `U_IniRecibo1`, `U_FinRecibo1`, `U_EntLun`…`U_EntSab`
