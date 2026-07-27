@@ -1,11 +1,15 @@
-from ninja import NinjaAPI, Schema
+from ninja import NinjaAPI, Schema, File
+from ninja.files import UploadedFile
 from typing import List, Optional
-from datetime import date, datetime
-from .models import Remision, Ruta
+from datetime import date, datetime, timedelta
+from django.db.models import Count
+from django.utils import timezone
+from . import fleet
+from django.db import transaction
+from .models import Remision, Ruta, LineaRemision
 from .optimizer import (
     solve_vrp, sugerir_camiones_para_remision, asignar_manualmente,
-    recalcular_etas_desde_salida, CAPACIDAD_CAMION_KG_DEFAULT,
-    MAX_PARADAS_POR_RUTA_DEFAULT,
+    recalcular_etas_desde_salida,
 )
 from .sync import sync_from_sap
 from .test_data import cargar_pedidos_prueba
@@ -13,49 +17,9 @@ from .samsara_service import get_ubicaciones_isuzu
 
 api = NinjaAPI(title="Laben Routing API", version="1.0.0")
 
-# Capacidades promedio en KG por camión y coordenadas de salida del CEDIS.
-# Únicas en todo el backend (frontend/src/config/fleet.js mantiene su propia
-# copia de CEDIS solo para centrar el mapa, no para el cálculo de rutas).
-# Orden = mismo orden que FLEET/ID_TO_PLATE en fleet.js (T-001..T-008 = los 8
-# camiones ISUZU de reparto reales: 012, 013, 015, 016, 017, 023, 024, 027).
-# Capacidad de carga útil por camión, según la ficha técnica de Isuzu México
-# para el modelo EXACTO de cada unidad. El modelo sale del VIN que reporta
-# Samsara (en los VIN no se usa la letra Q, por eso NQR aparece como "N1R"):
-#   NLR -> ELF 100         = 1,500 kg
-#   NKR -> ELF 200         = 2,000 kg
-#   NPR -> ELF 400/500     = 3,500 kg (rango 3,000-5,000; se toma el bajo para
-#                            no arriesgar sobrecarga hasta confirmar la caja)
-#   NQR -> ELF 600         = 6,000 kg
-# Pendiente afinar con la tarjeta de circulación de cada unidad — al hacerlo se
-# actualiza esta lista y FLEET en frontend/src/config/fleet.js (mismo orden).
-# Orden = ranking de uso real (km GPS Samsara 60 días, ver docs/flota.md): el
-# optimizador usa primero los camiones que de verdad operan.
-CAPACIDADES_CAMION_KG = [
-    6000,  # T-001 = 027 RA7475A  NQR / ELF 600     2022  (el más usado)
-    3500,  # T-002 = 023 PP4873A  NPR / ELF 400/500 2020
-    6000,  # T-003 = 017 PR6889B  NQR / ELF 600     2017
-    2000,  # T-004 = 016 RJ97892  NKR / ELF 200     2016
-    1500,  # T-005 = 013 RJ37663  NLR / ELF 100     2015
-    3500,  # T-006 = 024 PP4872A  NPR / ELF 400/500 2018  (parado desde 14-jul)
-    2000,  # T-007 = 015 RJ57620  NKR / ELF 200     2016  (2 meses sin operar)
-    3500,  # T-008 = 012 RH83800  NPR / ELF 400/500 2014  (2 meses sin operar)
-]
-
-# Tope de paradas por ruta, medido con GPS: es el máximo de entregas que cada
-# camión ha hecho realmente en un día. Sirve de tope práctico mientras SAP no
-# mande el peso real de cada pedido (sin SAP, la restricción de kilos usa un
-# peso estimado y no es confiable; las paradas sí están medidas).
-MAX_PARADAS_POR_CAMION = [
-    29,  # T-001 = 027 (promedio 16.6/día)
-    30,  # T-002 = 023 (promedio 17.9/día; llegó a 38 en una jornada de 12.9 h)
-    24,  # T-003 = 017 (promedio 11.8/día)
-    29,  # T-004 = 016 (promedio 18.0/día)
-    19,  # T-005 = 013 (promedio 11.9/día)
-    25,  # T-006 = 024 (sin datos suficientes: se usa el típico de su tamaño)
-    25,  # T-007 = 015 (sin datos)
-    25,  # T-008 = 012 (sin datos)
-]
-DEPOT_COORDS = (25.693214524592616, -100.48167993202988)
+# La flota (placas, capacidades, topes de paradas) y el CEDIS viven en fleet.py,
+# que es la única fuente de verdad y la que el frontend consume por API.
+DEPOT_COORDS = fleet.CEDIS
 
 # Transiciones válidas del flujo de despacho: no se puede saltar pasos
 # (ej. de Borrador directo a En_Ruta) llamando la API directo sin pasar por UI.
@@ -74,13 +38,19 @@ class RemisionOut(Schema):
     estado: str
     ship_to_code: str
     doc_total: float
-    window: str = "09:00 - 12:00"
-    eta: str = "09:30 AM"
+    eta: str = "Pendiente"
     address: str = ""
     lat: Optional[float] = None
     lng: Optional[float] = None
     truck: Optional[str] = None
     secuencia_ruta: Optional[int] = None
+    # Peso real del pedido en KG. `null` cuando SAP no lo trae (ver sync.py):
+    # el panel debe mostrarlo como desconocido, NUNCA sustituirlo por el
+    # estimado que usa el optimizador, o se vería como un peso medido.
+    peso_kg: Optional[float] = None
+    # Ventana de recibo del cliente, en 24 h ("15:00 - 22:00"). Es el dato que
+    # explica por qué las rutas van apretadas y no se mostraba en ningún lado.
+    ventana: Optional[str] = None
 
 class RutaOut(Schema):
     id: int
@@ -89,6 +59,10 @@ class RutaOut(Schema):
     estado: str
     pedidos_count: int
     hora_salida: Optional[str] = None
+    # Cuándo se generó esta ruta. Sirve para saber si el plan que se está
+    # viendo ya se quedó viejo: si llegaron pedidos de SAP después de esta
+    # hora, no están considerados y hay que volver a optimizar.
+    generada: Optional[str] = None
 
 # 1. Obtener todas las remisiones
 @api.get("/dispatcher/remisiones", response=List[RemisionOut])
@@ -101,7 +75,7 @@ def get_remisiones(request, fecha: date):
         if r.destino and r.destino.latitude is not None and r.destino.longitude is not None:
             lat = r.destino.latitude
             lng = r.destino.longitude
-            
+
         result.append({
             "id": r.id,
             "doc_num": r.doc_num,
@@ -115,6 +89,8 @@ def get_remisiones(request, fecha: date):
             "lng": lng,
             "truck": r.ruta.camion if r.ruta else None,
             "secuencia_ruta": r.secuencia_ruta,
+            "peso_kg": r.peso_kg,
+            "ventana": _texto_ventana(r.destino),
         })
     return result
 
@@ -139,7 +115,11 @@ def cargar_prueba_endpoint(request, payload: CargarPruebaIn):
 # 3. Optimizar Rutas usando OR-Tools
 class GenerarRutasIn(Schema):
     fecha: date
-    numero_camiones: int
+    # Placas de los camiones que el despachador tiene ACTIVOS en el panel
+    # (ej. ["RA7475A", "PP4873A"]). Antes esto era un simple conteo y el backend
+    # tomaba los primeros N de una lista fija, así que apagar un camión y
+    # prender otro planeaba con la capacidad del que se apagó.
+    camiones: List[str]
     # Turno del chofer en horas para esta corrida. Default 6h (turno oficial);
     # el despachador puede ampliarlo (6.5h, 7h, 8h) cuando los pedidos no
     # caben — la jornada real medida con GPS llega a 6.7h promedio. Acotado a
@@ -159,27 +139,27 @@ def generar_rutas(request, payload: GenerarRutasIn):
         datetime.strptime(payload.hora_salida, "%H:%M")
     except ValueError:
         return {"status": "error", "message": "Hora de salida inválida. Usa el formato HH:MM (ej. 09:30)."}
-    # Si piden más camiones de los que hay capacidad configurada (ej. se agregó
-    # un 6to camión desde el panel), se completa con el valor conservador por
-    # default en vez de tronar — hasta que se confirme su capacidad real.
-    vehicle_capacities = [
-        CAPACIDADES_CAMION_KG[i] if i < len(CAPACIDADES_CAMION_KG) else CAPACIDAD_CAMION_KG_DEFAULT
-        for i in range(payload.numero_camiones)
-    ]
-    max_paradas = [
-        MAX_PARADAS_POR_CAMION[i] if i < len(MAX_PARADAS_POR_CAMION) else MAX_PARADAS_POR_RUTA_DEFAULT
-        for i in range(payload.numero_camiones)
-    ]
+    if not payload.camiones:
+        return {"status": "error", "message": "Activa al menos un camión antes de optimizar."}
+
+    # Un camión agregado a mano desde el panel no está en la flota conocida:
+    # entra a la corrida con capacidad y tope conservadores (fleet.py), pero se
+    # avisa, porque el plan que salga para ese camión es una estimación.
+    desconocidos = [p for p in payload.camiones if not fleet.datos(p)]
 
     res = solve_vrp(
         fecha=payload.fecha,
-        num_vehicles=payload.numero_camiones,
-        vehicle_capacities=vehicle_capacities,
-        max_paradas=max_paradas,
+        placas=payload.camiones,
         depot_coords=DEPOT_COORDS,
         horas_turno=horas_turno,
         hora_salida=payload.hora_salida,
     )
+    if desconocidos and res.get("status") == "success":
+        res["message"] += (
+            f" Ojo: {', '.join(desconocidos)} no está(n) en la flota registrada, "
+            f"así que se planeó con capacidad estimada de {fleet.CAPACIDAD_KG_DESCONOCIDO} kg "
+            f"y {fleet.MAX_PARADAS_DESCONOCIDO} paradas."
+        )
     return res
 
 # 4. Obtener rutas activas del día
@@ -196,9 +176,147 @@ def get_rutas(request, fecha: date):
             "pedidos_count": r.remisiones.count(),
             # Hora real en que el despachador dio "Salida" (botón En_Ruta), no
             # una hora teórica: null hasta que el camión de verdad se despache.
-            "hora_salida": r.hora_salida.strftime("%I:%M %p") if r.hora_salida else None,
+            "hora_salida": r.hora_salida.strftime("%H:%M") if r.hora_salida else None,
+            "generada": timezone.localtime(r.creado_en).strftime("%H:%M") if r.creado_en else None,
         })
     return result
+
+# 3b. "¿Qué hago para que quepan todos?"
+#
+# Corre el optimizador varias veces con una sola variable cambiada cada vez y
+# devuelve cuántos pedidos entrarían en cada caso, ordenado por el que más
+# ayuda. Ninguna corrida toca el plan real: se simulan y se deshacen.
+#
+# Se prueba una variable a la vez a propósito. Si se cambiaran dos juntas no se
+# sabría cuál sirvió, y el despachador necesita saber QUÉ hacer, no solo que
+# "algo" mejora.
+class EscenariosIn(Schema):
+    fecha: date
+    camiones: List[str]
+    horas_turno: float = 6.0
+    hora_salida: str = "09:00"
+
+
+# Segundos de solver por escenario. Corto porque se corren varios seguidos y lo
+# que interesa es comparar cuántos pedidos caben, no exprimir cada ruta.
+SEGUNDOS_POR_ESCENARIO = 6
+
+
+@api.post("/dispatcher/rutas/escenarios")
+def evaluar_escenarios(request, payload: EscenariosIn):
+    if not payload.camiones:
+        return {"status": "error", "message": "Activa al menos un camión."}
+
+    total_pedidos = Remision.objects.filter(doc_date=payload.fecha).count()
+
+    def _cuantos_caben(camiones, horas, salida):
+        res = solve_vrp(
+            fecha=payload.fecha, placas=camiones, depot_coords=DEPOT_COORDS,
+            horas_turno=horas, hora_salida=salida,
+            simular=True, segundos_solver=SEGUNDOS_POR_ESCENARIO,
+        )
+        if res.get("status") != "success":
+            return None
+        return sum(r["pedidos"] for r in res.get("rutas", []))
+
+    base = _cuantos_caben(payload.camiones, payload.horas_turno, payload.hora_salida)
+    if base is None:
+        return {"status": "error", "message": "No se pudo evaluar el plan actual."}
+
+    opciones = []
+
+    # 1. Salir más temprano. Es la palanca más fuerte medida (ver docs/flota.md)
+    #    porque las ventanas de los clientes son horas de reloj fijas.
+    hora_actual = datetime.strptime(payload.hora_salida, "%H:%M")
+    if hora_actual.hour > 6:
+        una_hora_antes = (hora_actual - timedelta(hours=1)).strftime("%H:%M")
+        caben = _cuantos_caben(payload.camiones, payload.horas_turno, una_hora_antes)
+        if caben is not None:
+            opciones.append({
+                "accion": "salir_antes",
+                "titulo": f"Salir a las {una_hora_antes} en vez de {payload.hora_salida}",
+                "detalle": "Cargar más rápido en el CEDIS para que el primer camión salga una hora antes.",
+                "pedidos": caben,
+                "dificultad": "Depende del almacén, no del sistema",
+            })
+
+    # 2. Más turno: el máximo posible. Si ni con el máximo mejora, tampoco
+    #    mejoraría con un escalón intermedio, así que con una corrida basta.
+    if payload.horas_turno < 8:
+        caben = _cuantos_caben(payload.camiones, 8.0, payload.hora_salida)
+        if caben is not None:
+            opciones.append({
+                "accion": "mas_turno",
+                "valor": 8.0,
+                "titulo": "Ampliar el turno a 8 horas",
+                "detalle": f"Los choferes trabajarían {8 - payload.horas_turno:g} h más que hoy.",
+                "pedidos": caben,
+                "dificultad": "Hay que confirmarlo con los choferes",
+            })
+
+    # 3. Activar un camión más. Se prueba el de MAYOR capacidad de los apagados:
+    #    si ese no ayuda, ninguno de los más chicos va a ayudar. Probar los tres
+    #    triplicaba el tiempo de espera para dar casi la misma respuesta.
+    apagados = [c for c in fleet.CAMIONES if c["placa"] not in payload.camiones]
+    if apagados:
+        mejor_apagado = max(apagados, key=lambda c: (c["capacidad_kg"], c["max_paradas"]))
+        placa = mejor_apagado["placa"]
+        caben = _cuantos_caben(payload.camiones + [placa], payload.horas_turno, payload.hora_salida)
+        if caben is not None:
+            otros = len(apagados) - 1
+            opciones.append({
+                "accion": "activar_camion",
+                "valor": placa,
+                "titulo": f"Activar el {placa}",
+                "detalle": (
+                    f"{mejor_apagado['modelo']}, {mejor_apagado['capacidad_kg']:,} kg, "
+                    f"hasta {mejor_apagado['max_paradas']} paradas."
+                    + (f" Hay {otros} camión(es) apagado(s) más." if otros else "")
+                ),
+                "pedidos": caben,
+                "dificultad": "Requiere unidad y chofer disponibles",
+            })
+
+    # El "gana" es contra el plan actual. Se ordena por lo que más mete, y las
+    # que no mejoran nada se marcan pero NO se esconden: saber que ampliar el
+    # turno no sirve es tan útil como saber qué sí sirve.
+    for o in opciones:
+        o["gana"] = o["pedidos"] - base
+    opciones.sort(key=lambda o: -o["gana"])
+
+    mejor = opciones[0] if opciones and opciones[0]["gana"] > 0 else None
+    sin_asignar = total_pedidos - base
+
+    return {
+        "status": "success",
+        "total_pedidos": total_pedidos,
+        "asignados_ahora": base,
+        "sin_asignar": sin_asignar,
+        "opciones": opciones,
+        "recomendacion": (
+            f"{mejor['titulo']}: mete {mejor['gana']} pedido(s) más." if mejor
+            else "Ninguna de estas opciones mete más pedidos. Los que faltan hay que asignarlos a mano o moverlos a otro día."
+        ),
+    }
+
+
+# 4a. La flota de reparto. El frontend la pide al abrir el panel en vez de
+# mantener su propia copia de capacidades y topes de paradas, que era lo que
+# obligaba a editar dos archivos en el mismo orden cada vez que se confirmaba un
+# dato de un camión.
+class CamionOut(Schema):
+    placa: str
+    samsara: str
+    modelo: str
+    anio: int
+    capacidad_kg: int
+    max_paradas: int
+    activo_default: bool
+    color: str
+
+@api.get("/dispatcher/flota", response=List[CamionOut])
+def get_flota(request):
+    return fleet.CAMIONES
 
 # 4b. Ubicación en vivo de los camiones ISUZU de reparto (GPS real vía Samsara).
 # Solo lectura: si Samsara no está configurado o falla, regresa lista vacía en
@@ -252,7 +370,22 @@ def update_ruta_estado(request, ruta_id: int, payload: RutaEstadoIn):
             "message": f"Camión en ruta. ETAs recalculadas desde la hora real de salida ({n} pedidos).",
         }
     elif payload.estado == 'Finalizada':
-        ruta.remisiones.update(estado='Entregado')
+        # Antes esto marcaba TODAS las remisiones como 'Entregado' de golpe, lo
+        # que convertia el dato en "alguien cerro la ruta" y no en "se entrego".
+        # Ahora solo toca las que el chofer no alcanzo a reportar, y las deja
+        # como 'No_Entregado' con su motivo: si nadie confirmo la entrega, no
+        # hay razon para suponer que ocurrio.
+        sin_reportar = ruta.remisiones.exclude(
+            estado__in=['Entregado', 'Entregado_Parcial', 'No_Entregado']
+        )
+        n = sin_reportar.count()
+        if n:
+            sin_reportar.update(estado='No_Entregado', motivo='otro',
+                                observaciones='Se cerró la ruta sin que el chofer reportara esta parada.')
+            return {
+                "status": "success",
+                "message": f"Ruta cerrada. {n} parada(s) quedaron sin confirmar y se marcaron como no entregadas.",
+            }
 
     return {"status": "success", "message": f"Estado de ruta actualizado a {payload.estado}"}
 
@@ -277,6 +410,468 @@ def get_alertas(request, fecha: date):
             "motivo": "Sin georreferencia en SAP B1" if sin_geo else "Pendiente de asignar a una ruta",
         })
     return alertas
+
+# ══════════════════════════════════════════════════════════════════════════
+# PANEL DE VENDEDOR
+# ══════════════════════════════════════════════════════════════════════════
+# Cada vendedora ve SOLO sus pedidos, filtrados por el SlpCode que SAP ya trae
+# en cada remisión (sync.py los guarda en slp_code/slp_name).
+#
+# Hoy el vendedor se manda como parámetro porque el login todavía no valida
+# nada: es un selector de rol. Cuando haya usuarios de verdad, el SlpCode debe
+# salir del usuario de la sesión y NO del parámetro, o cualquiera podría pedir
+# los pedidos de otra vendedora cambiando la URL. Está anotado en
+# docs/pendientes.md §5.
+
+# Margen que se le suma a la ETA para presentarla como rango ("entre 09:00 y
+# 09:15") en vez de una hora exacta. Una hora al minuto suena a promesa que no
+# se puede cumplir; el rango dice la verdad: es una estimación.
+# OJO: es un margen de presentación, NO un intervalo de confianza medido. La
+# incertidumbre real es mayor mientras OSRM siga ~25% optimista
+# (ver docs/calibracion-tiempos-osrm.md).
+MARGEN_ETA_MINUTOS = 15
+
+
+def _texto_ventana(destino):
+    """
+    La ventana de recibo lista para mostrar, en 24 h, o None si no hay.
+
+    Los horarios corruptos de SAP (hora de cierre igual o anterior a la de
+    apertura, ej. "08:00-06:00" de LA PARMESANA, a la que le falta el PM) NO se
+    muestran tal cual: un rango imposible en pantalla parece un error del
+    sistema y no del dato. Se marca como mal capturado, que es la verdad y
+    además dice qué hay que arreglar y dónde. El optimizador ya los ignora por
+    su lado (ver optimizer._ventana_en_minutos).
+    """
+    if not destino or not destino.ini_recibo_1 or not destino.fin_recibo_1:
+        return None
+
+    def _rango(ini, fin):
+        ini_min = ini.hour * 60 + ini.minute
+        fin_min = fin.hour * 60 + fin.minute
+        # "00:00" de cierre casi siempre es medianoche real (cierra al final del
+        # día), no el inicio del día.
+        if fin_min == 0:
+            fin_min = 24 * 60
+        if fin_min <= ini_min:
+            return None
+        return f"{ini:%H:%M} - {fin:%H:%M}"
+
+    texto = _rango(destino.ini_recibo_1, destino.fin_recibo_1)
+    if texto is None:
+        return "Horario mal capturado en SAP"
+
+    if destino.ini_recibo_2 and destino.fin_recibo_2:
+        segundo = _rango(destino.ini_recibo_2, destino.fin_recibo_2)
+        if segundo:
+            texto += f" y {segundo}"
+    return texto
+
+
+class VendedorOut(Schema):
+    slp_code: str
+    slp_name: str
+    pedidos: int
+
+
+@api.get("/ventas/vendedores", response=List[VendedorOut])
+def get_vendedores(request, fecha: date):
+    """Vendedores que tienen pedidos ese día, para el selector del panel."""
+    filas = (
+        Remision.objects.filter(doc_date=fecha)
+        .values('slp_code', 'slp_name')
+        .annotate(pedidos=Count('id'))
+        .order_by('slp_name')
+    )
+    return list(filas)
+
+
+class PedidoVentasOut(Schema):
+    id: int
+    doc_num: int
+    card_name: str
+    estado: str
+    doc_total: float
+    address: str = ""
+    ventana: Optional[str] = None
+    eta_desde: Optional[str] = None
+    eta_hasta: Optional[str] = None
+    camion: Optional[str] = None
+    # Para ubicar el pedido en el mapa del panel de ventas. `null` cuando SAP no
+    # trae la coordenada del cliente — en ese caso el pedido tampoco se puede
+    # rutear, y la situación ya lo explica.
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    # En qué número de parada va este pedido dentro de su ruta.
+    posicion: Optional[int] = None
+    # Cuántas paradas van ANTES que ésta, y cuántas de esas ya se entregaron.
+    # Es la pregunta que hace una vendedora cuando el cliente llama: no "¿a qué
+    # hora llega?" sino "¿ya mero?". Con esto se contesta con un hecho —el
+    # camión ya hizo 3 de las 8 que van antes— y no con una hora estimada.
+    paradas_antes: Optional[int] = None
+    entregadas_antes: Optional[int] = None
+    # ── Lo que el chofer reportó desde la calle ──
+    # Solo viene cuando la entrega ya se confirmó. Es lo que la vendedora
+    # necesita para contestarle al cliente qué le faltó y por qué, sin tener
+    # que llamarle al chofer.
+    entregado_en: Optional[str] = None
+    motivo: Optional[str] = None
+    motivo_texto: Optional[str] = None
+    observaciones: Optional[str] = None
+    recibio: Optional[str] = None
+    faltantes: List[str] = []
+    foto: Optional[str] = None
+    # Explicación en lenguaje de vendedora de qué está pasando con su pedido.
+    situacion: str
+    # True cuando el pedido ya tiene lugar en una ruta del día.
+    programado: bool
+
+
+def _rango_eta(eta):
+    """'09:00' -> ('09:00', '09:15'). None si no hay ETA calculada."""
+    if not eta:
+        return None, None
+    try:
+        inicio = datetime.strptime(eta, "%H:%M")
+    except ValueError:
+        # ETAs viejas guardadas en 12 h ("09:00 AM") antes del cambio a 24 h.
+        try:
+            inicio = datetime.strptime(eta, "%I:%M %p")
+        except ValueError:
+            return None, None
+    fin = inicio + timedelta(minutes=MARGEN_ETA_MINUTOS)
+    return inicio.strftime("%H:%M"), fin.strftime("%H:%M")
+
+
+@api.get("/ventas/pedidos", response=List[PedidoVentasOut])
+def get_pedidos_vendedor(request, fecha: date, slp_code: str):
+    remisiones = (
+        Remision.objects.filter(doc_date=fecha, slp_code=slp_code)
+        .select_related('destino', 'ruta')
+        .prefetch_related('lineas')
+        .order_by('eta', 'doc_num')
+    )
+
+    # Avance de cada ruta del día, para poder decir cuántas paradas van antes
+    # de un pedido y cuántas de esas ya se entregaron. Se consultan las rutas
+    # completas (no solo los pedidos de esta vendedora) porque el camión entrega
+    # de todo en el camino, no nada más lo de ella.
+    rutas_del_dia = {}
+    for r in Remision.objects.filter(doc_date=fecha, ruta__isnull=False).values(
+        'ruta_id', 'secuencia_ruta', 'estado'
+    ):
+        rutas_del_dia.setdefault(r['ruta_id'], []).append(r)
+
+    resultado = []
+    for r in remisiones:
+        eta_desde, eta_hasta = _rango_eta(r.eta)
+        sin_geo = not r.destino or r.destino.latitude is None or r.destino.longitude is None
+        camion = r.ruta.camion if r.ruta else None
+
+        # Cuántas paradas van antes de ésta en su ruta, y cuántas ya se
+        # entregaron. Las paradas se cuentan por secuencia distinta: varios
+        # documentos al mismo lugar son UNA parada, así que contar documentos
+        # inflaría el número que se le dice al cliente.
+        antes = entregadas = None
+        if r.ruta_id and r.secuencia_ruta:
+            companeros = rutas_del_dia.get(r.ruta_id, [])
+            secuencias_antes = {
+                c['secuencia_ruta'] for c in companeros
+                if c['secuencia_ruta'] and c['secuencia_ruta'] < r.secuencia_ruta
+            }
+            antes = len(secuencias_antes)
+            entregadas = len({
+                c['secuencia_ruta'] for c in companeros
+                if c['secuencia_ruta'] in secuencias_antes and c['estado'] == 'Entregado'
+            })
+
+        # Qué renglones quedaron cortos, en palabras: "2 de 3 Queso manchego".
+        # Se arma aquí y no en el frontend porque es la misma frase que va a
+        # necesitar cualquier otra pantalla que muestre una entrega incompleta.
+        faltantes = []
+        if r.estado in ('Entregado_Parcial', 'No_Entregado'):
+            for l in r.lineas.all():
+                dejado = float(l.cantidad_entregada) if l.cantidad_entregada is not None else 0
+                pedido_ = float(l.cantidad)
+                if dejado < pedido_:
+                    unidad = f" {l.unidad}" if l.unidad else ""
+                    faltantes.append(
+                        f"{dejado:g} de {pedido_:g}{unidad} · {l.descripcion}"
+                    )
+
+        # La situación dice qué está pasando Y por qué, para que la vendedora
+        # pueda contestarle al cliente sin preguntarle a nadie más.
+        hora_entrega = timezone.localtime(r.entregado_en).strftime("%H:%M") if r.entregado_en else None
+
+        if r.estado == 'Entregado_Parcial':
+            situacion = (
+                f"Entregado incompleto a las {hora_entrega}: faltaron {len(faltantes)} producto(s)"
+                if hora_entrega else "Entregado incompleto"
+            )
+        elif r.estado == 'No_Entregado':
+            situacion = f"NO se pudo entregar" + (f" (se reportó a las {hora_entrega})" if hora_entrega else "")
+        elif r.estado == 'Entregado':
+            situacion = f"Entregado completo a las {hora_entrega}" if hora_entrega else "Entregado"
+        elif r.estado == 'En_Camino':
+            situacion = (
+                f"En camino en el {camion}, llega entre {eta_desde} y {eta_hasta}"
+                if eta_desde else f"En camino en el {camion}"
+            )
+        elif r.estado == 'Asignado' and camion:
+            situacion = (
+                f"Programado en el {camion}, llega entre {eta_desde} y {eta_hasta}"
+                if eta_desde else f"Programado en el {camion}, falta calcular la hora"
+            )
+        elif sin_geo:
+            situacion = "No se puede programar: al cliente le falta la ubicación en SAP"
+        else:
+            situacion = "Todavía no entra en ninguna ruta de hoy"
+
+        resultado.append({
+            "id": r.id,
+            "doc_num": r.doc_num,
+            "card_name": r.card_name,
+            "estado": r.estado,
+            "doc_total": float(r.doc_total),
+            "address": r.destino.street if r.destino and r.destino.street else "",
+            "ventana": _texto_ventana(r.destino),
+            "eta_desde": eta_desde,
+            "eta_hasta": eta_hasta,
+            "camion": camion,
+            "situacion": situacion,
+            "programado": bool(camion),
+            "lat": None if sin_geo else r.destino.latitude,
+            "lng": None if sin_geo else r.destino.longitude,
+            "posicion": r.secuencia_ruta,
+            "paradas_antes": antes,
+            "entregadas_antes": entregadas,
+            "entregado_en": hora_entrega,
+            "motivo": r.motivo,
+            "motivo_texto": dict(Remision.MOTIVOS).get(r.motivo),
+            "observaciones": r.observaciones,
+            "recibio": r.recibio,
+            "faltantes": faltantes,
+            "foto": r.foto.url if r.foto else None,
+        })
+    return resultado
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# APP DEL CHOFER
+# ══════════════════════════════════════════════════════════════════════════
+# El chofer ve las paradas de SU camión, en orden, con los productos de cada
+# pedido, y confirma qué dejó. Es la única pieza que le dice al sistema qué pasó
+# de verdad en la calle: sin ella, "Entregado" solo significa que alguien en la
+# oficina cerró la ruta.
+
+class LineaOut(Schema):
+    id: int
+    item_code: str
+    descripcion: str
+    unidad: Optional[str] = None
+    cantidad: float
+    cantidad_entregada: Optional[float] = None
+
+
+class ParadaChoferOut(Schema):
+    id: int
+    doc_num: int
+    card_name: str
+    estado: str
+    secuencia_ruta: Optional[int] = None
+    address: str = ""
+    ventana: Optional[str] = None
+    eta: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    telefono: Optional[str] = None
+    contacto: Optional[str] = None
+    referencias: Optional[str] = None
+    lineas: List[LineaOut] = []
+    # Lo que ya se reportó, si es que se reportó.
+    motivo: Optional[str] = None
+    observaciones: Optional[str] = None
+    recibio: Optional[str] = None
+    entregado_en: Optional[str] = None
+    foto: Optional[str] = None
+
+
+class RutaChoferOut(Schema):
+    ruta_id: int
+    camion: str
+    chofer: str
+    estado: str
+    hora_salida: Optional[str] = None
+    paradas: List[ParadaChoferOut]
+
+
+@api.get("/chofer/ruta", response=RutaChoferOut)
+def get_ruta_chofer(request, fecha: date, camion: str):
+    """
+    La ruta del día de UN camión, con todo lo que el chofer necesita en la calle.
+
+    Va por camión y no por chofer porque hoy el sistema no sabe quién maneja qué
+    (ver docs/pendientes.md §1). Cuando haya usuarios de chofer, la placa saldrá
+    de su sesión.
+    """
+    try:
+        ruta = Ruta.objects.get(fecha=fecha, camion=camion)
+    except Ruta.DoesNotExist:
+        return api.create_response(
+            request,
+            {"detail": f"El {camion} no tiene ruta para el {fecha}."},
+            status=404,
+        )
+
+    remisiones = (
+        ruta.remisiones.select_related('destino')
+        .prefetch_related('lineas')
+        .order_by('secuencia_ruta', 'doc_num')
+    )
+
+    paradas = []
+    for r in remisiones:
+        d = r.destino
+        paradas.append({
+            "id": r.id,
+            "doc_num": r.doc_num,
+            "card_name": r.card_name,
+            "estado": r.estado,
+            "secuencia_ruta": r.secuencia_ruta,
+            "address": (d.street or "") if d else "",
+            "ventana": _texto_ventana(d),
+            "eta": r.eta,
+            "lat": d.latitude if d else None,
+            "lng": d.longitude if d else None,
+            "telefono": d.telefono if d else None,
+            "contacto": d.contacto if d else None,
+            "referencias": d.referencias if d else None,
+            "lineas": [
+                {
+                    "id": l.id,
+                    "item_code": l.item_code,
+                    "descripcion": l.descripcion,
+                    "unidad": l.unidad,
+                    "cantidad": float(l.cantidad),
+                    "cantidad_entregada": float(l.cantidad_entregada) if l.cantidad_entregada is not None else None,
+                }
+                for l in r.lineas.all()
+            ],
+            "motivo": r.motivo,
+            "observaciones": r.observaciones,
+            "recibio": r.recibio,
+            "entregado_en": timezone.localtime(r.entregado_en).strftime("%H:%M") if r.entregado_en else None,
+            "foto": r.foto.url if r.foto else None,
+        })
+
+    return {
+        "ruta_id": ruta.id,
+        "camion": ruta.camion,
+        "chofer": ruta.chofer,
+        "estado": ruta.estado,
+        "hora_salida": ruta.hora_salida.strftime("%H:%M") if ruta.hora_salida else None,
+        "paradas": paradas,
+    }
+
+
+class LineaEntregadaIn(Schema):
+    linea_id: int
+    cantidad_entregada: float
+
+
+class ConfirmarEntregaIn(Schema):
+    # Qué se dejó de cada renglón. Si viene vacío se entiende que se entregó
+    # todo completo, que es el caso normal y no debería costar trabajo.
+    lineas: List[LineaEntregadaIn] = []
+    motivo: Optional[str] = None
+    observaciones: Optional[str] = None
+    recibio: Optional[str] = None
+
+
+@api.post("/chofer/paradas/{remision_id}/entregar")
+def confirmar_entrega(request, remision_id: int, payload: ConfirmarEntregaIn):
+    """
+    El chofer confirma qué dejó en una parada.
+
+    El estado NO se manda desde el celular: se DEDUCE de las cantidades. Si se
+    dejó todo, es 'Entregado'; si se dejó algo, 'Entregado_Parcial'; si no se
+    dejó nada, 'No_Entregado'. Así no puede quedar un pedido marcado como
+    entregado completo con renglones a medias, que es justo el error que haría
+    inútil el dato para facturación.
+    """
+    try:
+        remision = Remision.objects.prefetch_related('lineas').get(id=remision_id)
+    except Remision.DoesNotExist:
+        return {"status": "error", "message": "Ese pedido no existe."}
+
+    with transaction.atomic():
+        lineas = {l.id: l for l in remision.lineas.all()}
+
+        if payload.lineas:
+            for entrada in payload.lineas:
+                linea = lineas.get(entrada.linea_id)
+                if not linea:
+                    continue
+                # Acotado entre 0 y lo que traía: no se puede entregar de más.
+                linea.cantidad_entregada = max(0, min(entrada.cantidad_entregada, float(linea.cantidad)))
+            LineaRemision.objects.bulk_update(lineas.values(), ['cantidad_entregada'])
+        else:
+            # Sin detalle = todo completo.
+            for linea in lineas.values():
+                linea.cantidad_entregada = linea.cantidad
+            LineaRemision.objects.bulk_update(lineas.values(), ['cantidad_entregada'])
+
+        pedido_completo = all(l.completa for l in lineas.values()) if lineas else not payload.motivo
+        nada_entregado = (
+            all((l.cantidad_entregada or 0) == 0 for l in lineas.values()) if lineas
+            else False
+        )
+
+        if nada_entregado:
+            remision.estado = 'No_Entregado'
+        elif pedido_completo:
+            remision.estado = 'Entregado'
+        else:
+            remision.estado = 'Entregado_Parcial'
+
+        remision.entregado_en = timezone.now()
+        remision.motivo = payload.motivo or None
+        remision.observaciones = (payload.observaciones or "").strip() or None
+        remision.recibio = (payload.recibio or "").strip() or None
+        remision.save(update_fields=[
+            'estado', 'entregado_en', 'motivo', 'observaciones', 'recibio',
+        ])
+
+    return {
+        "status": "success",
+        "estado": remision.estado,
+        "message": {
+            'Entregado': f"Pedido #{remision.doc_num} entregado completo.",
+            'Entregado_Parcial': f"Pedido #{remision.doc_num} entregado incompleto.",
+            'No_Entregado': f"Pedido #{remision.doc_num} marcado como no entregado.",
+        }[remision.estado],
+    }
+
+
+@api.post("/chofer/paradas/{remision_id}/foto")
+def subir_foto_entrega(request, remision_id: int, foto: UploadedFile = File(...)):
+    """
+    La foto de evidencia de la entrega.
+
+    Va aparte de la confirmación porque es un archivo y no cabe en el mismo
+    JSON, y porque conviene que una falla al subir la imagen —que en la calle
+    pasa seguido, con mala señal— NO tire la confirmación de la entrega, que es
+    el dato importante.
+    """
+    try:
+        remision = Remision.objects.get(id=remision_id)
+    except Remision.DoesNotExist:
+        return {"status": "error", "message": "Ese pedido no existe."}
+
+    remision.foto = foto
+    remision.save(update_fields=['foto'])
+    return {"status": "success", "url": remision.foto.url}
+
 
 # 7. Sugerir en qué camión conviene meter un pedido que quedó sin asignar.
 # No modifica nada: solo calcula opciones para que el despachador decida.

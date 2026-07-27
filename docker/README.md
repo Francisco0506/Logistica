@@ -17,8 +17,13 @@ docker compose up -d db
 ```
 
 Eso levanta Postgres con las credenciales que el backend ya espera por default
-(`postgres` / `postgres` / base `laben_routing`). El backend lo detecta solo:
-si Postgres está arriba lo usa, si no, cae a SQLite. No hay que configurar nada.
+(`postgres` / `postgres` / base `laben_routing`), así que no hay que configurar
+nada.
+
+Postgres es la **única** base del backend: si no está corriendo, Django truena
+al arrancar con instrucciones. Antes había un respaldo silencioso a SQLite y se
+quitó a propósito, porque creaba una segunda base con datos viejos y el panel
+mostraba pedidos fantasma sin que nadie se diera cuenta.
 
 Luego, la primera vez, crear las tablas:
 

@@ -1,5 +1,58 @@
 @import "tailwindcss";
 
+/* Al imprimir la guía de carga sale SOLO la hoja, no el panel completo.
+   Ocultar con `visibility` no basta: la hoja vive dentro de una ventana
+   flotante con su propio scroll, y al imprimir esos contenedores la recortan a
+   una sola página — el resto de los renglones se pierde. Por eso además se
+   neutralizan los contenedores de la ventana (`.marco-impresion`). */
+@media print {
+  @page {
+    margin: 12mm;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  .hoja-imprimible,
+  .hoja-imprimible * {
+    visibility: visible !important;
+  }
+
+  /* La ventana flotante deja de flotar, de recortar y de pintar fondo. */
+  .marco-impresion {
+    position: static !important;
+    inset: auto !important;
+    overflow: visible !important;
+    background: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: none !important;
+    width: auto !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    display: block !important;
+  }
+
+  .hoja-imprimible {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    padding: 0 !important;
+  }
+
+  /* Que un renglón no se parta a la mitad entre dos hojas, y que el
+     encabezado de la tabla se repita en cada página. */
+  .hoja-imprimible tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .hoja-imprimible thead {
+    display: table-header-group;
+  }
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Truck, Shield, Layout, Lock, User } from 'lucide-react';
-import LabenLogo from '../components/LabenLogo';
+import LabenLogo from '../../components/LabenLogo';
 
 export default function Login() {
   const navigate = useNavigate();

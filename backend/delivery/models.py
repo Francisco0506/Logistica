@@ -62,9 +62,27 @@ class Remision(models.Model):
         ('Pendiente', 'Listo en almacén'),
         ('Asignado', 'En preparación'),
         ('En_Camino', 'En ruta'),
-        ('Entregado', 'Entregado'),
+        ('Entregado', 'Entregado completo'),
+        # El chofer entregó parte del pedido: el cliente aceptó menos de lo que
+        # traía, venía dañado, o no venía completo en el camión. Se distingue de
+        # 'Entregado' porque para ventas y para facturación NO es lo mismo.
+        ('Entregado_Parcial', 'Entregado incompleto'),
+        ('No_Entregado', 'No se pudo entregar'),
     ]
-    
+
+    # Por qué no se entregó completo. Catálogo cerrado para poder contar y
+    # comparar después ("¿cuántas veces al mes nos rechazan producto?"); el
+    # detalle libre va en `observaciones`.
+    MOTIVOS = [
+        ('cliente_rechazo', 'El cliente aceptó menos de lo que traía'),
+        ('producto_danado', 'Producto dañado o en mal estado'),
+        ('falto_en_camion', 'No venía completo en el camión'),
+        ('cerrado', 'El cliente estaba cerrado'),
+        ('sin_quien_reciba', 'No había quién recibiera'),
+        ('sin_espacio', 'El cliente no tenía dónde meterlo'),
+        ('otro', 'Otro motivo'),
+    ]
+
     doc_entry = models.IntegerField(unique=True)
     doc_num = models.IntegerField(unique=True)
     card_code = models.CharField(max_length=50)
@@ -87,5 +105,65 @@ class Remision(models.Model):
     estado = models.CharField(max_length=20, choices=ESTADOS, default='Pendiente')
     ultima_actualizacion = models.DateTimeField(auto_now=True)
 
+    # ── Lo que el chofer reporta desde la calle ──
+    # Hora REAL de la entrega, no la estimada. Es el único dato que permite
+    # medir después qué tan lejos anda la ETA y cuánto se tarda de verdad en
+    # cada parada; hasta ahora eso solo se podía aproximar con el GPS.
+    entregado_en = models.DateTimeField(null=True, blank=True)
+    motivo = models.CharField(max_length=30, choices=MOTIVOS, null=True, blank=True)
+    observaciones = models.TextField(null=True, blank=True)
+    # Quién recibió, tal como lo escribe el chofer. La firma viene después
+    # (ver docs/pendientes-vendedor-chofer.md).
+    recibio = models.CharField(max_length=150, null=True, blank=True)
+    # Foto de evidencia tomada en la puerta del cliente. Sirve sobre todo
+    # cuando la entrega salió incompleta o no se pudo entregar: es la prueba de
+    # lo que el chofer reporta.
+    foto = models.ImageField(upload_to='entregas/%Y/%m/', null=True, blank=True)
+
+    @property
+    def entrega_confirmada(self):
+        return self.estado in ('Entregado', 'Entregado_Parcial', 'No_Entregado')
+
     def __str__(self):
         return f"Remision {self.doc_num} - {self.card_name}"
+
+
+class LineaRemision(models.Model):
+    """
+    Un renglón del pedido: qué producto y cuánto.
+
+    Hace falta porque una entrega parcial no es "entregué el 60%": es "de las
+    2 bolsas de queso rallado solo aceptó 1.5, y lo demás sí completo". Sin las
+    líneas, el chofer no tiene qué marcar y ventas no puede decirle al cliente
+    qué le faltó exactamente.
+
+    Viene de RDR1 en SAP (las líneas del pedido de venta), que es la misma tabla
+    de donde ya se saca el peso total del pedido.
+    """
+    remision = models.ForeignKey(Remision, on_delete=models.CASCADE, related_name='lineas')
+    line_num = models.IntegerField()          # LineNum de RDR1
+    item_code = models.CharField(max_length=50)
+    descripcion = models.CharField(max_length=255)
+    unidad = models.CharField(max_length=30, null=True, blank=True)
+
+    # Lo que el pedido dice que va.
+    cantidad = models.DecimalField(max_digits=12, decimal_places=3)
+    peso_unitario_kg = models.FloatField(null=True, blank=True)
+
+    # Lo que el chofer confirmó que dejó. `null` = todavía no se confirma nada;
+    # 0 = se confirmó que NO se entregó nada de este renglón. Son cosas
+    # distintas y por eso no se usa 0 como valor inicial.
+    cantidad_entregada = models.DecimalField(
+        max_digits=12, decimal_places=3, null=True, blank=True
+    )
+
+    class Meta:
+        unique_together = ('remision', 'line_num')
+        ordering = ['line_num']
+
+    @property
+    def completa(self):
+        return self.cantidad_entregada is not None and self.cantidad_entregada >= self.cantidad
+
+    def __str__(self):
+        return f"{self.item_code} x{self.cantidad} ({self.remision.doc_num})"

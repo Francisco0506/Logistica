@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
 from django.db import transaction
+from . import fleet
 from .models import Ruta, Remision
 from .routing_service import build_distance_time_matrices
 
@@ -10,7 +11,7 @@ from .routing_service import build_distance_time_matrices
 # ==========================================
 # ── Constantes medidas con 1 mes de GPS real (Samsara), SOLO los 5 camiones
 # que de verdad operan (013, 016, 017, 023, 027 — se excluyen 024/015/012 que
-# casi no salen y ensuciaban los promedios). Ver docs/uso-flota-samsara.md.
+# casi no salen y ensuciaban los promedios). Ver docs/flota.md.
 VELOCIDAD_PROMEDIO_KMH = 42.0  # Solo se usa si OSRM no responde (respaldo Haversine) — real: promedio 42.3 km/h, mediana 39.0
 TIEMPO_DESCARGA_MINUTOS = 12   # Tiempo de servicio por cliente — real: promedio 11.7 min, mediana 9.2, P75 14.5 (1662 paradas medidas)
 # Hora base del plan = salida del PRIMER camión del día. Medido con GPS sobre
@@ -22,10 +23,12 @@ TIEMPO_DESCARGA_MINUTOS = 12   # Tiempo de servicio por cliente — real: promed
 # (ver recalcular_etas_desde_salida).
 HORA_CERO = datetime.strptime("09:00", "%H:%M")
 MINUTOS_TURNO_MAXIMO = 6 * 60  # Turno normal de 6 h. La jornada real medida es 6.7 h promedio / 6.4 h mediana, pero 6 h es el turno oficial: el despachador amplía por corrida desde el panel cuando hace falta.
-# Referencia operativa (no es restricción): paradas reales por camión al día
-# = mediana 15, P75 20, máximo observado 38 (ese día fueron 12.9 h de jornada).
-# El límite de turno + el tiempo de descarga ya acotan las paradas por ruta.
-PARADAS_TIPICAS_POR_RUTA = 15
+# Referencia operativa para validar un plan (no es una constante del modelo):
+# las paradas reales por camión al día son mediana 15, P75 20, máximo observado
+# 38 (ese día fueron 12.9 h de jornada). Si una corrida entrega rutas de ~20
+# paradas parejas, el plan va optimista — ver docs/calibracion-tiempos-osrm.md.
+# Quien acota las paradas por ruta es el turno + el tiempo de descarga + el
+# tope medido por camión (fleet.py:max_paradas).
 PESO_ESTIMADO_KG = 150  # Fallback SOLO cuando SAP no trae peso real de línea (ver sync.py)
 # Escalón entre salidas EN EL PLAN. Va en 0 a propósito, aunque en la calle los
 # camiones sí salen separados (medido con GPS: 31 min de mediana entre uno y
@@ -38,10 +41,8 @@ PESO_ESTIMADO_KG = 150  # Fallback SOLO cuando SAP no trae peso real de línea (
 # escalón 30 → solo 67. La hora real de salida de cada camión se aplica al dar
 # "Salida" en el panel, que recalcula las ETAs (recalcular_etas_desde_salida).
 INTERVALO_SALIDA_MINUTOS = 0
-CAPACIDAD_CAMION_KG_DEFAULT = 3000  # Ruta no guarda la capacidad real del camión asignado; ver api.py:CAPACIDADES_CAMION_KG
-# Tope de paradas por ruta para un camión sin historial medido. Los topes por
-# camión (medidos con GPS) están en api.py:MAX_PARADAS_POR_CAMION.
-MAX_PARADAS_POR_RUTA_DEFAULT = 25
+# La capacidad y el tope de paradas de cada camión salen de su ficha real en
+# fleet.py, buscados por placa. Ya no hay valores "por posición" aquí.
 
 # Estados de Ruta que ya fueron despachados/en proceso físico: nunca se destruyen
 # ni recalculan al re-optimizar, para no reasignarle a otro camión un pedido que
@@ -111,6 +112,60 @@ def _ventana_en_minutos(destino, minutos_turno=MINUTOS_TURNO_MAXIMO, hora_cero=N
     return (0, minutos_turno)
 
 
+# Cuántos decimales se conservan de lat/lng para decidir si dos direcciones son
+# EL MISMO LUGAR. Cuatro decimales son ~11 metros: junta una plaza o un centro
+# comercial, y separa dos negocios de calles distintas. Si dos puntos están a
+# menos de 11 m, el camión se estaciona una sola vez de todos modos.
+DECIMALES_MISMO_LUGAR = 4
+
+
+def _clave_lugar(destino):
+    """
+    Identifica el LUGAR FÍSICO de un destino, no el registro de SAP.
+
+    Hace falta porque SAP manda varios Ship-To en el mismo punto, y NO siempre
+    por error:
+
+    1. Dos códigos que facturan aparte pero entregan en la misma puerta
+       (ej. C587-44 y C587-45, ambos PIZZA DEPRIZZA SANTA MONICA, misma calle y
+       mismas coordenadas): puede ser el mismo pedido partido en dos facturas.
+    2. Varios negocios en un mismo domicilio: PROVEO PARQUE MARTEL tiene cuatro
+       razones sociales en la misma dirección, EL SURTIDOR tres.
+    3. Y sí, también duplicados de captura de verdad (MALIS / MALÍS,
+       "DEPRIZZA" / "DEPRRIZZA").
+
+    Da igual cuál sea el caso: el camión se estaciona UNA vez. Por eso se agrupa
+    por coordenada y no se intenta adivinar si dos códigos "son el mismo
+    cliente" — eso es asunto de facturación, no de ruteo. Agrupar por destino_id
+    (como se hacía) planeaba una parada de 12 min por cada registro: medido con
+    los pedidos del 25-jul, 120 paradas planeadas contra 106 lugares reales,
+    o sea 168 minutos de descarga que en la calle no existen.
+
+    Los 11.7 min medidos con Samsara son tiempo DETENIDO EN UN PUNTO, así que
+    cuando el camión paró en PROVEO y entregó a cuatro clientes, Samsara lo
+    contó como una sola parada: el promedio ya trae esos casos adentro. Por eso
+    12 min por lugar es lo medido, y 12 por registro era lo inventado.
+
+    PENDIENTE (Francisco, 25-jul-2026): entregar a cuatro clientes en un mismo
+    domicilio sí toma algo más que a uno solo — papeleo y firma por cada uno —
+    pero cuánto más no está medido y Samsara no lo puede decir, porque solo ve
+    que el camión estuvo detenido. Queda anotado en docs/pendientes.md para
+    medirlo cuando se pueda y afinar el tiempo de servicio.
+    """
+    return (
+        round(destino.latitude, DECIMALES_MISMO_LUGAR),
+        round(destino.longitude, DECIMALES_MISMO_LUGAR),
+    )
+
+
+def _horas_y_minutos(minutos):
+    """'3 h 20 min' / '45 min'. Para mensajes al despachador."""
+    h, m = divmod(int(minutos), 60)
+    if h and m:
+        return f"{h} h {m} min"
+    return f"{h} h" if h else f"{m} min"
+
+
 def _ventana_recortada_a_turno(ini_min, fin_min, minutos_turno=MINUTOS_TURNO_MAXIMO):
     """
     Recorta una ventana real al turno máximo del chofer, para usarla como
@@ -144,16 +199,16 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords, minu
     if not remisiones:
         return None
 
-    # Varios documentos (remisiones) del mismo cliente el mismo día llegan al
-    # mismo destino físico: el camión entra una sola vez. Se agrupan por
-    # destino ANTES de armar el modelo VRP para que cada parada real sea un
-    # solo nodo (con el peso sumado), en vez de contar cada documento como una
-    # parada aparte y duplicar tiempo de descarga que en la calle no existe.
-    grupos_por_destino = {}
+    # Todo lo que se entrega en el MISMO LUGAR es una sola parada: el camión se
+    # estaciona una vez. Se agrupa por coordenada y no por destino porque SAP
+    # manda varios Ship-To en el mismo punto — duplicados de captura y varios
+    # negocios en un mismo domicilio. Ver _clave_lugar para el detalle y las
+    # cifras medidas.
+    grupos_por_lugar = {}
     remisiones_sin_geo = []
     for r in remisiones:
         if r.destino and r.destino.latitude is not None and r.destino.longitude is not None:
-            grupos_por_destino.setdefault(r.destino_id, []).append(r)
+            grupos_por_lugar.setdefault(_clave_lugar(r.destino), []).append(r)
         else:
             # Nunca se asignan silenciosamente: se reportan para que el dispatcher
             # los vea y pueda resolverlos (geocodificar manualmente, etc.)
@@ -165,15 +220,28 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords, minu
     time_windows = [(0, minutos_turno)]
     remisiones_validas = []  # una entrada por nodo: lista de remisiones de esa parada
 
-    for remisiones_del_destino in grupos_por_destino.values():
-        destino = remisiones_del_destino[0].destino
+    for remisiones_del_lugar in grupos_por_lugar.values():
+        destino = remisiones_del_lugar[0].destino
         locations.append((destino.latitude, destino.longitude))
         peso_parada = sum(
-            (r.peso_kg if r.peso_kg else PESO_ESTIMADO_KG) for r in remisiones_del_destino
+            (r.peso_kg if r.peso_kg else PESO_ESTIMADO_KG) for r in remisiones_del_lugar
         )
         demands.append(int(peso_parada))
-        time_windows.append(_ventana_recortada_a_turno(*_ventana_en_minutos(destino, minutos_turno, hora_cero), minutos_turno))
-        remisiones_validas.append(remisiones_del_destino)
+        # Cuando en un mismo lugar hay clientes distintos, cada uno puede tener
+        # su propia ventana de recibo. Se toma la INTERSECCIÓN: el camión tiene
+        # que llegar cuando TODOS estén abiertos, porque va a entregarles en la
+        # misma parada. Si no se cruzan, se deja la del primero y el despachador
+        # lo verá en las alertas.
+        ventanas = [
+            _ventana_en_minutos(r.destino, minutos_turno, hora_cero)
+            for r in {r.destino_id: r for r in remisiones_del_lugar}.values()
+        ]
+        ini_comun = max(v[0] for v in ventanas)
+        fin_comun = min(v[1] for v in ventanas)
+        if ini_comun >= fin_comun:
+            ini_comun, fin_comun = ventanas[0]
+        time_windows.append(_ventana_recortada_a_turno(ini_comun, fin_comun, minutos_turno))
+        remisiones_validas.append(remisiones_del_lugar)
 
     if len(locations) <= 1:
         return {'sin_solucion': True, 'remisiones_sin_geo': remisiones_sin_geo}
@@ -207,42 +275,77 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords, minu
 # ==========================================
 # 3. SOLUCIONADOR PRINCIPAL (OR-TOOLS)
 # ==========================================
-def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords, horas_turno=None, hora_salida=None, max_paradas=None):
+class _SoloSimulacion(Exception):
+    """Señal interna para deshacer lo que escribió una corrida de prueba."""
+
+    def __init__(self, resultado):
+        self.resultado = resultado
+
+
+def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
+              simular=False, segundos_solver=None):
     """
     Resuelve el problema de ruteo de vehículos usando OR-Tools (VRPTW) sobre
     distancias/tiempos reales de calle (OSRM, evitando autopistas de cuota).
     Nunca destruye rutas ya despachadas (Cargando/Listo/En_Ruta/Finalizada).
+
+    `placas`: las placas de los camiones que el despachador tiene ACTIVOS para
+    esta corrida (ej. ["RA7475A", "PP4873A"]). Cada ruta se guarda con la placa
+    real del camión que la lleva, y su capacidad y tope de paradas salen de la
+    ficha de ESE camión (fleet.py).
+
+    Antes esto recibía solo CUÁNTOS camiones había y tomaba los primeros N de
+    una lista de capacidades. Apagar un camión y prender otro dejaba el plan
+    corriendo con la capacidad del que se apagó, sin avisar; y las rutas se
+    guardaban como "T-001", así que el historial no decía qué unidad fue.
 
     `horas_turno`: duración del turno de cada chofer para ESTA corrida (default
     6h). El despachador puede ampliarlo (ej. 7h) cuando los pedidos del día no
     caben en las rutas con el turno normal.
 
     `hora_salida` ("HH:MM"): a qué hora sale el PRIMER camión ese día (default
-    09:30, la salida real medida). Es la palanca más fuerte del plan: como las
+    09:00, la salida real medida). Es la palanca más fuerte del plan: como las
     ventanas de recibo de los clientes son horas de reloj fijas y 97 de 195
     destinos cierran antes de las 14:00, adelantar la salida una hora mete
     ~5 pedidos más, mientras que alargar el turno no mete casi ninguno.
     """
+    # `simular`: corre exactamente el mismo cálculo y luego DESHACE todo lo que
+    # escribió. Sirve para contestar "¿y si le doy una hora más?" sin tocar el
+    # plan que el despachador está viendo. Se hace con una transacción que se
+    # revierte a propósito, en vez de duplicar la lógica en una versión "de
+    # mentiras" que tarde o temprano se desincronizaría de la de verdad.
+    if simular:
+        try:
+            with transaction.atomic():
+                resultado = solve_vrp(
+                    fecha, placas, depot_coords, horas_turno, hora_salida,
+                    simular=False, segundos_solver=segundos_solver,
+                )
+                raise _SoloSimulacion(resultado)
+        except _SoloSimulacion as señal:
+            return señal.resultado
+
     minutos_turno = int(horas_turno * 60) if horas_turno else MINUTOS_TURNO_MAXIMO
     hora_cero = datetime.strptime(hora_salida, "%H:%M") if hora_salida else HORA_CERO
-    max_paradas = list(max_paradas) if max_paradas else [MAX_PARADAS_POR_RUTA_DEFAULT] * num_vehicles
+
     # Los camiones ya despachados hoy (Cargando/Listo/En_Ruta/Finalizada) no
-    # están disponibles para rutas NUEVAS: ya salieron con su propia carga. Si
-    # no se restan aquí, el solver intenta crear una ruta nueva por cada
-    # camión activo en el panel sin importar cuántos ya están ocupados, y al
-    # guardarlas se queda sin códigos T-00X libres e inventa uno (T-006, etc.)
-    # que no corresponde a ningún camión real de la flota.
+    # están disponibles para rutas NUEVAS: ya salieron con su propia carga. Se
+    # descartan por placa, así que el camión que se excluye es exactamente el
+    # que está en la calle — no "uno cualquiera" como cuando esto se contaba.
     camiones_congelados = set(
         Ruta.objects.filter(fecha=fecha, estado__in=ESTADOS_RUTA_CONGELADOS).values_list('camion', flat=True)
     )
-    num_vehicles = max(0, num_vehicles - len(camiones_congelados))
-    vehicle_capacities = vehicle_capacities[:num_vehicles]
-    max_paradas = max_paradas[:num_vehicles]
-    if num_vehicles == 0:
+    placas_disponibles = [p for p in placas if p not in camiones_congelados]
+    if not placas_disponibles:
         return {
             "status": "error",
-            "message": "Todos los camiones activos ya están despachados hoy. Agrega otro camión o espera a que alguno termine su ruta.",
+            "message": "Todos los camiones activos ya están despachados hoy. Activa otro camión o espera a que alguno termine su ruta.",
         }
+
+    # La capacidad y el tope de paradas siguen a la placa, no a la posición.
+    num_vehicles = len(placas_disponibles)
+    vehicle_capacities = [fleet.capacidad_kg(p) for p in placas_disponibles]
+    max_paradas = [fleet.max_paradas(p) for p in placas_disponibles]
 
     data = build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords, minutos_turno, hora_cero)
     if not data:
@@ -351,7 +454,10 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords, horas_turno
     # para exprimir mejoras de 2-opt en rutas largas (~1-3% de tiempo de
     # manejo) en días con muchos pedidos. Optimizar Rutas tarda más en
     # responder a cambio de rutas más ajustadas.
-    search_parameters.time_limit.FromSeconds(20)
+    # Al simular escenarios se corren varios seguidos, así que ahí se usa un
+    # límite más corto: interesa comparar cuántos pedidos caben en cada opción,
+    # no exprimir el último minuto de manejo de cada una.
+    search_parameters.time_limit.FromSeconds(segundos_solver or 20)
 
     solution = routing.SolveWithParameters(search_parameters)
 
@@ -373,7 +479,6 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords, horas_turno
         remisiones_validas = data['remisiones_validas']
         nodos_visitados = set()
         rutas_generadas = []
-        siguiente_num_camion = 1
         for vehicle_id in range(data['num_vehicles']):
             index = routing.Start(vehicle_id)
             route_sequence = []  # lista de paradas; cada parada es una lista de remisiones
@@ -400,23 +505,24 @@ def solve_vrp(fecha, num_vehicles, vehicle_capacities, depot_coords, horas_turno
                     minutos_llegada = minutos_desde_cero - TIEMPO_DESCARGA_MINUTOS
                     eta_time = hora_cero + timedelta(minutes=minutos_llegada)
                     for remision in remisiones_parada:
-                        remision.eta = eta_time.strftime("%I:%M %p")
+                        # 24 h, igual que como se captura el horario en SAP.
+                        remision.eta = eta_time.strftime("%H:%M")
                     route_sequence.append(remisiones_parada)
 
                 index = solution.Value(routing.NextVar(index))
 
             if route_sequence:
-                # Asignar el siguiente código de camión libre (T-00X) que no esté
-                # ya usado por una ruta congelada de este mismo día.
-                while f"T-00{siguiente_num_camion}" in camiones_congelados:
-                    siguiente_num_camion += 1
-                camion_code = f"T-00{siguiente_num_camion}"
-                siguiente_num_camion += 1
-
+                # La ruta se guarda con la PLACA del camión que la lleva. El
+                # vehículo `vehicle_id` del solver es exactamente el camión
+                # `placas_disponibles[vehicle_id]`, con cuya capacidad y tope de
+                # paradas se resolvió, así que el plan y lo guardado no pueden
+                # discrepar. El chofer se deja vacío a propósito: quién maneja no
+                # es un dato que el sistema tenga (ver docs/pendientes.md §1), y
+                # antes se inventaba un "Chofer 1" que parecía real.
                 ruta_obj = Ruta.objects.create(
                     fecha=fecha,
-                    camion=camion_code,
-                    chofer=f"Chofer {camion_code[-1]}",
+                    camion=placas_disponibles[vehicle_id],
+                    chofer='',
                     estado='Borrador'
                 )
 
@@ -516,14 +622,16 @@ def recalcular_etas_desde_salida(ruta, depot_coords, salida_dt=None):
         return 0
     salida_dt = salida_dt or datetime.now()
 
-    # Paradas únicas en orden: documentos consecutivos del mismo destino
-    # comparten parada (el camión entra una sola vez).
+    # Paradas únicas en orden: documentos consecutivos que se entregan en el
+    # mismo LUGAR comparten parada (el camión se estaciona una sola vez), aunque
+    # sean clientes distintos de SAP. Mismo criterio que build_data_model.
     paradas = []
     for r in remisiones:
-        if paradas and paradas[-1][0] == r.destino_id:
+        clave = _clave_lugar(r.destino)
+        if paradas and paradas[-1][0] == clave:
             paradas[-1][1].append(r)
         else:
-            paradas.append((r.destino_id, [r], (r.destino.latitude, r.destino.longitude)))
+            paradas.append((clave, [r], (r.destino.latitude, r.destino.longitude)))
 
     locations = [depot_coords] + [p[2] for p in paradas]
     _, time_matrix, _ = build_distance_time_matrices(locations, VELOCIDAD_PROMEDIO_KMH)
@@ -533,7 +641,7 @@ def recalcular_etas_desde_salida(ruta, depot_coords, salida_dt=None):
     for i, (_, rems, _) in enumerate(paradas):
         t += timedelta(minutes=time_matrix[i][i + 1])
         for r in rems:
-            r.eta = t.strftime("%I:%M %p")
+            r.eta = t.strftime("%H:%M")
             actualizadas.append(r)
         t += timedelta(minutes=TIEMPO_DESCARGA_MINUTOS)
     Remision.objects.bulk_update(actualizadas, ['eta'])
@@ -576,30 +684,71 @@ def sugerir_camiones_para_remision(remision, depot_coords):
             key=lambda r: r.secuencia_ruta or 0,
         )
 
-        # Puntos de la ruta actual: CEDIS -> paradas existentes -> CEDIS
-        puntos = [depot_coords] + [(r.destino.latitude, r.destino.longitude) for r in remisiones_ruta] + [depot_coords]
+        # Puntos de la ruta actual: CEDIS -> paradas existentes -> CEDIS.
+        # Las remisiones que caen en el mismo lugar cuentan como UNA parada; si
+        # no, una ruta con tres documentos al mismo domicilio se evaluaba como
+        # tres puntos y el tiempo agregado salía inflado.
+        paradas_ruta = []
+        for r in remisiones_ruta:
+            clave = _clave_lugar(r.destino)
+            if not paradas_ruta or paradas_ruta[-1][0] != clave:
+                paradas_ruta.append((clave, (r.destino.latitude, r.destino.longitude)))
+        puntos = [depot_coords] + [p[1] for p in paradas_ruta] + [depot_coords]
         locations_con_nuevo = puntos + [(destino.latitude, destino.longitude)]
         idx_nuevo = len(puntos)  # último índice = el pedido a insertar
 
         distance_matrix, time_matrix, _ = build_distance_time_matrices(locations_con_nuevo, VELOCIDAD_PROMEDIO_KMH)
 
-        # Probar insertar el nuevo punto entre cada par consecutivo de la ruta
-        # actual (incluye antes de la primera parada y después de la última) y
-        # quedarse con la posición que agrega menos tiempo.
-        mejor_costo = None
-        mejor_posicion = None
+        ini_ventana, fin_ventana = _ventana_en_minutos(destino)
+
+        # Probar insertar el nuevo punto entre CADA par consecutivo de la ruta
+        # (incluye antes de la primera parada y después de la última) y quedarse
+        # con la mejor. "Mejor" NO es solo la más barata en tiempo: primero se
+        # prefiere una posición donde el camión llegue DENTRO de la ventana de
+        # recibo del cliente, y entre esas, la más barata.
+        #
+        # Antes solo se evaluaba la inserción más barata y se revisaba si esa
+        # caía en ventana. Para un cliente que abre tarde (ej. Mangioz, 15:00 a
+        # 22:00) la posición más barata casi siempre queda a media mañana, así
+        # que salían todos los camiones en rojo aunque el pedido sí cupiera más
+        # adelante en la ruta. Ahora se busca ese hueco.
+        candidatas = []
         for i in range(len(puntos) - 1):
             costo_actual = time_matrix[i][i + 1]
             costo_con_insercion = (
                 time_matrix[i][idx_nuevo] + TIEMPO_DESCARGA_MINUTOS + time_matrix[idx_nuevo][i + 1]
             )
             minutos_agregados = costo_con_insercion - costo_actual
-            if mejor_costo is None or minutos_agregados < mejor_costo:
-                mejor_costo = minutos_agregados
-                mejor_posicion = i  # se inserta después de la parada i (0 = después del CEDIS)
+
+            # Hora de llegada al nuevo cliente si se inserta en esta posición:
+            # manejo de parada en parada MÁS la descarga de cada parada previa.
+            # Antes solo se sumaba el manejo, así que la llegada salía ~12 min
+            # optimista por cada parada anterior (con 10 paradas antes, dos
+            # horas de error) y no cuadraba con la ETA que calcula
+            # recalcular_etas_desde_salida.
+            minutos_llegada = sum(
+                time_matrix[k][k + 1] + (TIEMPO_DESCARGA_MINUTOS if k > 0 else 0)
+                for k in range(i + 1)
+            )
+            candidatas.append({
+                "posicion": i,
+                "minutos_agregados": minutos_agregados,
+                "minutos_llegada": minutos_llegada,
+                "en_ventana": ini_ventana <= minutos_llegada <= fin_ventana,
+            })
+
+        # Ordena: primero las que caen en ventana, luego por tiempo agregado.
+        candidatas.sort(key=lambda c: (not c["en_ventana"], c["minutos_agregados"]))
+        elegida = candidatas[0] if candidatas else None
+        mejor_costo = elegida["minutos_agregados"] if elegida else None
+        mejor_posicion = elegida["posicion"] if elegida else None  # se inserta después de la parada i (0 = después del CEDIS)
 
         peso_actual = sum((r.peso_kg if r.peso_kg else PESO_ESTIMADO_KG) for r in remisiones_ruta)
-        capacidad = CAPACIDAD_CAMION_KG_DEFAULT
+        # Capacidad REAL del camión de esta ruta. Antes se usaba un 3,000 kg
+        # parejo para toda la flota, así que al 013 (1,500 kg) se le decía que
+        # sí cabía cuando ya iba sobrecargado, y al 027 (6,000 kg) que no cabía
+        # con la mitad del camión libre.
+        capacidad = fleet.capacidad_kg(ruta.camion)
 
         # Tiempo total de la ruta si se agrega este pedido, contra el turno de
         # 6h del camión (aproximado: se asume que ya venía ajustada al turno).
@@ -618,16 +767,36 @@ def sugerir_camiones_para_remision(remision, depot_coords):
         if not cabe_peso:
             motivos.append(f"se pasaría del peso máximo del camión ({capacidad} kg)")
 
-        # Choque de ventana de horario del propio destino nuevo.
-        ini_ventana, fin_ventana = _ventana_en_minutos(destino)
-        minutos_llegada_estimados = sum(time_matrix[i][i + 1] for i in range(mejor_posicion + 1)) if mejor_posicion is not None else 0
-        choca_ventana = not (ini_ventana <= minutos_llegada_estimados <= fin_ventana)
+        # Choque de ventana de horario del propio destino nuevo. El mensaje dice
+        # de QUÉ LADO se pasa y por cuánto: "fuera de la ventana" a secas hacía
+        # pensar que el camión llegaba tarde cuando el caso más común es que
+        # llega demasiado temprano, y son problemas distintos (llegar temprano
+        # se arregla metiéndolo más adelante en la ruta; llegar tarde, no).
+        minutos_llegada_estimados = elegida["minutos_llegada"] if elegida else 0
+        choca_ventana = not (elegida["en_ventana"] if elegida else False)
         if choca_ventana:
-            hora_ini = (HORA_CERO + timedelta(minutes=ini_ventana)).strftime("%I:%M %p")
-            hora_fin = (HORA_CERO + timedelta(minutes=fin_ventana)).strftime("%I:%M %p")
-            motivos.append(f"llegaría fuera de la ventana de recibo del cliente ({hora_ini} - {hora_fin})")
+            hora_ini = (HORA_CERO + timedelta(minutes=ini_ventana)).strftime("%H:%M")
+            hora_fin = (HORA_CERO + timedelta(minutes=fin_ventana)).strftime("%H:%M")
+            if minutos_llegada_estimados < ini_ventana:
+                # Llegar temprano NO es imposible: el camión puede esperar en la
+                # puerta. Es caro (deja al camión parado) pero es una salida real,
+                # así que se dice en vez de solo marcarlo en rojo. Ya se buscó en
+                # toda la ruta, incluido el final, y esta fue la hora más tardía
+                # que se pudo conseguir.
+                falta = ini_ventana - minutos_llegada_estimados
+                motivos.append(
+                    f"llegaría {_horas_y_minutos(falta)} antes de que abran "
+                    f"(reciben {hora_ini}-{hora_fin}); es lo más tarde que se puede "
+                    f"acomodar, así que el camión tendría que esperar ese rato en la puerta"
+                )
+            else:
+                tarde = minutos_llegada_estimados - fin_ventana
+                motivos.append(
+                    f"llegaría {_horas_y_minutos(tarde)} DESPUÉS de que cierren "
+                    f"(reciben {hora_ini}-{hora_fin})"
+                )
 
-        eta_estimada = (HORA_CERO + timedelta(minutes=minutos_llegada_estimados)).strftime("%I:%M %p")
+        eta_estimada = (HORA_CERO + timedelta(minutes=minutos_llegada_estimados)).strftime("%H:%M")
 
         opciones.append({
             "ruta_id": ruta.id,

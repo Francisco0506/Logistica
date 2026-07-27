@@ -158,5 +158,11 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# Archivos que suben los usuarios: hoy solo las fotos de evidencia que toma el
+# chofer al entregar. En producción esto debe apuntar a un disco con respaldo,
+# no a la carpeta del proyecto.
+MEDIA_URL = 'media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

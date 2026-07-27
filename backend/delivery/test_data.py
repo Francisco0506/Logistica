@@ -2,7 +2,7 @@ import random
 
 from django.db.models import Q
 
-from .models import Destino, Remision, Ruta
+from .models import Destino, Remision, Ruta, LineaRemision
 
 
 def cargar_pedidos_prueba(fecha, n, solo_locales=True):
@@ -43,6 +43,21 @@ def cargar_pedidos_prueba(fecha, n, solo_locales=True):
     Ruta.objects.filter(fecha=fecha).delete()
     Remision.objects.filter(doc_date=fecha, slp_name="PRUEBA_TEMPORAL").delete()
 
+    # Productos de mentiras pero verosímiles, para poder probar la app del
+    # chofer sin SAP: lo que importa es que haya renglones con cantidades y
+    # unidades distintas, que es lo que el chofer tiene que ajustar cuando una
+    # entrega sale incompleta.
+    CATALOGO = [
+        ("QUE-RALL-1K", "Queso rallado bolsa 1 kg", "BOLSA"),
+        ("QUE-MANCH-3K", "Queso manchego bloque 3 kg", "PZA"),
+        ("JAM-PIERNA-4K", "Jamón de pierna 4 kg", "PZA"),
+        ("PEP-REB-500G", "Pepperoni rebanado 500 g", "BOLSA"),
+        ("SAL-TOM-10K", "Salsa de tomate cubeta 10 kg", "CUBETA"),
+        ("HAR-PIZ-25K", "Harina para pizza saco 25 kg", "SACO"),
+        ("ACE-OLI-5L", "Aceite de oliva 5 L", "BIDON"),
+        ("CHA-CHED-2K", "Cheddar en rebanadas 2 kg", "CAJA"),
+    ]
+
     base_doc_entry = 8_500_000
     for i in range(n):
         d = destinos[i % len(destinos)]
@@ -66,7 +81,27 @@ def cargar_pedidos_prueba(fecha, n, solo_locales=True):
                 "ruta": None,
                 "secuencia_ruta": None,
                 "eta": None,
+                # Se limpia también lo que hubiera reportado el chofer en una
+                # corrida anterior: los folios de prueba se reciclan entre
+                # fechas y si no, el pedido "nuevo" nacería ya entregado.
+                "entregado_en": None,
+                "motivo": None,
+                "observaciones": None,
+                "recibio": None,
             },
         )
+
+        remision = Remision.objects.get(doc_entry=doc)
+        remision.lineas.all().delete()
+        for line_num, (item, desc, unidad) in enumerate(random.sample(CATALOGO, random.randint(2, 5))):
+            LineaRemision.objects.create(
+                remision=remision,
+                line_num=line_num,
+                item_code=item,
+                descripcion=desc,
+                unidad=unidad,
+                cantidad=random.choice([1, 2, 2, 3, 4, 6, 10]),
+                peso_unitario_kg=round(random.uniform(0.5, 25), 2),
+            )
 
     return {"status": "success", "message": f"{n} pedidos de prueba cargados para {fecha}.", "n": n}
