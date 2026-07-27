@@ -20,8 +20,9 @@
 export const CEDIS = [25.693214524592616, -100.48167993202988];
 
 // Colores para camiones que el despachador agrega a mano y que por lo tanto no
-// traen color asignado desde el backend.
+// traen color asignado desde el backend. Es la misma paleta de fleet.py, para
+// que un camión agregado no desentone con los ocho de la flota.
 export const PALETA_COLORES_CAMION = [
-  '#F27A18', '#D92525', '#3b82f6', '#10b981',
-  '#8b5cf6', '#ec4899', '#eab308', '#06b6d4',
+  '#EA580C', '#E11D48', '#7C3AED', '#059669',
+  '#2563EB', '#D97706', '#0891B2', '#C026D3',
 ];
