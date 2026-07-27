@@ -1,6 +1,6 @@
 # Pendientes del proyecto
 
-Lista viva de lo que falta. Actualizada el **25 de julio de 2026**.
+Lista viva de lo que falta. Actualizada el **26 de julio de 2026**.
 
 El detalle de alcance de los paneles de Vendedor y Chofer está aparte, en
 [`pendientes-vendedor-chofer.md`](pendientes-vendedor-chofer.md).
@@ -125,13 +125,23 @@ las respuestas de arriba.
   **el día más cargado —justo cuando más se ocupa el optimizador— es el día que
   se cae a línea recta**, y entrega rutas de aspecto normal con el orden de las
   paradas mal.
-- 🟡 **Aplicar el factor de calibración (~1.25).** OSRM cree que la flota va a
-  52.9 km/h cuando el GPS dice 42.3. El plan mete ~18 paradas donde caben ~15.
-  **Ya se ve en los datos**: las rutas guardadas del 19-jul tienen 23, 23, 20, 18
-  y 17 paradas contra las 15.5 reales. Ver
-  [`calibracion-tiempos-osrm.md`](calibracion-tiempos-osrm.md).
-  Hay que **re-medir el factor** al prender el OSRM propio, porque otro perfil da
-  otros tiempos.
+- 🔴 **Aplicar el factor de calibración (~1.3).** Re-medido el 26-jul con la API
+  de Samsara: OSRM implica **53.7 km/h** contra los **42.7 km/h** reales de
+  45,825 lecturas de GPS. El plan mete ~27 paradas donde caben ~18.
+
+  Va en un solo lugar, `routing_service.build_distance_time_matrices`, y son DOS
+  cambios: el factor, y `round()` en vez de `int()` — que truncaba hacia abajo y
+  regalaba hasta 59 segundos por tramo.
+
+  **Cómo saber que quedó:** el plan debe dar 15-18 paradas por camión.
+  **Hay que re-medirlo al prender el OSRM propio** (`python manage.py
+  medir_velocidad_real 7`), porque otro perfil da otros tiempos. Todo el detalle
+  en [`calibracion-tiempos-osrm.md`](calibracion-tiempos-osrm.md).
+- 🔴 **La hora de salida no es 09:00.** Medido: 07:03, 07:11, 09:25 y 13:49 en
+  días consecutivos, y hasta 2.5 h de diferencia entre camiones el mismo día. Las
+  ETAs ya se corrigen al dar Salida, pero **las ventanas de recibo se evalúan
+  contra las 09:00 teóricas**, así que el optimizador acepta o rechaza pedidos
+  por una razón equivocada.
 - ⚪ Hoy tampoco se evitan casetas: el servidor público rechaza `exclude=motorway`.
 
 ## 5. Antes de producción
@@ -192,11 +202,15 @@ las respuestas de arriba.
   rutas van apretadas (97 de 195 cierran antes de las 14:00).
 - 🟡 **Apagar un camión no libera sus pedidos de verdad**: se marcan pendientes
   solo en pantalla y el auto-refresco de 45 s los regresa como estaban.
-- ⚪ **La app del chofer está en pausa** (una pantalla que dice "en pausa"). Lo
-  que se necesita: entrega parcial, motivo de no entrega, firma de quien recibe,
-  foto de evidencia, y que funcione en celular.
-- ⚪ **El botón "Descargar Guía" del manifiesto no descarga nada**, solo muestra
-  un aviso.
+- ✅ ~~**La app del chofer**~~ ya existe y funciona en celular: sus paradas en
+  orden con los productos de cada pedido, entrega completa en un toque, entrega
+  incompleta renglón por renglón con motivo y nota, foto de evidencia, y no deja
+  reportar antes de que el camión salga del CEDIS.
+- 🟡 **Falta la FIRMA de quien recibe** en la app del chofer. Hoy se captura su
+  nombre escrito, que no es lo mismo que una firma.
+- ✅ ~~**El botón "Descargar Guía"**~~ ahora abre la vista previa de la guía y se
+  imprime, con el logo de Laben y el orden de carga LIFO.
+- 🟡 **La guía no se descarga como archivo**, solo se imprime desde el navegador.
 
 ## 7. Basura acumulada
 
