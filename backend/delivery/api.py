@@ -1,4 +1,5 @@
-from ninja import NinjaAPI, Schema
+from ninja import NinjaAPI, Schema, File
+from ninja.files import UploadedFile
 from typing import List, Optional
 from datetime import date, datetime, timedelta
 from django.db.models import Count
@@ -519,6 +520,7 @@ class PedidoVentasOut(Schema):
     observaciones: Optional[str] = None
     recibio: Optional[str] = None
     faltantes: List[str] = []
+    foto: Optional[str] = None
     # Explicación en lenguaje de vendedora de qué está pasando con su pedido.
     situacion: str
     # True cuando el pedido ya tiene lugar en una ruta del día.
@@ -649,6 +651,7 @@ def get_pedidos_vendedor(request, fecha: date, slp_code: str):
             "observaciones": r.observaciones,
             "recibio": r.recibio,
             "faltantes": faltantes,
+            "foto": r.foto.url if r.foto else None,
         })
     return resultado
 
@@ -690,6 +693,7 @@ class ParadaChoferOut(Schema):
     observaciones: Optional[str] = None
     recibio: Optional[str] = None
     entregado_en: Optional[str] = None
+    foto: Optional[str] = None
 
 
 class RutaChoferOut(Schema):
@@ -757,6 +761,7 @@ def get_ruta_chofer(request, fecha: date, camion: str):
             "observaciones": r.observaciones,
             "recibio": r.recibio,
             "entregado_en": timezone.localtime(r.entregado_en).strftime("%H:%M") if r.entregado_en else None,
+            "foto": r.foto.url if r.foto else None,
         })
 
     return {
@@ -846,6 +851,26 @@ def confirmar_entrega(request, remision_id: int, payload: ConfirmarEntregaIn):
             'No_Entregado': f"Pedido #{remision.doc_num} marcado como no entregado.",
         }[remision.estado],
     }
+
+
+@api.post("/chofer/paradas/{remision_id}/foto")
+def subir_foto_entrega(request, remision_id: int, foto: UploadedFile = File(...)):
+    """
+    La foto de evidencia de la entrega.
+
+    Va aparte de la confirmación porque es un archivo y no cabe en el mismo
+    JSON, y porque conviene que una falla al subir la imagen —que en la calle
+    pasa seguido, con mala señal— NO tire la confirmación de la entrega, que es
+    el dato importante.
+    """
+    try:
+        remision = Remision.objects.get(id=remision_id)
+    except Remision.DoesNotExist:
+        return {"status": "error", "message": "Ese pedido no existe."}
+
+    remision.foto = foto
+    remision.save(update_fields=['foto'])
+    return {"status": "success", "url": remision.foto.url}
 
 
 # 7. Sugerir en qué camión conviene meter un pedido que quedó sin asignar.

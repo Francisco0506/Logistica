@@ -112,9 +112,13 @@ class Remision(models.Model):
     entregado_en = models.DateTimeField(null=True, blank=True)
     motivo = models.CharField(max_length=30, choices=MOTIVOS, null=True, blank=True)
     observaciones = models.TextField(null=True, blank=True)
-    # Quién recibió, tal como lo escribe el chofer. La firma y la foto vienen
-    # después (ver docs/pendientes-vendedor-chofer.md).
+    # Quién recibió, tal como lo escribe el chofer. La firma viene después
+    # (ver docs/pendientes-vendedor-chofer.md).
     recibio = models.CharField(max_length=150, null=True, blank=True)
+    # Foto de evidencia tomada en la puerta del cliente. Sirve sobre todo
+    # cuando la entrega salió incompleta o no se pudo entregar: es la prueba de
+    # lo que el chofer reporta.
+    foto = models.ImageField(upload_to='entregas/%Y/%m/', null=True, blank=True)
 
     @property
     def entrega_confirmada(self):

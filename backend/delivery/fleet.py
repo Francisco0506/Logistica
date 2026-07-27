@@ -42,6 +42,13 @@ confiable, pero las paradas sí están medidas.
 `activo_default`: los que casi no salen arrancan apagados en el panel (024 salió
 1 día en 30, 015 tres días con 9 km, 012 ninguno). Se prenden con un clic.
 
+`color`: identifica al camión en TODAS las pantallas — su línea en el mapa, sus
+paradas numeradas, la franja de sus pedidos en ventas y su tarjeta en el
+manifiesto. La paleta arranca en el naranja de Laben y baja en tono, y son
+colores oscuros a propósito: los números de parada van en blanco encima y con
+tonos claros no se leen. Están escogidos para distinguirse entre sí incluso
+juntos en el mapa, que es donde de verdad importa.
+
 ORDEN de la lista = ranking de uso real (km de GPS en 60 días). Los que más
 trabajan van primero, así el panel los muestra arriba.
 
@@ -56,49 +63,49 @@ CAMIONES = [
         "placa": "RA7475A", "samsara": "027", "vin": "3MGN1R755NM000496",
         "modelo": "ELF 600", "anio": 2022,
         "capacidad_kg": 6000, "max_paradas": 29,
-        "activo_default": True, "color": "#06b6d4",
+        "activo_default": True, "color": "#E2571E",
     },
     {
         "placa": "PP4873A", "samsara": "023", "vin": "JAANPR758L7000211",
         "modelo": "ELF 400/500", "anio": 2020,
         "capacidad_kg": 3500, "max_paradas": 30,
-        "activo_default": True, "color": "#ec4899",
+        "activo_default": True, "color": "#B02A2A",
     },
     {
         "placa": "PR6889B", "samsara": "017", "vin": "JAAN1R758H7902236",
         "modelo": "ELF 600", "anio": 2017,
         "capacidad_kg": 6000, "max_paradas": 24,
-        "activo_default": True, "color": "#8b5cf6",
+        "activo_default": True, "color": "#1F6FB2",
     },
     {
         "placa": "RJ97892", "samsara": "016", "vin": "JAA1KR775G7100447",
         "modelo": "ELF 200", "anio": 2016,
         "capacidad_kg": 2000, "max_paradas": 29,
-        "activo_default": True, "color": "#10b981",
+        "activo_default": True, "color": "#1B7F5F",
     },
     {
         "placa": "RJ37663", "samsara": "013", "vin": "JAANLR858F7200133",
         "modelo": "ELF 100", "anio": 2015,
         "capacidad_kg": 1500, "max_paradas": 19,
-        "activo_default": True, "color": "#D92525",
+        "activo_default": True, "color": "#6B3FA0",
     },
     {
         "placa": "PP4872A", "samsara": "024", "vin": "JAANPR756J7000561",
         "modelo": "ELF 400/500", "anio": 2018,
         "capacidad_kg": 3500, "max_paradas": 25,
-        "activo_default": False, "color": "#eab308",
+        "activo_default": False, "color": "#B8860B",
     },
     {
         "placa": "RJ57620", "samsara": "015", "vin": "JAA1KR778G7100118",
         "modelo": "ELF 200", "anio": 2016,
         "capacidad_kg": 2000, "max_paradas": 25,
-        "activo_default": False, "color": "#3b82f6",
+        "activo_default": False, "color": "#0F6E77",
     },
     {
         "placa": "RH83800", "samsara": "012", "vin": "JAANPR754E7005411",
         "modelo": "ELF 400/500", "anio": 2014,
         "capacidad_kg": 3500, "max_paradas": 25,
-        "activo_default": False, "color": "#F27A18",
+        "activo_default": False, "color": "#8C5A2B",
     },
 ]
 

@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import LabenLogo from '../../components/LabenLogo';
 import { useAviso } from '../../components/useAviso';
-import { getRutas, getRutaChofer, confirmarEntrega, getCamionesGPS } from '../../services/api';
+import { getRutas, getRutaChofer, confirmarEntrega, getCamionesGPS, subirFotoEntrega } from '../../services/api';
 import HojaEntrega from './components/HojaEntrega';
 import MapaRuta from './components/MapaRuta';
 
@@ -106,11 +106,21 @@ export default function DriverApp() {
   // justo el problema que esta app viene a resolver.
   const puedeEntregar = ruta?.estado === 'En_Ruta';
 
-  const confirmar = async (datos) => {
+  const confirmar = async (datos, foto) => {
     setGuardando(true);
     try {
       const res = await confirmarEntrega(abierta.id, datos);
       avisar(res.message, res.estado === 'Entregado' ? 'exito' : 'info');
+
+      // La foto se sube DESPUÉS y aparte: si falla por mala señal, la entrega
+      // ya quedó registrada, que es lo que importa. Solo se avisa del fallo.
+      if (foto) {
+        try {
+          await subirFotoEntrega(abierta.id, foto);
+        } catch {
+          avisar('La entrega se guardó, pero la foto no se pudo subir. Revisa tu señal.', 'error');
+        }
+      }
       setAbierta(null);
       setRuta(await getRutaChofer(fecha, camion));
     } catch (e) {

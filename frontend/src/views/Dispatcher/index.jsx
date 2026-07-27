@@ -825,7 +825,7 @@ export default function DispatcherPanel() {
             filtro={orderFilter} onFiltro={setOrderFilter}
             busqueda={orderSearch} onBusqueda={setOrderSearch}
             colorDe={colorOf} onEnfocar={focus}
-            camiones={camionesActivos}
+            camiones={camionesActivos.filter((c) => ordersOf(c.id).length > 0)}
             camionFiltro={camionFiltro} onCamionFiltro={setCamionFiltro}
             camionesGPS={camionesGPS}
           />}

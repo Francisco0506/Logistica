@@ -238,67 +238,27 @@ export default function SalesPanel() {
           </div>
         </div>
 
-        {/* ═══ FILTROS + BUSCADOR ═══ */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-3 py-2.5 flex items-center gap-3 flex-wrap">
-          <div className="flex items-center gap-1 flex-wrap">
-            {FILTROS.map(({ id, texto, icono: Icono, color }) => (
-              <button
-                key={id}
-                onClick={() => setFiltro(id)}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition ${
-                  filtro === id ? 'bg-gray-800 text-white' : 'text-gray-500 hover:bg-gray-100'
-                }`}
-              >
-                <Icono className={`w-3.5 h-3.5 ${filtro === id ? 'text-white' : color}`} />
-                {texto}
-                <span className={filtro === id ? 'text-gray-300' : 'text-gray-400'}>{cuenta[id] ?? 0}</span>
-              </button>
-            ))}
+        {/* ═══ BUSCADOR ═══ */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-3 py-2.5 flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+            <input
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+              placeholder="Cliente, remisión, placa o calle…"
+              className="w-full pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-orange-200"
+            />
           </div>
-
-          <div className="flex items-center gap-2 ml-auto flex-1 min-w-[220px] justify-end">
-            <div className="relative flex-1 max-w-xs">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
-              <input
-                value={busqueda}
-                onChange={(e) => setBusqueda(e.target.value)}
-                placeholder="Cliente, remisión, placa o calle…"
-                className="w-full pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-orange-200"
-              />
-            </div>
-            {/* Filtro por camión, encadenado con el de estado. Solo salen los
-                camiones que llevan pedidos de esta vendedora, y cada uno con su
-                color, el mismo del mapa y de la franja del renglón. */}
-            {misCamiones.length > 1 && (
-              <MenuSeleccion
-                valor={camionFiltro}
-                onCambio={setCamionFiltro}
-                className="flex-shrink-0 w-40"
-                opciones={[
-                  { valor: 'todos', texto: 'Todos los camiones', detalle: pedidos.filter((p) => p.camion).length },
-                  ...misCamiones.map((c) => ({
-                    valor: c,
-                    texto: c,
-                    color: colorDe(c),
-                    detalle: pedidos.filter((p) => p.camion === c).length,
-                  })),
-                ]}
-              />
-            )}
-            <button
-              onClick={() => setVerMapa((v) => !v)}
-              title={verMapa ? 'Ocultar el mapa' : 'Ver el mapa'}
-              className="flex items-center gap-1.5 border border-gray-200 hover:bg-gray-50 rounded-lg px-2.5 py-1.5 text-[11px] font-bold text-gray-600 transition flex-shrink-0"
-            >
-              {verMapa ? <List className="w-3.5 h-3.5" /> : <MapIcon className="w-3.5 h-3.5" />}
-              <span className="hidden sm:inline">{verMapa ? 'Ocultar mapa' : 'Ver mapa'}</span>
-            </button>
-          </div>
+          <button
+            onClick={() => setVerMapa((v) => !v)}
+            title={verMapa ? 'Ocultar el mapa' : 'Ver el mapa'}
+            className="flex items-center gap-1.5 border border-gray-200 hover:bg-gray-50 rounded-lg px-2.5 py-1.5 text-[11px] font-bold text-gray-600 transition flex-shrink-0"
+          >
+            {verMapa ? <List className="w-3.5 h-3.5" /> : <MapIcon className="w-3.5 h-3.5" />}
+            <span className="hidden sm:inline">{verMapa ? 'Ocultar mapa' : 'Ver mapa'}</span>
+          </button>
         </div>
 
-        {/* ═══ LISTA + MAPA, lado a lado ═══
-            El mapa a la derecha y flotante, igual que en el dispatcher: así no
-            se come la pantalla y la lista aprovecha el ancho. */}
         {/* ═══ MAPA, a todo lo ancho ═══
             Aquí sí hay espacio para separar 80 marcadores; en la columna
             angosta de antes se encimaban y no se distinguía cuál era cuál. */}
@@ -329,6 +289,44 @@ export default function SalesPanel() {
           </button>
 
           {verLista && (
+          <>
+          {/* Los filtros viven con la lista, no arriba de la página: es lo que
+              filtran. Y el de camión solo trae los camiones que de verdad
+              llevan pedidos de esta vendedora. */}
+          <div className="px-3 pt-3 flex items-center gap-2 flex-wrap border-b border-gray-100 pb-3">
+            <div className="flex items-center gap-1 flex-wrap">
+              {FILTROS.map(({ id, texto, icono: Icono, color }) => (
+                <button
+                  key={id}
+                  onClick={() => setFiltro(id)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition ${
+                    filtro === id ? 'bg-gray-800 text-white' : 'text-gray-500 hover:bg-gray-100'
+                  }`}
+                >
+                  <Icono className={`w-3.5 h-3.5 ${filtro === id ? 'text-white' : color}`} />
+                  {texto}
+                  <span className={filtro === id ? 'text-gray-300' : 'text-gray-400'}>{cuenta[id] ?? 0}</span>
+                </button>
+              ))}
+            </div>
+            {misCamiones.length > 1 && (
+              <MenuSeleccion
+                valor={camionFiltro}
+                onCambio={setCamionFiltro}
+                className="ml-auto w-40"
+                opciones={[
+                  { valor: 'todos', texto: 'Todos los camiones', detalle: pedidos.filter((p) => p.camion).length },
+                  ...misCamiones.map((c) => ({
+                    valor: c,
+                    texto: c,
+                    color: colorDe(c),
+                    detalle: pedidos.filter((p) => p.camion === c).length,
+                  })),
+                ]}
+              />
+            )}
+          </div>
+
           <div className="p-3 space-y-1.5">
             {cargando && !pedidos.length && (
               <div className="bg-white rounded-xl border border-gray-200 text-center py-16 text-gray-400">
@@ -363,6 +361,7 @@ export default function SalesPanel() {
             ))}
 
           </div>
+          </>
           )}
         </section>
 

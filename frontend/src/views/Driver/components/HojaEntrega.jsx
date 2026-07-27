@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Check, Minus, Plus, AlertTriangle } from 'lucide-react';
+import { X, Check, Minus, Plus, AlertTriangle, Camera, Trash2 } from 'lucide-react';
 
 /**
  * La hoja donde el chofer confirma qué dejó en una parada.
@@ -32,12 +32,15 @@ export default function HojaEntrega({ parada, onCerrar, onConfirmar, guardando, 
   const [motivo, setMotivo] = useState('');
   const [observaciones, setObservaciones] = useState('');
   const [recibio, setRecibio] = useState('');
+  const [foto, setFoto] = useState(null);          // File que se va a subir
+  const [vistaPrevia, setVistaPrevia] = useState(null);
 
   const ajustar = (linea, delta) => {
     setCantidades((prev) => {
       const actual = prev[linea.id] ?? linea.cantidad;
-      // Entre 0 y lo que trae: no se puede dejar de más.
-      const siguiente = Math.max(0, Math.min(linea.cantidad, +(actual + delta).toFixed(2)));
+      // Entre 0 y lo que trae: no se puede dejar de MÁS de lo que venía, y el
+      // paso es de una pieza completa — media caja de queso no se entrega.
+      const siguiente = Math.max(0, Math.min(linea.cantidad, actual + delta));
       return { ...prev, [linea.id]: siguiente };
     });
   };
@@ -45,7 +48,20 @@ export default function HojaEntrega({ parada, onCerrar, onConfirmar, guardando, 
   const faltantes = parada.lineas.filter((l) => (cantidades[l.id] ?? l.cantidad) < l.cantidad);
   const nadaEntregado = parada.lineas.every((l) => (cantidades[l.id] ?? l.cantidad) === 0);
 
-  const enviarCompleto = () => onConfirmar({ recibio: recibio.trim() || undefined });
+  const tomarFoto = (e) => {
+    const archivo = e.target.files?.[0];
+    if (!archivo) return;
+    setFoto(archivo);
+    setVistaPrevia(URL.createObjectURL(archivo));
+  };
+
+  const quitarFoto = () => {
+    if (vistaPrevia) URL.revokeObjectURL(vistaPrevia);
+    setFoto(null);
+    setVistaPrevia(null);
+  };
+
+  const enviarCompleto = () => onConfirmar({ recibio: recibio.trim() || undefined }, foto);
 
   const enviarParcial = () => {
     onConfirmar({
@@ -56,11 +72,15 @@ export default function HojaEntrega({ parada, onCerrar, onConfirmar, guardando, 
       motivo: motivo || 'otro',
       observaciones: observaciones.trim() || undefined,
       recibio: recibio.trim() || undefined,
-    });
+    }, foto);
   };
 
   return (
-    <div className="fixed inset-0 z-[3000] bg-white flex flex-col">
+    // En el celular ocupa toda la pantalla, que es donde de verdad se usa. En
+    // computadora va como ventana centrada: a todo lo ancho de un monitor los
+    // renglones quedaban separadísimos del número y no se leía qué es qué.
+    <div className="fixed inset-0 z-[3000] bg-black/40 sm:flex sm:items-center sm:justify-center sm:p-6">
+    <div className="bg-white h-full w-full flex flex-col sm:h-auto sm:max-h-[90vh] sm:max-w-lg sm:rounded-2xl sm:shadow-2xl sm:overflow-hidden">
       {/* Cabecera fija */}
       <header className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 flex-shrink-0">
         <button onClick={onCerrar} className="p-2 -ml-2 rounded-lg text-gray-500 hover:bg-gray-100">
@@ -96,7 +116,7 @@ export default function HojaEntrega({ parada, onCerrar, onConfirmar, guardando, 
                     {modo !== 'parcial' && (
                       <div className="text-right flex-shrink-0">
                         <div className="text-lg font-extrabold text-gray-800 tabular-nums leading-none">
-                          {l.cantidad % 1 === 0 ? l.cantidad : l.cantidad.toFixed(2)}
+                          {l.cantidad}
                         </div>
                         <div className="text-[10px] font-bold text-gray-400 uppercase">{l.unidad}</div>
                       </div>
@@ -107,23 +127,25 @@ export default function HojaEntrega({ parada, onCerrar, onConfirmar, guardando, 
                   {modo === 'parcial' && (
                     <div className="flex items-center gap-3 mt-3">
                       <button
-                        onClick={() => ajustar(l, -0.5)}
-                        className="w-12 h-12 rounded-xl bg-gray-100 hover:bg-gray-200 active:bg-gray-300 flex items-center justify-center flex-shrink-0"
+                        onClick={() => ajustar(l, -1)}
+                        disabled={dejado <= 0}
+                        className="w-12 h-12 rounded-xl bg-gray-100 hover:bg-gray-200 active:bg-gray-300 disabled:opacity-30 flex items-center justify-center flex-shrink-0"
                       >
                         <Minus className="w-5 h-5 text-gray-700" />
                       </button>
 
                       <div className="flex-1 text-center">
                         <div className={`text-2xl font-extrabold tabular-nums leading-none ${corto ? 'text-amber-700' : 'text-gray-800'}`}>
-                          {dejado % 1 === 0 ? dejado : dejado.toFixed(2)}
-                          <span className="text-sm text-gray-400 font-bold"> / {l.cantidad % 1 === 0 ? l.cantidad : l.cantidad.toFixed(2)}</span>
+                          {dejado}
+                          <span className="text-sm text-gray-400 font-bold"> / {l.cantidad}</span>
                         </div>
                         <div className="text-[10px] font-bold text-gray-400 uppercase mt-0.5">{l.unidad}</div>
                       </div>
 
                       <button
-                        onClick={() => ajustar(l, 0.5)}
-                        className="w-12 h-12 rounded-xl bg-gray-100 hover:bg-gray-200 active:bg-gray-300 flex items-center justify-center flex-shrink-0"
+                        onClick={() => ajustar(l, 1)}
+                        disabled={dejado >= l.cantidad}
+                        className="w-12 h-12 rounded-xl bg-gray-100 hover:bg-gray-200 active:bg-gray-300 disabled:opacity-30 flex items-center justify-center flex-shrink-0"
                       >
                         <Plus className="w-5 h-5 text-gray-700" />
                       </button>
@@ -173,6 +195,32 @@ export default function HojaEntrega({ parada, onCerrar, onConfirmar, guardando, 
             </div>
           </div>
         )}
+
+        {/* Foto de evidencia. `capture="environment"` abre directo la cámara
+            trasera del celular en vez del carrete: en la puerta del cliente lo
+            que se quiere es tomar la foto, no buscarla. */}
+        <div className="px-4 pb-3">
+          <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wide block mb-1.5">
+            Foto de evidencia <span className="font-semibold normal-case text-gray-300">(opcional)</span>
+          </label>
+
+          {vistaPrevia ? (
+            <div className="relative">
+              <img src={vistaPrevia} alt="Evidencia de la entrega" className="w-full h-44 object-cover rounded-xl border border-gray-200" />
+              <button
+                onClick={quitarFoto}
+                className="absolute top-2 right-2 bg-white/95 border border-gray-200 rounded-lg p-2 shadow-sm active:bg-gray-100"
+              >
+                <Trash2 className="w-4 h-4 text-red-500" />
+              </button>
+            </div>
+          ) : (
+            <label className="flex items-center justify-center gap-2 w-full py-4 border-2 border-dashed border-gray-200 rounded-xl text-[13px] font-bold text-gray-500 active:bg-gray-50 cursor-pointer">
+              <Camera className="w-5 h-5" /> Tomar foto
+              <input type="file" accept="image/*" capture="environment" onChange={tomarFoto} className="hidden" />
+            </label>
+          )}
+        </div>
 
         {/* Quién recibió: siempre, y opcional */}
         <div className="px-4 pb-4">
@@ -252,6 +300,7 @@ export default function HojaEntrega({ parada, onCerrar, onConfirmar, guardando, 
           </>
         )}
       </div>
+    </div>
     </div>
   );
 }

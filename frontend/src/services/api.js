@@ -101,6 +101,23 @@ export async function confirmarEntrega(remisionId, { lineas = [], motivo, observ
 }
 
 /**
+ * Sube la foto de evidencia de una entrega.
+ *
+ * Va aparte de la confirmación a propósito: en la calle la señal falla seguido,
+ * y una foto que no sube no debe tirar el reporte de la entrega, que es el dato
+ * que de verdad importa.
+ */
+export async function subirFotoEntrega(remisionId, archivo, { signal } = {}) {
+  const datos = new FormData();
+  datos.append('foto', archivo);
+  const res = await fetch(`/api/chofer/paradas/${remisionId}/foto`, {
+    method: 'POST', body: datos, signal,
+  });
+  if (!res.ok) throw new Error(`Subir foto failed: ${res.status}`);
+  return res.json();
+}
+
+/**
  * "¿Qué hago para que quepan todos?" — corre el optimizador varias veces
  * cambiando UNA cosa cada vez (salir antes, más turno, otro camión) y regresa
  * cuántos pedidos entrarían en cada caso, ordenado por el que más ayuda.
