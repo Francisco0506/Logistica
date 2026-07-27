@@ -65,11 +65,38 @@ las respuestas de arriba.
 
 - 🔴 **Conectar SAP en producción.** En la computadora personal las credenciales
   están vacías y todo corre con pedidos de prueba.
-- 🔴 **Peso real por pedido.** Sin él, la restricción de kilos del optimizador
-  corre con `PESO_ESTIMADO_KG = 150` inventado y **no puede garantizar que un
-  camión no salga sobrecargado**. La consulta ya está escrita (suma de
-  `cantidad × OITM.SWeight1` por línea, `sync.py`); falta que los artículos
-  tengan el peso capturado en su ficha.
+- 🔴 **Peso real por pedido — este pendiente marca el calendario.**
+
+  **Qué falta exactamente:** que cada artículo tenga capturado su peso en la
+  ficha de SAP (`OITM.SWeight1`). **Del lado del código no falta nada**: la
+  consulta ya está escrita y probada (suma de `cantidad × OITM.SWeight1` por
+  línea, en `sync.py`); en el momento que los pesos existan, el sistema los
+  empieza a usar solo.
+
+  **Por qué es lo más serio de esta lista:** sin pesos, la restricción de kilos
+  del optimizador corre con `PESO_ESTIMADO_KG = 150` **inventado**. Eso quiere
+  decir que el sistema **no puede garantizar que un camión no salga
+  sobrecargado**, y peor: entrega un plan que se ve confiable. Un número
+  inventado que se presenta como medido es exactamente lo que haría cargar de
+  más con toda confianza.
+
+  **Quién lo hace:** no es trabajo de programación ni de una tarde. Es captura
+  en el catálogo, artículo por artículo, por alguien del equipo con acceso a
+  SAP. **Ese es el plazo que manda**, no el código: la parte de programar cabe
+  en días, esta captura no se sabe hasta contar cuántos artículos son.
+
+  **Primer paso, y es chico:** contar cuántos artículos activos NO tienen
+  `SWeight1` capturado. Con ese número ya se puede estimar de verdad cuánto
+  tarda y decidir si se captura todo o solo lo que más se mueve.
+
+  **Mientras tanto se puede operar así:** en un piloto de uno o dos camiones,
+  donde el cargador todavía revisa la carga a ojo, se aguanta sin pesos. Lo que
+  **no** se puede es dejar al sistema decidir solo la carga. El manifiesto ya
+  avisa "SAP no manda el peso: no se sabe cuánto lleva" en vez de inventar un
+  total, justamente para que nadie confíe de más.
+
+  **Cómo saber que quedó:** el manifiesto de carga deja de mostrar el aviso
+  ámbar y muestra kilos reales contra la capacidad de la unidad.
 - 🟡 **Corregir 4 destinos con la hora mal capturada** (les falta el PM):
   LA PARMESANA "08:00-06:00", Santo Chickn Gpe "09:00-03:00", WYNDHAM MONTERREY
   "09:00-05:00", BARBARO "08:00-00:00". El optimizador las ignora y usa el turno
@@ -145,6 +172,18 @@ las respuestas de arriba.
 - ⚪ Hoy tampoco se evitan casetas: el servidor público rechaza `exclude=motorway`.
 
 ## 5. Antes de producción
+
+- 🔴 **Dónde va a vivir el sistema. Esto es lo primero y no está decidido.**
+  Hoy todo corre en la computadora personal. Para que un chofer abra su celular
+  en la calle y vea sus paradas, el servidor tiene que estar en un lugar que su
+  teléfono alcance — un equipo en la oficina con acceso desde fuera, o algo
+  rentado. **Hasta que eso exista, nadie más que Francisco puede usar esto**, por
+  bien que funcione el código.
+
+  Es la decisión que destraba las demás: los cuatro puntos de seguridad de abajo
+  solo importan —y solo se pueden probar— cuando el sistema está expuesto. Y si
+  hay que comprar o solicitar el equipo, esa gestión pesa más en el calendario
+  que todo lo que falta programar.
 
 - 🔴 **`SECRET_KEY` está escrita en `core/settings.py`** y ese archivo sí está en
   GitHub. Debe salir del `.env` y hay que **generar una nueva**, porque la actual
