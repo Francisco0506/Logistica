@@ -24,7 +24,7 @@ const MOTIVOS = [
   ['otro', 'Otro motivo'],
 ];
 
-export default function HojaEntrega({ parada, onCerrar, onConfirmar, guardando }) {
+export default function HojaEntrega({ parada, onCerrar, onConfirmar, guardando, puedeEntregar = true }) {
   const [modo, setModo] = useState(null);   // null | 'parcial'
   const [cantidades, setCantidades] = useState(
     () => Object.fromEntries(parada.lineas.map((l) => [l.id, l.cantidad]))
@@ -190,7 +190,17 @@ export default function HojaEntrega({ parada, onCerrar, onConfirmar, guardando }
 
       {/* ── Acciones, pegadas abajo donde alcanza el pulgar ── */}
       <div className="border-t border-gray-200 p-4 space-y-2 flex-shrink-0 bg-white">
-        {modo !== 'parcial' ? (
+        {/* Se puede consultar el pedido siempre —sirve para ir preparando la
+            carga— pero confirmar solo cuando el camión ya salió. */}
+        {!puedeEntregar ? (
+          <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-xl px-3 py-3">
+            <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+            <p className="text-[12px] text-amber-900 leading-snug">
+              <b>Todavía no puedes reportar esta entrega.</b> El camión no ha salido
+              del CEDIS; pide que te den Salida en el almacén.
+            </p>
+          </div>
+        ) : modo !== 'parcial' ? (
           <>
             <button
               onClick={enviarCompleto}

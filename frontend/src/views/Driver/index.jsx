@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import LabenLogo from '../../components/LabenLogo';
 import { useAviso } from '../../components/useAviso';
-import { getFlota, getRutaChofer, confirmarEntrega, getCamionesGPS } from '../../services/api';
+import { getRutas, getRutaChofer, confirmarEntrega, getCamionesGPS } from '../../services/api';
 import HojaEntrega from './components/HojaEntrega';
 import MapaRuta from './components/MapaRuta';
 
@@ -46,7 +46,7 @@ export default function DriverApp() {
   // Si no viene, la escoge de una lista. Cuando haya usuarios de chofer esto
   // saldrá de su sesión y la lista desaparece.
   const camion = params.get('camion') || '';
-  const [flota, setFlota] = useState([]);
+  const [rutasDelDia, setRutasDelDia] = useState([]);
   const [ruta, setRuta] = useState(null);
   const [cargando, setCargando] = useState(false);
   const [abierta, setAbierta] = useState(null);   // parada con la hoja de entrega abierta
@@ -56,11 +56,14 @@ export default function DriverApp() {
   const [verHechas, setVerHechas] = useState(false);   // lo ya reportado no estorba
   const fecha = hoy();
 
+  // Los camiones que SALEN hoy. Antes se listaba la flota completa, incluidos
+  // los que están apagados y los que no tienen ruta: el chofer podía escoger un
+  // camión que no va a ninguna parte.
   useEffect(() => {
     const c = new AbortController();
-    getFlota({ signal: c.signal }).then(setFlota).catch(() => {});
+    getRutas(fecha, { signal: c.signal }).then(setRutasDelDia).catch(() => {});
     return () => c.abort();
-  }, []);
+  }, [fecha]);
 
   // Su propia posición, para verse en el mapa. Aparte de la ruta: si Samsara
   // falla, la lista de paradas sigue funcionando.
@@ -97,6 +100,11 @@ export default function DriverApp() {
   const reportadas = paradas.filter((p) => ESTILO_ESTADO[p.estado]);
   const incompletas = paradas.filter((p) => p.estado === 'Entregado_Parcial' || p.estado === 'No_Entregado').length;
   const miPosicion = gps.find((c) => c.placa === camion) || null;
+  // Solo se puede entregar si el camión YA SALIÓ del CEDIS. Mientras el
+  // despachador no le dé Salida, la mercancía sigue en el almacén: dejar
+  // reportar entregas antes convertiría el dato en algo que no ocurrió, que es
+  // justo el problema que esta app viene a resolver.
+  const puedeEntregar = ruta?.estado === 'En_Ruta';
 
   const confirmar = async (datos) => {
     setGuardando(true);
@@ -117,30 +125,62 @@ export default function DriverApp() {
   if (!camion) {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col" style={{ fontFamily: "'Inter', sans-serif" }}>
-        <header className="bg-white border-b border-gray-200 px-4 py-4 flex items-center justify-between">
-          <LabenLogo variant="horizontal" />
+        <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <LabenLogo variant="horizontal" />
+            <span className="text-[9px] text-gray-300 font-bold tracking-[.2em] uppercase self-end pb-0.5">· Chofer</span>
+          </div>
           <button onClick={() => navigate('/')} className="text-xs font-bold text-gray-400 flex items-center gap-1.5">
             <LogOut className="w-3.5 h-3.5" /> Salir
           </button>
         </header>
+
         <div className="flex-1 p-4">
           <h1 className="text-lg font-extrabold text-gray-800 mb-1">¿Cuál camión traes?</h1>
-          <p className="text-[13px] text-gray-500 mb-4">Escoge tu unidad para ver tus entregas de hoy.</p>
+          <p className="text-[13px] text-gray-500 mb-4">
+            {rutasDelDia.length
+              ? 'Estas son las unidades que salen hoy.'
+              : 'Todavía no hay rutas para hoy.'}
+          </p>
+
+          {!rutasDelDia.length && (
+            <div className="bg-white rounded-xl border border-gray-200 text-center py-12 px-4">
+              <Truck className="w-8 h-8 mx-auto mb-3 text-gray-200" />
+              <p className="text-sm font-bold text-gray-600">Sin rutas todavía</p>
+              <p className="text-xs text-gray-400 mt-1">
+                Pregunta en el CEDIS cuando ya estén generadas.
+              </p>
+            </div>
+          )}
+
           <div className="space-y-2">
-            {flota.map((c) => (
-              <button
-                key={c.placa}
-                onClick={() => setParams({ camion: c.placa })}
-                className="w-full flex items-center gap-3 bg-white border border-gray-200 hover:border-gray-300 active:bg-gray-50 rounded-xl px-4 py-4 text-left transition"
-              >
-                <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: c.color }} />
-                <div className="flex-1 min-w-0">
-                  <div className="text-[16px] font-extrabold text-gray-800">{c.placa}</div>
-                  <div className="text-[11px] text-gray-400">{c.modelo} · Samsara {c.samsara}</div>
-                </div>
-                <ChevronRight className="w-5 h-5 text-gray-300" />
-              </button>
-            ))}
+            {rutasDelDia.map((r) => {
+              const salio = r.estado === 'En_Ruta';
+              const cerrada = r.estado === 'Finalizada';
+              return (
+                <button
+                  key={r.id}
+                  onClick={() => setParams({ camion: r.camion })}
+                  className="w-full flex items-center gap-3 bg-white border border-gray-200 active:bg-gray-50 rounded-xl px-4 py-4 text-left transition"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[18px] font-extrabold text-gray-800 tracking-wide">{r.camion}</div>
+                    <div className="text-[12px] text-gray-500 mt-0.5">
+                      {r.pedidos_count} entregas
+                      {r.hora_salida && ` · salió ${r.hora_salida}`}
+                    </div>
+                  </div>
+                  <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded-full flex-shrink-0 ${
+                    salio ? 'bg-blue-50 text-blue-700'
+                      : cerrada ? 'bg-emerald-50 text-emerald-700'
+                      : 'bg-gray-100 text-gray-500'
+                  }`}>
+                    {salio ? 'En ruta' : cerrada ? 'Terminada' : 'En el CEDIS'}
+                  </span>
+                  <ChevronRight className="w-5 h-5 text-gray-300 flex-shrink-0" />
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -228,11 +268,24 @@ export default function DriverApp() {
               ))}
             </section>
 
+            {!puedeEntregar && ruta?.estado !== 'Finalizada' && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-[13px] font-bold text-amber-900">Todavía no sales del CEDIS</p>
+                  <p className="text-[12px] text-amber-800 leading-snug mt-0.5">
+                    Puedes ver tus paradas y tus productos, pero no reportar entregas hasta
+                    que te den Salida en el almacén.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* ═══ LA QUE SIGUE ═══ */}
             {siguiente ? (
               <section>
                 <h2 className="text-[11px] font-bold text-gray-400 uppercase tracking-wide mb-2 px-1">La que sigue</h2>
-                <TarjetaParada parada={siguiente} destacada onAbrir={() => setAbierta(siguiente)} />
+                <TarjetaParada parada={siguiente} destacada puedeEntregar={puedeEntregar} onAbrir={() => setAbierta(siguiente)} />
               </section>
             ) : (
               <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center">
@@ -267,7 +320,7 @@ export default function DriverApp() {
                 </h2>
                 <div className="space-y-2">
                   {pendientes.map((p) => (
-                    <TarjetaParada key={p.id} parada={p} onAbrir={() => setAbierta(p)} />
+                    <TarjetaParada key={p.id} parada={p} puedeEntregar={puedeEntregar} onAbrir={() => setAbierta(p)} />
                   ))}
                 </div>
               </section>
@@ -292,7 +345,7 @@ export default function DriverApp() {
                 {verHechas && (
                   <div className="p-3 pt-0 space-y-2">
                     {reportadas.map((p) => (
-                      <TarjetaParada key={p.id} parada={p} onAbrir={() => setAbierta(p)} />
+                      <TarjetaParada key={p.id} parada={p} puedeEntregar={puedeEntregar} onAbrir={() => setAbierta(p)} />
                     ))}
                   </div>
                 )}
@@ -305,6 +358,7 @@ export default function DriverApp() {
       {abierta && (
         <HojaEntrega
           parada={abierta}
+          puedeEntregar={puedeEntregar}
           guardando={guardando}
           onCerrar={() => setAbierta(null)}
           onConfirmar={confirmar}
@@ -318,7 +372,7 @@ export default function DriverApp() {
  * Una parada en la lista: todo lo que el chofer necesita antes de bajarse del
  * camión, y los atajos para llamar o abrir la navegación.
  */
-function TarjetaParada({ parada, destacada = false, onAbrir }) {
+function TarjetaParada({ parada, destacada = false, puedeEntregar = true, onAbrir }) {
   const estado = ESTILO_ESTADO[parada.estado];
   const Icono = estado?.icono;
   const hecha = !!estado;
@@ -389,7 +443,9 @@ function TarjetaParada({ parada, destacada = false, onAbrir }) {
           )}
           <button
             onClick={onAbrir}
-            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[12px] font-extrabold text-orange-600 active:bg-orange-50"
+            disabled={!puedeEntregar}
+            title={puedeEntregar ? undefined : 'El camión todavía no sale del CEDIS'}
+            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[12px] font-extrabold text-orange-600 active:bg-orange-50 disabled:text-gray-300 disabled:active:bg-transparent"
           >
             <MapPin className="w-3.5 h-3.5" /> Entregar
           </button>
