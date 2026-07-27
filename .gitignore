@@ -25,3 +25,7 @@ docker/docker-compose.override.yml
 .DS_Store
 *.log
 media/
+
+# Reportes con datos reales de clientes: se generan localmente, no se suben.
+entregas_pesos.csv
+*.csv
