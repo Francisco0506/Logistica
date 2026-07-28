@@ -10,7 +10,7 @@ from ortools.constraint_solver import pywrapcp
 from django.db import transaction
 from .. import fleet
 from ..models import Ruta, Remision
-from ..routing_service import build_distance_time_matrices
+from ..integrations.osrm import build_distance_time_matrices
 
 # ==========================================
 # 1. CONSTANTES DE TIEMPO Y CONFIGURACIÓN

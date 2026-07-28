@@ -1,7 +1,7 @@
 import os
 from datetime import date
 from django.db import transaction
-from .models import Remision, Destino, LineaRemision
+from ..models import Remision, Destino, LineaRemision
 from dotenv import load_dotenv
 
 load_dotenv()

@@ -10,7 +10,7 @@ from django.utils import timezone
 
 from .. import fleet
 from ..models import Remision, Ruta
-from ..routing_service import build_distance_time_matrices, haversine_distance
+from ..integrations.osrm import build_distance_time_matrices, haversine_distance
 from .reglas import (
     DECIMALES_MISMO_LUGAR,
     ESTADOS_RUTA_CONGELADOS,

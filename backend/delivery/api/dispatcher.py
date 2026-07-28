@@ -17,8 +17,8 @@ from ..optimizer import (
     solve_vrp, sugerir_camiones_para_remision, asignar_manualmente,
     recalcular_etas_desde_salida,
 )
-from ..samsara_service import get_ubicaciones_isuzu
-from ..sync import sync_from_sap
+from ..integrations.samsara import get_ubicaciones_isuzu
+from ..integrations.sap import sync_from_sap
 from .comun import DEPOT_COORDS, TRANSICIONES_VALIDAS, _texto_ventana
 
 router = Router()
