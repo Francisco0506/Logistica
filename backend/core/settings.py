@@ -10,22 +10,42 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+load_dotenv(BASE_DIR / ".env")
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
+# La llave sale del .env, que NO va a GitHub.
+#
+# Antes estaba escrita aquí, y este archivo sí está en el repositorio: cualquiera
+# que viera el repo tenía la llave con la que Django firma las sesiones y los
+# tokens de recuperación de contraseña. La que estaba publicada quedó quemada y
+# NO se debe volver a usar; en el .env va una nueva, generada aparte.
+#
+# Para generar una nueva:
+#   python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "Falta DJANGO_SECRET_KEY en backend/.env. Genera una con:\n"
+        "  python -c \"from django.core.management.utils import "
+        "get_random_secret_key; print(get_random_secret_key())\""
+    )
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-q2am($4nutpg_@9y1%%c14#ut_mi##!gclfeq+v3lqne8s*h&$'
+# DEBUG muestra el código fuente y las variables de entorno —incluidas las
+# contraseñas de SAP— en cualquier página de error. En producción va apagado.
+DEBUG = os.getenv("DJANGO_DEBUG", "True").strip().lower() in ("1", "true", "si", "sí")
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-
-ALLOWED_HOSTS = []
+# Con DEBUG apagado Django exige saber desde qué dominios se le puede hablar.
+# Se listan separados por coma en el .env (ej. "logistica.laben.mx,10.16.0.44").
+ALLOWED_HOSTS = [
+    h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "").split(",") if h.strip()
+] or (["*"] if DEBUG else [])
 
 
 # Application definition

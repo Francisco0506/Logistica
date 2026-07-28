@@ -32,7 +32,19 @@ export async function getPedidosVendedor(fecha, slpCode, { signal } = {}) {
 }
 
 /**
- * Sincroniza pedidos desde SAP B1 (o carga mock data).
+ * Qué día tiene que abrir el panel. NO es hoy: la entrega capturada un día sale
+ * al siguiente, así que en la mañana lo que va a salir se capturó ayer. Ver
+ * docs/flujo-documentos-sap.md.
+ * @returns {Promise<{fecha_carga: string, fecha_reparto: string, entregas: number, explicacion: string}>}
+ */
+export async function getJornada({ signal } = {}) {
+  const res = await fetch(`${BASE}/jornada`, { signal });
+  if (!res.ok) throw new Error(`Jornada failed: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * Trae de SAP B1 las órdenes de entrega de ese día y las guarda en la base.
  * @param {string} fecha — Formato YYYY-MM-DD
  */
 export async function syncSAP(fecha, { signal } = {}) {
@@ -167,24 +179,6 @@ export async function generarRutas(fecha, placas, horasTurno = 6, { signal } = {
     signal,
   });
   if (!res.ok) throw new Error(`Generar rutas failed: ${res.status}`);
-  return res.json();
-}
-
-/**
- * Carga N pedidos de prueba con destinos reales ya importados del Excel de
- * SAP, sin depender de la conexión a SAP. SOLO para pruebas: borra las rutas
- * que hubiera ese día, incluidas las ya despachadas.
- * @param {string} fecha — Formato YYYY-MM-DD
- * @param {number} n — Cuántos pedidos de prueba crear
- */
-export async function cargarPruebaPedidos(fecha, n, { signal } = {}) {
-  const res = await fetch(`${BASE}/pedidos/cargar-prueba`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fecha, n }),
-    signal,
-  });
-  if (!res.ok) throw new Error(`Cargar prueba failed: ${res.status}`);
   return res.json();
 }
 

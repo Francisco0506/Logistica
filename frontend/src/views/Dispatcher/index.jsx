@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Truck, RefreshCw, Search, AlertCircle, Package, FileText, Clock, Loader, FlaskConical, Plus, ChevronDown, ChevronUp } from 'lucide-react';
+import { Truck, RefreshCw, Search, AlertCircle, Package, FileText, Clock, Loader, Plus, ChevronDown, ChevronUp } from 'lucide-react';
 import { CEDIS, PALETA_COLORES_CAMION } from '../../config/fleet';
 import { useAviso } from '../../components/useAviso';
 import {
   syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado,
-  getSugerencias, asignarManual, cargarPruebaPedidos, getCamionesGPS, getFlota,
-  evaluarEscenarios,
+  getSugerencias, asignarManual, getCamionesGPS, getFlota,
+  evaluarEscenarios, getJornada,
 } from '../../services/api';
 import HeaderDespacho from './components/HeaderDespacho';
 import TarjetaCamion from './components/TarjetaCamion';
@@ -67,7 +67,13 @@ export default function DispatcherPanel() {
   const [rutas, setRutas]               = useState([]);
   const [alertas, setAlertas]           = useState([]);
   const [camionesGPS, setCamionesGPS]   = useState([]);
+  // El panel NO abre en hoy. La entrega capturada un día sale al siguiente, así
+  // que en la mañana lo que va a salir se capturó ayer; pedir "hoy" mostraba el
+  // panel vacío hasta el mediodía y parecía que el sistema fallaba. El backend
+  // dice cuál es el día bueno (/dispatcher/jornada). Se arranca en `hoy()` solo
+  // para no dejar el estado vacío mientras contesta.
   const [selectedDate, setSelectedDate] = useState(hoy());
+  const [jornada, setJornada]           = useState(null);
   const [syncStatus, setSyncStatus]     = useState('Conectando…');
   const [syncStatusTipo, setSyncStatusTipo] = useState('cargando');
 
@@ -115,9 +121,6 @@ export default function DispatcherPanel() {
   const [mostrarAgregarCamion, setMostrarAgregarCamion] = useState(false);
   const [nuevaPlaca, setNuevaPlaca]     = useState('');
   const [nuevoChofer, setNuevoChofer]   = useState('');
-  const [mostrarCargarPrueba, setMostrarCargarPrueba] = useState(false);
-  const [nPruebaPedidos, setNPruebaPedidos] = useState(80);
-  const [cargandoPrueba, setCargandoPrueba] = useState(false);
 
   // ── La flota, una sola vez al abrir ──
   // A propósito NO se recarga en el refresco de 45 s: eso borraría los choferes
@@ -134,6 +137,20 @@ export default function DispatcherPanel() {
     return () => controller.abort();
   }, []);
 
+  // ── Qué día abrir ──
+  // Se pregunta una sola vez, al entrar. Si el usuario cambia la fecha a mano
+  // después, no se le vuelve a mover.
+  useEffect(() => {
+    const controller = new AbortController();
+    getJornada({ signal: controller.signal })
+      .then((j) => {
+        setJornada(j);
+        setSelectedDate(j.fecha_carga);
+      })
+      .catch((e) => { if (e.name !== 'AbortError') console.error('No se pudo saber qué día cargar:', e); });
+    return () => controller.abort();
+  }, []);
+
   // ── Datos del día + refresco periódico ──
   useEffect(() => {
     const controller = new AbortController();
@@ -142,6 +159,18 @@ export default function DispatcherPanel() {
     return () => { controller.abort(); clearInterval(interval); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
+
+  // Botón de actualizar: trae lo que almacén haya capturado desde la última vez,
+  // sin esperar los 45 s del refresco ni recargar la página.
+  const [actualizando, setActualizando] = useState(false);
+  const actualizarAhora = async () => {
+    setActualizando(true);
+    try {
+      await fetchData();
+    } finally {
+      setActualizando(false);
+    }
+  };
 
   const fetchData = async (signal) => {
     const fecha = selectedDate;
@@ -394,23 +423,6 @@ export default function DispatcherPanel() {
     setNuevaPlaca(''); setNuevoChofer(''); setMostrarAgregarCamion(false);
   };
 
-  const cargarPrueba = async () => {
-    const n = Number(nPruebaPedidos);
-    if (!n || n < 1) return;
-    if (!window.confirm(
-      `Esto va a borrar todas las rutas de ${selectedDate} (incluidas las ya despachadas) y crear ${n} pedidos de prueba. ¿Continuar?`
-    )) return;
-    setCargandoPrueba(true);
-    try {
-      const data = await cargarPruebaPedidos(selectedDate, n);
-      if (data.status === 'success') {
-        setMostrarCargarPrueba(false);
-        await fetchData();
-        avisar(`${n} pedidos de prueba cargados para ${selectedDate}.`, 'exito');
-      } else avisar(data.message, 'error');
-    } catch { avisar('No se pudieron cargar los pedidos de prueba.', 'error'); }
-    finally { setCargandoPrueba(false); }
-  };
 
   const toggleAlerta = async (alerta) => {
     if (alertaAbierta === alerta.id) { setAlertaAbierta(null); setSugerencias(null); return; }
@@ -461,6 +473,9 @@ export default function DispatcherPanel() {
         estadoSync={syncStatus}
         tipoSync={syncStatusTipo}
         onSalir={() => navigate('/')}
+        jornada={jornada}
+        onActualizar={actualizarAhora}
+        actualizando={actualizando}
       />
 
       <main className="max-w-[1700px] mx-auto px-5 py-5 space-y-5">
@@ -616,41 +631,13 @@ export default function DispatcherPanel() {
                   >
                     <Plus className="h-3.5 w-3.5" /> Agregar camión
                   </button>
-                  <button
-                    onClick={() => setMostrarCargarPrueba((v) => !v)}
-                    title="Cargar pedidos de prueba, sin depender de SAP"
-                    className="flex items-center gap-1.5 text-[11px] font-semibold text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition rounded-lg px-3 py-1.5"
-                  >
-                    <FlaskConical className="h-3.5 w-3.5" /> Datos de prueba
-                  </button>
                 </div>
 
-                {mostrarCargarPrueba && (
-                  <div className="bg-purple-50 border border-purple-200 rounded-lg p-2.5 space-y-2">
-                    <p className="text-[10px] text-purple-700">
-                      Carga pedidos con destinos reales del Excel de SAP, sin depender de la conexión a SAP. Borra las rutas del día.
-                    </p>
-                    <div className="flex gap-1.5">
-                      <input
-                        type="number" min="1" value={nPruebaPedidos}
-                        onChange={(e) => setNPruebaPedidos(e.target.value)}
-                        className="w-20 px-2.5 py-1.5 bg-white border border-purple-200 rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-purple-200"
-                      />
-                      <button
-                        onClick={cargarPrueba} disabled={cargandoPrueba}
-                        className="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs py-1.5 rounded-md transition disabled:opacity-40"
-                      >
-                        {cargandoPrueba ? 'Cargando…' : `Cargar ${nPruebaPedidos} pedidos`}
-                      </button>
-                      <button
-                        onClick={() => setMostrarCargarPrueba(false)}
-                        className="px-3 bg-white border border-gray-200 text-gray-500 font-bold text-xs py-1.5 rounded-md hover:bg-gray-100 transition"
-                      >
-                        Cancelar
-                      </button>
-                    </div>
-                  </div>
-                )}
+                {/* Se quitó el botón "Datos de prueba": borraba TODAS las rutas
+                    del día, incluidas las ya despachadas, y estaba a un clic de
+                    cualquiera que abriera el panel. Ahora que SAP está conectado
+                    hay datos reales con qué probar; si hace falta simular, se
+                    corre desde la consola con `manage.py cargar_prueba`. */}
 
                 {mostrarAgregarCamion && (
                   <div className="bg-gray-50 border border-gray-200 rounded-lg p-2.5 space-y-2">

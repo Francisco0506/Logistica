@@ -137,7 +137,6 @@ def max_paradas(placa):
     camion = POR_PLACA.get(placa)
     return camion["max_paradas"] if camion else MAX_PARADAS_DESCONOCIDO
 
-
-def placas_activas_por_default():
-    """Las que el panel prende solo al abrir."""
-    return [c["placa"] for c in CAMIONES if c["activo_default"]]
+# Se quitó `placas_activas_por_default()`: nadie la llamaba. El panel recibe la
+# flota completa por /dispatcher/flota y decide él cuáles prender con el campo
+# `activo_default` de cada camión.

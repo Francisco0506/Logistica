@@ -1,5 +1,5 @@
 import React from 'react';
-import { User, LogOut } from 'lucide-react';
+import { User, LogOut, RefreshCw } from 'lucide-react';
 import LabenLogo from '../../../components/LabenLogo';
 
 // Cómo se ve el estado de la conexión con SAP. El texto largo va en el `title`
@@ -18,8 +18,17 @@ export default function HeaderDespacho({
   estadoSync,
   tipoSync,
   onSalir,
+  jornada,
+  onActualizar,
+  actualizando = false,
 }) {
   const estilo = ESTILOS_SYNC[tipoSync] || ESTILOS_SYNC.cargando;
+
+  // La fecha del panel no es la de hoy y eso confunde si no se explica: lo que
+  // sale hoy se capturó ayer (ver docs/flujo-documentos-sap.md). Se avisa junto
+  // al selector, y solo mientras se esté viendo el día que el backend propuso —
+  // si el usuario se mueve a otra fecha a mano, el aviso estorba.
+  const enJornada = jornada && jornada.fecha_carga === fecha;
 
   // Pegado arriba: la página se recorre hacia abajo y la fecha y el estado de
   // SAP tienen que seguir a la vista sin importar dónde vayas.
@@ -31,13 +40,35 @@ export default function HeaderDespacho({
       </div>
 
       <div className="flex items-center gap-4">
-        <input
-          type="date"
-          value={fecha}
-          onChange={(e) => onFecha(e.target.value)}
-          title="Día que se está viendo y sincronizando"
-          className="text-xs font-semibold text-gray-700 bg-gray-100 border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-orange-200"
-        />
+        <div className="flex flex-col items-end">
+          <input
+            type="date"
+            value={fecha}
+            onChange={(e) => onFecha(e.target.value)}
+            title="Día que se está viendo y sincronizando"
+            className="text-xs font-semibold text-gray-700 bg-gray-100 border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-orange-200"
+          />
+          {enJornada && (
+            <span
+              title={jornada.explicacion}
+              className="text-[10px] text-gray-500 mt-0.5 max-w-[15rem] truncate"
+            >
+              {jornada.explicacion}
+            </span>
+          )}
+        </div>
+
+        {onActualizar && (
+          <button
+            onClick={onActualizar}
+            disabled={actualizando}
+            title="Traer lo que almacén haya capturado desde la última vez, sin recargar la página"
+            className="flex items-center gap-1.5 text-xs font-bold text-gray-600 hover:text-orange-600 hover:bg-orange-50 disabled:opacity-50 border border-gray-200 rounded-lg px-2.5 py-1.5 transition"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${actualizando ? 'animate-spin' : ''}`} />
+            {actualizando ? 'Buscando…' : 'Actualizar'}
+          </button>
+        )}
 
         <div title={estadoSync} className={`flex items-center gap-2 rounded-lg px-3 py-1 border ${estilo.caja}`}>
           <span className={`w-2 h-2 rounded-full ${estilo.punto}`} />
