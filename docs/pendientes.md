@@ -124,7 +124,19 @@ las respuestas de arriba.
   de las 60 que tenían coordenada, con el camión más cargado en 840 kg de 6,000.
   Ni la capacidad ni el algoritmo son el problema.
 
-- 🔴 **La captura de la entrega tiene que adelantarse a antes de la salida.**
+- 🔴 **El despachador está pidiendo el día equivocado.** ~~La captura de la
+  entrega tiene que adelantarse~~ — resuelto al medir el ciclo completo, ver
+  [`flujo-documentos-sap.md`](flujo-documentos-sap.md).
+
+  **La entrega capturada hoy sale mañana.** El panel se veía vacío en la mañana
+  porque pedía las entregas *de hoy*, que a las 9 am apenas empiezan a existir
+  (0 a las 09:49 del 28-jul, 27 a las 10:48). Lo que sale esa mañana se capturó
+  ayer y ya está completo desde anoche.
+
+  **Falta cambiarlo:** que el panel abra con el último día con captura en vez de
+  con hoy, y que lo diga claro ("Entregas del 27-jul — salen hoy 28"). No hace
+  falta mover la hora de captura de almacén: el problema era del sistema, no de
+  la operación.
 
   **Decidido (Francisco y Sebastián, 27-jul-2026): el planeador trabaja SIEMPRE
   con órdenes de entrega. No es negociable y no hay ruta alterna por órdenes de
