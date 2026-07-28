@@ -178,11 +178,28 @@ def sync_from_sap(fecha: date):
         # días. Sus 5.20 libras son 2.36 kg, no 5.20 kg, así que tomarlo como
         # kilos lo contaba al doble. Por eso se convierte siempre.
         #
-        # NOTA sobre la pestaña "Datos de compras": ahí vive OTRO peso
-        # (`BWeight1`, el Peso Bruto de la caja del proveedor) con SUS propias
-        # piezas por caja (`NumInBuy`). NO son intercambiables: 61 artículos
-        # tienen NumInSale distinto de NumInBuy. Aquí se usa el de VENTAS, que
-        # es el que corresponde a lo que se factura y se entrega.
+        # CUÁL DE LOS DOS PESOS USAR — la regla, porque es fácil equivocarse:
+        #
+        #   Datos de ventas  -> SWeight1 + NumInSale   <- este, SIEMPRE
+        #   Datos de compras -> BWeight1 + NumInBuy    <- solo de respaldo
+        #
+        # Se usa el de VENTAS porque el renglón de la entrega viene en la unidad
+        # de venta (Pieza, Caja 6 Pz, Kilogramo). Tomar el peso de compras contra
+        # una cantidad de venta mezcla dos escalas: 61 artículos tienen NumInSale
+        # distinto de NumInBuy, empezando por el 2113081, que se compra en caja
+        # de 6 y se vende por pieza.
+        #
+        # EL PESO Y LAS PIEZAS VAN EN PAREJA, de la misma pestaña. BWeight1 con
+        # NumInSale da basura, y SWeight1 con NumInBuy también.
+        #
+        # El respaldo por compras solo entra cuando VENTAS no tiene nada
+        # capturado (hoy 2 artículos). Es preferible el peso bruto de la caja del
+        # proveedor —que además incluye el empaque, y el empaque también viaja en
+        # el camión— a contar el renglón como cero.
+        #
+        # Ojo al leerlo en SAP: 224 de 283 artículos tienen el peso de ventas
+        # IDÉNTICO al de compras porque alguien lo copió. Que coincidan no
+        # significa que sean lo mismo.
         #
         # Medido contra 12,937 renglones de 60 días de la base productiva: la
         # fórmula anterior reportaba 1,457,832 kg contra los 808,469 kg reales
@@ -207,13 +224,24 @@ def sync_from_sap(fecha: date):
                 (
                     SELECT SUM(
                         ISNULL(L.InvQty, L.Quantity)
-                        * (ISNULL(I.SWeight1, 0) / NULLIF(ISNULL(I.NumInSale, 1), 0))
-                        * CASE ISNULL(I.SWght1Unit, 3)
-                              WHEN 1 THEN 0.000001    -- miligramo
-                              WHEN 2 THEN 0.001       -- gramo
-                              WHEN 4 THEN 0.0283495   -- onza
-                              WHEN 5 THEN 0.453592    -- libra
-                              ELSE 1 END              -- kilogramo
+                        * CASE
+                            WHEN ISNULL(I.SWeight1, 0) > 0 THEN
+                                 (I.SWeight1 / NULLIF(ISNULL(I.NumInSale, 1), 0))
+                                 * CASE ISNULL(I.SWght1Unit, 3)
+                                       WHEN 1 THEN 0.000001    -- miligramo
+                                       WHEN 2 THEN 0.001       -- gramo
+                                       WHEN 4 THEN 0.0283495   -- onza
+                                       WHEN 5 THEN 0.453592    -- libra
+                                       ELSE 1 END              -- kilogramo
+                            ELSE
+                                 (ISNULL(I.BWeight1, 0) / NULLIF(ISNULL(I.NumInBuy, 1), 0))
+                                 * CASE ISNULL(I.BWght1Unit, 3)
+                                       WHEN 1 THEN 0.000001
+                                       WHEN 2 THEN 0.001
+                                       WHEN 4 THEN 0.0283495
+                                       WHEN 5 THEN 0.453592
+                                       ELSE 1 END
+                          END
                     )
                     FROM DLN1 L
                     LEFT JOIN OITM I ON I.ItemCode = L.ItemCode
@@ -251,16 +279,26 @@ def sync_from_sap(fecha: date):
                 SELECT L.DocEntry, L.LineNum, L.ItemCode, L.Dscription,
                        L.Quantity, L.unitMsr,
                        -- peso de UNA unidad de este renglón, no de la caja:
-                       -- misma corrección de unidades que el total de arriba,
-                       -- incluida la conversión a kilos (hay pesos en libras).
-                       (ISNULL(I.SWeight1, 0) / NULLIF(ISNULL(I.NumInSale, 1), 0))
-                           * ISNULL(L.NumPerMsr, 1)
-                           * CASE ISNULL(I.SWght1Unit, 3)
-                                 WHEN 1 THEN 0.000001
-                                 WHEN 2 THEN 0.001
-                                 WHEN 4 THEN 0.0283495
-                                 WHEN 5 THEN 0.453592
-                                 ELSE 1 END AS SWeight1
+                       -- misma cuenta que el total de arriba, con su conversión
+                       -- a kilos y su respaldo por datos de compras.
+                       ISNULL(L.NumPerMsr, 1) * CASE
+                           WHEN ISNULL(I.SWeight1, 0) > 0 THEN
+                                (I.SWeight1 / NULLIF(ISNULL(I.NumInSale, 1), 0))
+                                * CASE ISNULL(I.SWght1Unit, 3)
+                                      WHEN 1 THEN 0.000001
+                                      WHEN 2 THEN 0.001
+                                      WHEN 4 THEN 0.0283495
+                                      WHEN 5 THEN 0.453592
+                                      ELSE 1 END
+                           ELSE
+                                (ISNULL(I.BWeight1, 0) / NULLIF(ISNULL(I.NumInBuy, 1), 0))
+                                * CASE ISNULL(I.BWght1Unit, 3)
+                                      WHEN 1 THEN 0.000001
+                                      WHEN 2 THEN 0.001
+                                      WHEN 4 THEN 0.0283495
+                                      WHEN 5 THEN 0.453592
+                                      ELSE 1 END
+                       END AS SWeight1
                 FROM DLN1 L
                 LEFT JOIN OITM I ON I.ItemCode = L.ItemCode
                 WHERE L.DocEntry IN ({marcadores})
