@@ -170,6 +170,20 @@ def sync_from_sap(fecha: date):
         # dividir SWeight1 entre NumInSale (piezas por unidad de venta) da el
         # peso de la pieza y la cuenta cuadra en los dos casos.
         #
+        # Y OJO CON LA UNIDAD DEL PESO: `SWeight1` no siempre está en kilos.
+        # `SWght1Unit` apunta al catálogo OWGT (1 miligramo, 2 gramo, 3
+        # kilogramo, 4 onza, 5 libra). Hoy hay dos artículos capturados en
+        # LIBRAS, y uno de ellos —2113081, QUESO MOZZARELLA WHOLE MILK RALLADO—
+        # es el que más se entrega de todo el catálogo: 359 renglones en 60
+        # días. Sus 5.20 libras son 2.36 kg, no 5.20 kg, así que tomarlo como
+        # kilos lo contaba al doble. Por eso se convierte siempre.
+        #
+        # NOTA sobre la pestaña "Datos de compras": ahí vive OTRO peso
+        # (`BWeight1`, el Peso Bruto de la caja del proveedor) con SUS propias
+        # piezas por caja (`NumInBuy`). NO son intercambiables: 61 artículos
+        # tienen NumInSale distinto de NumInBuy. Aquí se usa el de VENTAS, que
+        # es el que corresponde a lo que se factura y se entrega.
+        #
         # Medido contra 12,937 renglones de 60 días de la base productiva: la
         # fórmula anterior reportaba 1,457,832 kg contra los 808,469 kg reales
         # —1.8x— y en el peor pedido se equivocaba por 36x. Solo el 4% de los
@@ -194,6 +208,12 @@ def sync_from_sap(fecha: date):
                     SELECT SUM(
                         ISNULL(L.InvQty, L.Quantity)
                         * (ISNULL(I.SWeight1, 0) / NULLIF(ISNULL(I.NumInSale, 1), 0))
+                        * CASE ISNULL(I.SWght1Unit, 3)
+                              WHEN 1 THEN 0.000001    -- miligramo
+                              WHEN 2 THEN 0.001       -- gramo
+                              WHEN 4 THEN 0.0283495   -- onza
+                              WHEN 5 THEN 0.453592    -- libra
+                              ELSE 1 END              -- kilogramo
                     )
                     FROM DLN1 L
                     LEFT JOIN OITM I ON I.ItemCode = L.ItemCode
@@ -231,9 +251,16 @@ def sync_from_sap(fecha: date):
                 SELECT L.DocEntry, L.LineNum, L.ItemCode, L.Dscription,
                        L.Quantity, L.unitMsr,
                        -- peso de UNA unidad de este renglón, no de la caja:
-                       -- misma corrección de unidades que el total de arriba.
+                       -- misma corrección de unidades que el total de arriba,
+                       -- incluida la conversión a kilos (hay pesos en libras).
                        (ISNULL(I.SWeight1, 0) / NULLIF(ISNULL(I.NumInSale, 1), 0))
-                           * ISNULL(L.NumPerMsr, 1) AS SWeight1
+                           * ISNULL(L.NumPerMsr, 1)
+                           * CASE ISNULL(I.SWght1Unit, 3)
+                                 WHEN 1 THEN 0.000001
+                                 WHEN 2 THEN 0.001
+                                 WHEN 4 THEN 0.0283495
+                                 WHEN 5 THEN 0.453592
+                                 ELSE 1 END AS SWeight1
                 FROM DLN1 L
                 LEFT JOIN OITM I ON I.ItemCode = L.ItemCode
                 WHERE L.DocEntry IN ({marcadores})
