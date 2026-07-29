@@ -300,6 +300,9 @@ def sync_from_sap(fecha: date):
         # Va en UNA sola consulta para todos los pedidos del día en vez de una
         # por pedido: con 80 pedidos serían 80 viajes a SAP.
         doc_entries = [row.DocEntry for row in rows]
+        # Los DocEntry que SAP mandó para este día. Sirve al final para
+        # quitar de la base lo que ya no viene (ver la nota de abajo).
+        doc_entries_sap = set(doc_entries)
         lineas_por_pedido = {}
         if doc_entries:
             marcadores = ",".join("?" * len(doc_entries))
@@ -427,9 +430,35 @@ def sync_from_sap(fecha: date):
                 )
 
             imported_count += 1
-            
+
         conn.close()
+
+        # Lo que ya no está en SAP, tampoco debe quedar aquí.
+        #
+        # Sin esto la base solo crece: guarda lo que llega y nunca suelta lo que
+        # dejó de venir. Así quedaron 19 registros del 29-jul con folios 250xxx
+        # y 251xxx, sobrevivientes de cuando esto leía órdenes de VENTA. Los
+        # números se repiten entre tipos de documento —la orden de venta 251038
+        # de julio y la entrega 251038 de febrero son documentos distintos con el
+        # mismo folio— así que en el panel se veían como entregas de hoy y en SAP
+        # aparecían con fecha de febrero.
+        #
+        # NO se toca lo que ya salió: si una ruta está Cargando, Listo, En_Ruta o
+        # Finalizada, sus pedidos se quedan aunque SAP ya no los mande. Borrar un
+        # pedido que va en un camión sería peor que dejar uno de más.
+        DESPACHADAS = ['Cargando', 'Listo', 'En_Ruta', 'Finalizada']
+        sobrantes = (
+            Remision.objects
+            .filter(doc_date=fecha)
+            .exclude(doc_entry__in=doc_entries_sap)
+            .exclude(ruta__estado__in=DESPACHADAS)
+        )
+        borradas = sobrantes.count()
+        sobrantes.delete()
+
         mensaje = f"Sincronizados {imported_count} pedidos reales desde SAP B1."
+        if borradas:
+            mensaje += f" Se quitaron {borradas} que ya no están en SAP."
         if coordenadas_invalidas:
             mensaje += (
                 f" OJO: {len(coordenadas_invalidas)} destino(s) traen coordenadas"
