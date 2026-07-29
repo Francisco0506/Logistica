@@ -115,9 +115,14 @@ class JornadaOut(Schema):
 
 
 @router.get("/jornada", response=JornadaOut)
-def get_jornada(request):
+def get_jornada(request, reparto: date = None):
     """
     Qué día de entregas hay que planear AHORITA.
+
+    Con `reparto` contesta otra pregunta: "quiero ver el reparto de ESTE día,
+    ¿qué documentos le tocan?". Es lo que usa el selector de fecha del panel,
+    que muestra el día en que SALE la mercancía —que es como piensa cualquiera—
+    y no el día en que se capturó el documento, que es como está guardada.
 
     La regla de fondo: **la entrega capturada un día sale al siguiente**. Se
     surte y se captura de 6 am a 7 pm —el 99.9% antes de las 20:00, con picos a
@@ -144,6 +149,35 @@ def get_jornada(request):
     """
     ahora = timezone.localtime()
     hoy = ahora.date()
+
+    if reparto is not None:
+        # El usuario eligió un día de reparto: hay que decirle de qué día son
+        # los documentos. Se busca hacia atrás el último día CON entregas antes
+        # de esa fecha —normalmente el día anterior, pero el lunes es el sábado.
+        fecha_carga = None
+        entregas = 0
+        for dias in range(1, 8):
+            candidata = reparto - timedelta(days=dias)
+            n = Remision.objects.filter(doc_date=candidata).count()
+            if n:
+                fecha_carga, entregas = candidata, n
+                break
+        if fecha_carga is None:
+            fecha_carga = reparto - timedelta(days=1)
+        return {
+            "fecha_carga": fecha_carga.isoformat(),
+            "fecha_reparto": reparto.isoformat(),
+            "entregas": entregas,
+            "para": "hoy" if reparto == hoy else ("mañana" if reparto == hoy + timedelta(days=1) else "otro"),
+            "explicacion": (
+                f"Reparto del {reparto:%d-%b} — son las entregas capturadas el "
+                f"{fecha_carga:%d-%b}."
+                if entregas else
+                f"No hay entregas cargadas para el reparto del {reparto:%d-%b}. "
+                f"Sincroniza el {fecha_carga:%d-%b}, que es el día en que se capturan."
+            ),
+        }
+
     preparando_mañana = ahora.hour >= HORA_CORTE_JORNADA
 
     if preparando_mañana:

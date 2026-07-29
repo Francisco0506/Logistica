@@ -18,6 +18,7 @@ export default function HeaderDespacho({
   estadoSync,
   tipoSync,
   onSalir,
+  onFechaReparto,
   jornada,
   onActualizar,
   actualizando = false,
@@ -61,14 +62,18 @@ export default function HeaderDespacho({
           )}
 
           <div className="flex flex-col items-end">
+            {/* Muestra el día en que SALE la mercancía, no el día del documento.
+                Antes mostraba el del documento y al poner "30" para ver el
+                reparto de mañana el panel salía vacío, porque esos pedidos
+                están guardados bajo el "29". El backend traduce. */}
             <input
               type="date"
-              value={fecha}
-              onChange={(e) => onFecha(e.target.value)}
-              title="Día en que se CAPTURARON las entregas, no el día que salen"
+              value={jornada?.fecha_reparto || fecha}
+              onChange={(e) => (onFechaReparto || onFecha)(e.target.value)}
+              title="Día en que SALEN los camiones"
               className="text-xs font-semibold text-gray-700 bg-gray-100 border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-orange-200"
             />
-            {enJornada && (
+            {jornada && (
               <span
                 title={jornada.explicacion}
                 className="text-[10px] text-gray-500 mt-0.5 max-w-[17rem] truncate"

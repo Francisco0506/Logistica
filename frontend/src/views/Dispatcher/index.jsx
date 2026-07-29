@@ -151,6 +151,23 @@ export default function DispatcherPanel() {
     return () => controller.abort();
   }, []);
 
+  // El selector de fecha muestra el día en que SALE la mercancía, que es como
+  // piensa cualquiera. Por dentro los pedidos están guardados con la fecha en
+  // que se CAPTURÓ el documento, que es el día anterior.
+  //
+  // Antes el selector mostraba la fecha del documento: al ponerle "30" para ver
+  // el reparto de mañana, el panel salía vacío porque esos pedidos están
+  // guardados bajo el "29". El backend traduce de una fecha a la otra.
+  const cambiarDiaDeReparto = async (fechaReparto) => {
+    try {
+      const j = await getJornada({ reparto: fechaReparto });
+      setJornada(j);
+      setSelectedDate(j.fecha_carga);
+    } catch {
+      avisar('No se pudo cambiar de día.', 'error');
+    }
+  };
+
   // ── Datos del día + refresco periódico ──
   useEffect(() => {
     const controller = new AbortController();
@@ -474,6 +491,7 @@ export default function DispatcherPanel() {
         tipoSync={syncStatusTipo}
         onSalir={() => navigate('/')}
         jornada={jornada}
+        onFechaReparto={cambiarDiaDeReparto}
         onActualizar={actualizarAhora}
         actualizando={actualizando}
       />

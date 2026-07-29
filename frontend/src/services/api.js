@@ -37,8 +37,9 @@ export async function getPedidosVendedor(fecha, slpCode, { signal } = {}) {
  * docs/flujo-documentos-sap.md.
  * @returns {Promise<{fecha_carga: string, fecha_reparto: string, entregas: number, explicacion: string}>}
  */
-export async function getJornada({ signal } = {}) {
-  const res = await fetch(`${BASE}/jornada`, { signal });
+export async function getJornada({ reparto, signal } = {}) {
+  const url = reparto ? `${BASE}/jornada?reparto=${reparto}` : `${BASE}/jornada`;
+  const res = await fetch(url, { signal });
   if (!res.ok) throw new Error(`Jornada failed: ${res.status}`);
   return res.json();
 }
