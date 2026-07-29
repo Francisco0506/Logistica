@@ -59,7 +59,7 @@ class RutaOut(Schema):
 # 1. Obtener todas las remisiones
 @router.get("/remisiones", response=List[RemisionOut])
 def get_remisiones(request, fecha: date):
-    remisiones = Remision.objects.filter(doc_date=fecha).select_related('destino', 'ruta')
+    remisiones = Remision.objects.reales().filter(doc_date=fecha).select_related('destino', 'ruta')
     
     result = []
     for r in remisiones:
@@ -151,19 +151,21 @@ def get_jornada(request, reparto: date = None):
     hoy = ahora.date()
 
     if reparto is not None:
-        # El usuario eligió un día de reparto: hay que decirle de qué día son
-        # los documentos. Se busca hacia atrás el último día CON entregas antes
-        # de esa fecha —normalmente el día anterior, pero el lunes es el sábado.
-        fecha_carga = None
-        entregas = 0
-        for dias in range(1, 8):
-            candidata = reparto - timedelta(days=dias)
-            n = Remision.objects.filter(doc_date=candidata).count()
-            if n:
-                fecha_carga, entregas = candidata, n
-                break
-        if fecha_carga is None:
-            fecha_carga = reparto - timedelta(days=1)
+        # De qué día son los documentos de ESE reparto: el día hábil anterior.
+        #
+        # Antes esto buscaba hacia atrás "el último día que tuviera entregas", y
+        # estaba mal: al pedir el reparto del 1-ago —que todavía no tiene nada
+        # capturado— se iba hasta el 29-jul y mostraba los pedidos de ese día
+        # como si fueran los del 1. Datos viejos presentados como si fueran del
+        # día que se pidió, que es peor que no mostrar nada.
+        #
+        # Ahora es el día anterior y punto; si cae domingo se toma el sábado,
+        # que es el único día sin captura. Si ese día no tiene entregas, se
+        # devuelve 0 y se dice, en vez de rellenar con otra fecha.
+        fecha_carga = reparto - timedelta(days=1)
+        if fecha_carga.weekday() == 6:      # domingo
+            fecha_carga -= timedelta(days=1)
+        entregas = Remision.objects.reales().filter(doc_date=fecha_carga).count()
         return {
             "fecha_carga": fecha_carga.isoformat(),
             "fecha_reparto": reparto.isoformat(),
@@ -173,8 +175,8 @@ def get_jornada(request, reparto: date = None):
                 f"Reparto del {reparto:%d-%b} — son las entregas capturadas el "
                 f"{fecha_carga:%d-%b}."
                 if entregas else
-                f"No hay entregas cargadas para el reparto del {reparto:%d-%b}. "
-                f"Sincroniza el {fecha_carga:%d-%b}, que es el día en que se capturan."
+                f"Todavía no hay entregas capturadas el {fecha_carga:%d-%b}, que "
+                f"son las que saldrían el {reparto:%d-%b}."
             ),
         }
 
@@ -184,7 +186,7 @@ def get_jornada(request, reparto: date = None):
         # Lo que se captura hoy sale mañana.
         fecha_carga = hoy
         fecha_reparto = hoy + timedelta(days=1)
-        entregas = Remision.objects.filter(doc_date=fecha_carga).count()
+        entregas = Remision.objects.reales().filter(doc_date=fecha_carga).count()
         explicacion = (
             f"Preparando MAÑANA {fecha_reparto:%d-%b}: son las entregas que se "
             f"están capturando hoy. Siguen llegando hasta las 7 de la noche."
@@ -201,7 +203,7 @@ def get_jornada(request, reparto: date = None):
     entregas = 0
     for dias in range(1, 8):
         candidata = hoy - timedelta(days=dias)
-        n = Remision.objects.filter(doc_date=candidata).count()
+        n = Remision.objects.reales().filter(doc_date=candidata).count()
         if n:
             fecha_carga, entregas = candidata, n
             break
@@ -336,7 +338,7 @@ def evaluar_escenarios(request, payload: EscenariosIn):
     if not payload.camiones:
         return {"status": "error", "message": "Activa al menos un camión."}
 
-    total_pedidos = Remision.objects.filter(doc_date=payload.fecha).count()
+    total_pedidos = Remision.objects.reales().filter(doc_date=payload.fecha).count()
 
     def _cuantos_caben(camiones, horas, salida):
         res = solve_vrp(
@@ -528,7 +530,7 @@ class AlertaOut(Schema):
 
 @router.get("/alertas", response=List[AlertaOut])
 def get_alertas(request, fecha: date):
-    remisiones = Remision.objects.filter(doc_date=fecha, estado='Pendiente').select_related('destino')
+    remisiones = Remision.objects.reales().filter(doc_date=fecha, estado='Pendiente').select_related('destino')
     alertas = []
     for r in remisiones:
         sin_geo = not r.destino or r.destino.latitude is None or r.destino.longitude is None

@@ -57,7 +57,28 @@ class Destino(models.Model):
         return f"{self.card_code} - {self.ship_to_code}"
 
 
+# Folio a partir del cual un pedido es de PRUEBA, no de SAP.
+#
+# El botón "Datos de prueba" —ya eliminado— creaba pedidos con folios 8500000 en
+# adelante. Los reales de SAP andan por el 250000-266000, así que no se cruzan.
+#
+# El candado se queda aunque ya no haya forma de crearlos: el 29-jul-2026
+# aparecieron 80 de estos mezclados con los reales del día, sobrevivientes de la
+# última vez que alguien apretó ese botón. Se ven idénticos a un pedido real en
+# el panel —mismo formato, destinos reales— pero traen pesos inventados, así que
+# ensucian el plan sin que se note.
+FOLIO_PRUEBA_MIN = 8500000
+
+
+class RemisionQuerySet(models.QuerySet):
+    def reales(self):
+        """Solo lo que vino de SAP. Deja fuera cualquier pedido de prueba."""
+        return self.filter(doc_num__lt=FOLIO_PRUEBA_MIN)
+
+
 class Remision(models.Model):
+    objects = RemisionQuerySet.as_manager()
+
     ESTADOS = [
         ('Pendiente', 'Listo en almacén'),
         ('Asignado', 'En preparación'),

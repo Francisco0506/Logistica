@@ -25,7 +25,7 @@ class VendedorOut(Schema):
 def get_vendedores(request, fecha: date):
     """Vendedores que tienen pedidos ese día, para el selector del panel."""
     filas = (
-        Remision.objects.filter(doc_date=fecha)
+        Remision.objects.reales().filter(doc_date=fecha)
         .values('slp_code', 'slp_name')
         .annotate(pedidos=Count('id'))
         .order_by('slp_name')
@@ -93,7 +93,7 @@ def _rango_eta(eta):
 @router.get("/pedidos", response=List[PedidoVentasOut])
 def get_pedidos_vendedor(request, fecha: date, slp_code: str):
     remisiones = (
-        Remision.objects.filter(doc_date=fecha, slp_code=slp_code)
+        Remision.objects.reales().filter(doc_date=fecha, slp_code=slp_code)
         .select_related('destino', 'ruta')
         .prefetch_related('lineas')
         .order_by('eta', 'doc_num')
@@ -104,7 +104,7 @@ def get_pedidos_vendedor(request, fecha: date, slp_code: str):
     # completas (no solo los pedidos de esta vendedora) porque el camión entrega
     # de todo en el camino, no nada más lo de ella.
     rutas_del_dia = {}
-    for r in Remision.objects.filter(doc_date=fecha, ruta__isnull=False).values(
+    for r in Remision.objects.reales().filter(doc_date=fecha, ruta__isnull=False).values(
         'ruta_id', 'secuencia_ruta', 'estado'
     ):
         rutas_del_dia.setdefault(r['ruta_id'], []).append(r)

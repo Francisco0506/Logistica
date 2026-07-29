@@ -34,7 +34,7 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords, minu
     tocan aquí, para no reasignar pedidos que ya salieron físicamente.
     """
     remisiones = list(
-        Remision.objects.filter(doc_date=fecha, estado__in=['Pendiente', 'Asignado'])
+        Remision.objects.reales().filter(doc_date=fecha, estado__in=['Pendiente', 'Asignado'])
         .exclude(ruta__estado__in=ESTADOS_RUTA_CONGELADOS)
         .select_related('destino', 'ruta')
     )

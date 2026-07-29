@@ -32,8 +32,6 @@ export default function HeaderDespacho({
   //
   // El aviso solo sale mientras se esté viendo el día que el backend propuso: si
   // el usuario se mueve a otra fecha a mano, estorba.
-  const enJornada = jornada && jornada.fecha_carga === fecha;
-  const paraMañana = enJornada && jornada.para === 'mañana';
 
   // Pegado arriba: la página se recorre hacia abajo y la fecha y el estado de
   // SAP tienen que seguir a la vista sin importar dónde vayas.
@@ -46,21 +44,9 @@ export default function HeaderDespacho({
 
       <div className="flex items-center gap-4">
         <div className="flex items-center gap-2">
-          {/* Para qué día se está planeando. Es lo primero que hay que saber al
-              ver el panel: la fecha del selector es la de los DOCUMENTOS, no la
-              del reparto, y sin esto se leen al revés. */}
-          {enJornada && (
-            <span
-              className={`text-[10px] font-bold uppercase tracking-wide rounded-md px-2 py-1 border ${
-                paraMañana
-                  ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
-                  : 'bg-emerald-50 border-emerald-200 text-emerald-700'
-              }`}
-            >
-              {paraMañana ? 'Preparando mañana' : 'Sale hoy'}
-            </span>
-          )}
-
+          {/* Se quitó la etiqueta "Sale hoy / Preparando mañana": el selector ya
+              muestra el día de reparto y el texto de abajo lo explica completo,
+              así que la etiqueta solo repetía lo mismo ocupando el header. */}
           <div className="flex flex-col items-end">
             {/* Muestra el día en que SALE la mercancía, no el día del documento.
                 Antes mostraba el del documento y al poner "30" para ver el
