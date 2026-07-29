@@ -93,12 +93,23 @@ def sync_sap(request, fecha: date):
     return res
 
 
+# Hora a partir de la cual el despachador ya está preparando el día SIGUIENTE.
+#
+# Los camiones salen entre las 7:03 y las 10:35 (medido con GPS, 8 días). Pasada
+# esa hora el plan de hoy ya está en la calle y lo que toca preparar es mañana.
+# Se pone a las 11 para dar margen al día que salen tarde.
+HORA_CORTE_JORNADA = 11
+
+
 class JornadaOut(Schema):
-    # El día cuyas entregas salen HOY. Es el que debe abrir el panel.
+    # El día cuyas entregas hay que planear ahora. Es el que abre el panel.
     fecha_carga: str
-    # Hoy, para el texto "…salen hoy 28-jul".
+    # El día en que esa mercancía sale a la calle.
     fecha_reparto: str
     entregas: int
+    # "hoy" si se está planeando el reparto de hoy, "mañana" si el de mañana.
+    # El panel lo usa para no tener que repetir la lógica de la hora.
+    para: str
     # Explicación lista para mostrar, para que nadie tenga que adivinar.
     explicacion: str
 
@@ -106,20 +117,52 @@ class JornadaOut(Schema):
 @router.get("/jornada", response=JornadaOut)
 def get_jornada(request):
     """
-    Qué día tiene que cargar el despachador esta mañana.
+    Qué día de entregas hay que planear AHORITA.
 
-    NO es "hoy". La entrega capturada un día sale al siguiente: se surte y se
-    captura por la tarde, se factura entre 7 y 9 am, y el camión sale entre 9 y
-    10. Medido contra la base productiva — ver docs/flujo-documentos-sap.md.
+    La regla de fondo: **la entrega capturada un día sale al siguiente**. Se
+    surte y se captura de 6 am a 7 pm —el 99.9% antes de las 20:00, con picos a
+    las 11-12 y a las 15-16— y el camión sale a la mañana siguiente entre las 7
+    y las 10. Medido contra la base productiva; ver docs/flujo-documentos-sap.md.
 
-    Por eso el panel se veía vacío en la mañana: pedía las entregas de hoy, que
-    a las 9 am apenas empiezan a existir (el 28-jul había 0 a las 09:49 y 27 a
-    las 10:48). Lo que sale esa mañana se capturó ayer y ya está completo.
+    De ahí salen dos momentos distintos del día, y el panel tiene que abrir en
+    el correcto o se ve vacío:
 
-    Se busca hacia atrás el último día CON entregas en vez de restar un día,
-    porque el lunes hay que cargar el sábado, no el domingo.
+      ANTES de las 11  ->  el reparto de HOY todavía no sale o va saliendo.
+                           Se planea con las entregas de AYER, que ya están
+                           completas desde anoche.
+
+      DESPUÉS de las 11 -> el reparto de hoy ya está en la calle. Lo que toca
+                           preparar es MAÑANA, con las entregas que se están
+                           capturando HOY.
+
+    Antes esto siempre devolvía "ayer", y por la tarde eso ya no sirve: el
+    despachador quiere adelantar el día siguiente y el panel le mostraba lo que
+    ya se fue.
+
+    El día se busca hacia atrás en vez de restar uno, porque el lunes hay que
+    cargar el sábado y no el domingo.
     """
-    hoy = date.today()
+    ahora = timezone.localtime()
+    hoy = ahora.date()
+    preparando_mañana = ahora.hour >= HORA_CORTE_JORNADA
+
+    if preparando_mañana:
+        # Lo que se captura hoy sale mañana.
+        fecha_carga = hoy
+        fecha_reparto = hoy + timedelta(days=1)
+        entregas = Remision.objects.filter(doc_date=fecha_carga).count()
+        explicacion = (
+            f"Preparando MAÑANA {fecha_reparto:%d-%b}: son las entregas que se "
+            f"están capturando hoy. Siguen llegando hasta las 7 de la noche."
+        )
+        return {
+            "fecha_carga": fecha_carga.isoformat(),
+            "fecha_reparto": fecha_reparto.isoformat(),
+            "entregas": entregas,
+            "para": "mañana",
+            "explicacion": explicacion,
+        }
+
     fecha_carga = None
     entregas = 0
     for dias in range(1, 8):
@@ -148,6 +191,7 @@ def get_jornada(request):
         "fecha_carga": fecha_carga.isoformat(),
         "fecha_reparto": hoy.isoformat(),
         "entregas": entregas,
+        "para": "hoy",
         "explicacion": explicacion,
     }
 

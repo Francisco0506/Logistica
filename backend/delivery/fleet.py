@@ -110,6 +110,40 @@ CAMIONES = [
         "capacidad_kg": 3500, "max_paradas": 25,
         "activo_default": False, "color": "#C026D3",
     },
+    # ── Los que NO son ISUZU y sí reparten ────────────────────────────────
+    # Faltaban aquí y en el filtro de Samsara, así que no salían en el mapa
+    # aunque anduvieran en la calle. Medido con GPS del 14 al 27-jul-2026:
+    # el 022 hizo 1,452 km en 11 días —más que el 013 y el 017, que sí
+    # estaban— y el 029 hizo 424 km en 8 días.
+    #
+    # `capacidad_kg` va ESTIMADA y por lo bajo, a propósito. No se tiene la
+    # tarjeta de circulación de ninguno de los tres, y subestimar solo hace
+    # que el optimizador les cargue de menos; inflarla haría salir un camión
+    # sobrecargado. Confirmar y corregir — está anotado en pendientes §2.
+    {
+        # 2023 HINO 500 (VIN …FL8J…). El rabón Serie 500 va de 9 a 16.5 t de
+        # peso bruto y el 1626 mueve 10.9 t de carga en chasis pelón; con caja
+        # refrigerada baja bastante, así que se pone al nivel del ISUZU más
+        # grande hasta tener el dato real.
+        "placa": "RD9618A", "samsara": "029", "vin": "3HJFL8JT9PS710862",
+        "modelo": "HINO 500 (estimado)", "anio": 2023,
+        "capacidad_kg": 6000, "max_paradas": 25,
+        "activo_default": True, "color": "#0D9488",
+    },
+    {
+        # Nissan NP300 Frontier (VIN 3N6AD35…). Carga útil de fábrica entre
+        # 876 y 1,442 kg según versión; se toma el extremo bajo.
+        "placa": "PP2196A", "samsara": "022", "vin": "3N6AD35A2LK826824",
+        "modelo": "NP300 Frontier (estimado)", "anio": 2020,
+        "capacidad_kg": 1000, "max_paradas": 20,
+        "activo_default": True, "color": "#4F46E5",
+    },
+    {
+        "placa": "PK7256A", "samsara": "020", "vin": "3N6AD3549KK811929",
+        "modelo": "NP300 Frontier (estimado)", "anio": 2019,
+        "capacidad_kg": 1000, "max_paradas": 20,
+        "activo_default": False, "color": "#B45309",
+    },
 ]
 
 POR_PLACA = {c["placa"]: c for c in CAMIONES}

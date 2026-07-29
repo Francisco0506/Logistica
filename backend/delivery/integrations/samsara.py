@@ -2,28 +2,32 @@
 Cliente de solo lectura para la API de Samsara (GPS/telemetría de la flotilla
 real). Nunca hace POST/PUT/PATCH/DELETE — solo consulta ubicación en vivo.
 
-Filtrado a los camiones ISUZU de reparto: son los que de verdad importan para
-el dispatcher (los Nissan/Hino/Freightliner y los 4 vehículos de vendedores
-—Versa, March, KIA— quedan fuera).
+Qué vehículos se muestran: LOS DE LA FLOTA DE REPARTO, sean de la marca que
+sean. Samsara reporta 17 unidades; las que no están en fleet.py son los cuatro
+carros de vendedores (Versa, March, dos KIA) y las unidades que no reparten.
+
+Antes esto tenía su propia lista fija "solo ISUZU", con el comentario de que
+"los Nissan/Hino/Freightliner quedan fuera". Ese criterio resultó equivocado: el
+022 (Frontier) hizo 1,452 km en 11 días —más que dos de los ISUZU que sí
+salían— y el 029 (HINO) andaba en la calle sin aparecer en el mapa. Peor, esa
+lista era una SEGUNDA copia de la flota que había que acordarse de actualizar
+aparte de fleet.py, y por eso se desfasó.
+
+Ahora la flota se lee de fleet.py, que es la única fuente de verdad: dar de alta
+un camión ahí basta para que salga en el mapa.
 """
 import os
 import requests
 
+from .. import fleet
+
 SAMSARA_BASE = "https://api.samsara.com"
 REQUEST_TIMEOUT = 8
 
-# Placa real -> nombre del vehículo en Samsara, solo camiones ISUZU de reparto.
-CAMIONES_ISUZU = {
-    "RH83800": "012",
-    "RJ37663": "013",
-    "RJ57620": "015",
-    "RJ97892": "016",
-    "PR6889B": "017",
-    "PP4873A": "023",
-    "PP4872A": "024",
-    "RA7475A": "027",
+# Nombre del vehículo en Samsara -> placa real, derivado de la flota.
+NOMBRE_A_PLACA = {
+    c["samsara"]: c["placa"] for c in fleet.CAMIONES if c.get("samsara")
 }
-NOMBRE_A_PLACA = {v: k for k, v in CAMIONES_ISUZU.items()}
 
 
 def _headers():

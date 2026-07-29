@@ -13,6 +13,34 @@ try:
 except ImportError:
     HAS_PYODBC = False
 
+
+# México va de la longitud -118 (Baja California) a la -86 (Quintana Roo), y de
+# la latitud 14 (Chiapas) a la 33 (frontera norte). Cualquier cosa fuera de ahí
+# es un error de captura, no un cliente lejano.
+#
+# El caso que lo destapó (28-jul-2026): RANCHO DE LA CRUZ tenía la longitud
+# 100.376191 SIN el signo menos, así que caía en China. OSRM no podía llegar,
+# devolvía tramos nulos y tumbaba el optimizador entero con un error 500 —el
+# despachador solo veía "falló" sin saber por qué.
+#
+# El rango se deja a nivel país a propósito, no al área metropolitana: hay
+# clientes reales en Nuevo Laredo (a 200 km) y en Ciudad Victoria, y acotarlo a
+# Monterrey los estaría tirando por buenos.
+LAT_MEXICO = (14.0, 33.0)
+LNG_MEXICO = (-118.0, -86.0)
+
+
+def _coordenada_creible(lat, lng):
+    """¿Esta coordenada puede ser de un cliente en México?"""
+    try:
+        lat, lng = float(lat), float(lng)
+    except (TypeError, ValueError):
+        return False
+    if lat == 0 or lng == 0:
+        return False
+    return (LAT_MEXICO[0] <= lat <= LAT_MEXICO[1]
+            and LNG_MEXICO[0] <= lng <= LNG_MEXICO[1])
+
 @transaction.atomic
 def sync_from_sap(fecha: date):
     """
@@ -308,6 +336,9 @@ def sync_from_sap(fecha: date):
                 lineas_por_pedido.setdefault(linea.DocEntry, []).append(linea)
 
         imported_count = 0
+        # Coordenadas que SAP trae mal capturadas: se juntan para avisar en
+        # el mismo mensaje del panel, en vez de descartarlas en silencio.
+        coordenadas_invalidas = []
         for row in rows:
             # Crear o actualizar Destino, usando el AdresID real de SAP como clave estable
             destino, _ = Destino.objects.get_or_create(
@@ -338,8 +369,17 @@ def sync_from_sap(fecha: date):
             destino.referencias = getattr(row, "UdfReferencias", None)
 
             if has_geo_udf and getattr(row, "UdfLat", None) and getattr(row, "UdfLng", None):
-                destino.latitude = row.UdfLat
-                destino.longitude = row.UdfLng
+                if _coordenada_creible(row.UdfLat, row.UdfLng):
+                    destino.latitude = row.UdfLat
+                    destino.longitude = row.UdfLng
+                else:
+                    # Coordenada imposible: se descarta y el destino queda como
+                    # "sin georreferencia", que es la alerta que el despachador
+                    # ya sabe leer. Guardarla sería peor que no tenerla —
+                    # mandaría al camión a otro país sin avisar.
+                    coordenadas_invalidas.append(
+                        f"{row.CardCode} {row.Address}: {row.UdfLat}, {row.UdfLng}"
+                    )
             # Si SAP no trae lat/long, NO se geocodifica contra ningún servicio
             # externo (eso mandaría la dirección del cliente a un tercero sin
             # avisar). Se deja sin coordenada y el panel lo marca como alerta
@@ -389,7 +429,15 @@ def sync_from_sap(fecha: date):
             imported_count += 1
             
         conn.close()
-        return {"status": "success", "message": f"Sincronizados {imported_count} pedidos reales desde SAP B1."}
+        mensaje = f"Sincronizados {imported_count} pedidos reales desde SAP B1."
+        if coordenadas_invalidas:
+            mensaje += (
+                f" OJO: {len(coordenadas_invalidas)} destino(s) traen coordenadas"
+                f" imposibles en SAP y se dejaron sin ubicar: "
+                + "; ".join(coordenadas_invalidas[:3])
+                + ("…" if len(coordenadas_invalidas) > 3 else "")
+            )
+        return {"status": "success", "message": mensaje}
         
     except Exception as e:
         return {"status": "error", "message": f"Falló la conexión con SAP B1: {e}"}

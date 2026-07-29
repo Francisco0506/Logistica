@@ -143,12 +143,40 @@ def build_distance_time_matrices(locations, velocidad_kmh_fallback):
     osrm_result, motivo = osrm_table(locations)
     if osrm_result:
         distances_m, durations_s, evito_casetas = osrm_result
-        distance_matrix = [[int(d) for d in row] for row in distances_m]
+
+        # OSRM devuelve `null` en un tramo cuando no puede llegar por calle a
+        # una de las dos puntas. Antes esto tumbaba el optimizador entero con
+        # "int() argument must be... not 'NoneType'", y el despachador solo veía
+        # un error 500 sin pista de cuál destino lo causó.
+        #
+        # Pasa por coordenadas mal capturadas. Caso real del 28-jul-2026: RANCHO
+        # DE LA CRUZ tenía longitud 100.3762 en vez de -100.3762 —le faltaba el
+        # signo— así que caía en China y sus 66 tramos venían nulos.
+        #
+        # Ahora el tramo se estima en línea recta y el plan sigue. Es peor
+        # estimación, pero solo para ese punto, y el destino queda igual de
+        # visible: un cliente en China sale disparado en el mapa.
+        def _metros(i, j, valor):
+            if valor is not None:
+                return int(valor)
+            km = haversine_distance(locations[i][0], locations[i][1],
+                                    locations[j][0], locations[j][1])
+            return int(km * 1000)
+
+        def _minutos(i, j, seg, km_tramo):
+            if seg is not None:
+                return round((seg / 60) * factor_trafico(km_tramo))
+            return round((km_tramo / velocidad_kmh_fallback) * 60)
+
+        distance_matrix = [
+            [_metros(i, j, d) for j, d in enumerate(fila)]
+            for i, fila in enumerate(distances_m)
+        ]
         # round() y no int(): truncar regalaba hasta 59 s por tramo (medido: 0.50
         # min en promedio), y con ~20 tramos por ruta son 10 minutos por camión
         # que desaparecían del plan.
         time_matrix_min = [
-            [round((seg / 60) * factor_trafico(distance_matrix[i][j] / 1000.0))
+            [_minutos(i, j, seg, distance_matrix[i][j] / 1000.0)
              for j, seg in enumerate(fila)]
             for i, fila in enumerate(durations_s)
         ]

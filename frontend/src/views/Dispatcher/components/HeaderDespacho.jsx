@@ -24,11 +24,15 @@ export default function HeaderDespacho({
 }) {
   const estilo = ESTILOS_SYNC[tipoSync] || ESTILOS_SYNC.cargando;
 
-  // La fecha del panel no es la de hoy y eso confunde si no se explica: lo que
-  // sale hoy se capturó ayer (ver docs/flujo-documentos-sap.md). Se avisa junto
-  // al selector, y solo mientras se esté viendo el día que el backend propuso —
-  // si el usuario se mueve a otra fecha a mano, el aviso estorba.
+  // La fecha del panel no es la de hoy y eso confunde si no se explica: la
+  // entrega capturada un día sale al siguiente (ver docs/flujo-documentos-sap.md).
+  // En la mañana el panel prepara el reparto de HOY con las entregas de ayer;
+  // pasadas las 11 ya prepara el de MAÑANA con las de hoy.
+  //
+  // El aviso solo sale mientras se esté viendo el día que el backend propuso: si
+  // el usuario se mueve a otra fecha a mano, estorba.
   const enJornada = jornada && jornada.fecha_carga === fecha;
+  const paraMañana = enJornada && jornada.para === 'mañana';
 
   // Pegado arriba: la página se recorre hacia abajo y la fecha y el estado de
   // SAP tienen que seguir a la vista sin importar dónde vayas.
@@ -40,22 +44,39 @@ export default function HeaderDespacho({
       </div>
 
       <div className="flex items-center gap-4">
-        <div className="flex flex-col items-end">
-          <input
-            type="date"
-            value={fecha}
-            onChange={(e) => onFecha(e.target.value)}
-            title="Día que se está viendo y sincronizando"
-            className="text-xs font-semibold text-gray-700 bg-gray-100 border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-orange-200"
-          />
+        <div className="flex items-center gap-2">
+          {/* Para qué día se está planeando. Es lo primero que hay que saber al
+              ver el panel: la fecha del selector es la de los DOCUMENTOS, no la
+              del reparto, y sin esto se leen al revés. */}
           {enJornada && (
             <span
-              title={jornada.explicacion}
-              className="text-[10px] text-gray-500 mt-0.5 max-w-[15rem] truncate"
+              className={`text-[10px] font-bold uppercase tracking-wide rounded-md px-2 py-1 border ${
+                paraMañana
+                  ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                  : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+              }`}
             >
-              {jornada.explicacion}
+              {paraMañana ? 'Preparando mañana' : 'Sale hoy'}
             </span>
           )}
+
+          <div className="flex flex-col items-end">
+            <input
+              type="date"
+              value={fecha}
+              onChange={(e) => onFecha(e.target.value)}
+              title="Día en que se CAPTURARON las entregas, no el día que salen"
+              className="text-xs font-semibold text-gray-700 bg-gray-100 border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-orange-200"
+            />
+            {enJornada && (
+              <span
+                title={jornada.explicacion}
+                className="text-[10px] text-gray-500 mt-0.5 max-w-[17rem] truncate"
+              >
+                {jornada.explicacion}
+              </span>
+            )}
+          </div>
         </div>
 
         {onActualizar && (
