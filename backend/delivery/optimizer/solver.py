@@ -105,10 +105,24 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
         return {"status": "error", "message": "No hay remisiones válidas para optimizar en esta fecha."}
 
     if data.get('sin_solucion'):
+        cerrados = data.get('remisiones_dia_cerrado', [])
+        sin_geo = data['remisiones_sin_geo']
+        # Dos causas distintas se arreglan de forma distinta, así que se dicen
+        # por separado en vez de un "no hay nada que planear" a secas.
+        partes = []
+        if sin_geo:
+            partes.append(f"{len(sin_geo)} sin coordenadas en SAP")
+        if cerrados:
+            DIAS = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo']
+            partes.append(
+                f"{len(cerrados)} de clientes que no reciben en "
+                f"{DIAS[data['dia_reparto'].weekday()]}"
+            )
         return {
             "status": "error",
-            "message": "Todos los pedidos pendientes carecen de coordenadas. Resuélvelos antes de optimizar.",
-            "pedidos_sin_geo": [r.doc_num for r in data['remisiones_sin_geo']],
+            "message": "No quedó ningún pedido que se pueda rutear: " + " y ".join(partes) + ".",
+            "pedidos_sin_geo": [r.doc_num for r in sin_geo],
+            "pedidos_dia_cerrado": [r.doc_num for r in cerrados],
         }
 
     manager = pywrapcp.RoutingIndexManager(len(data['time_matrix']), data['num_vehicles'], data['depot'])
@@ -345,8 +359,21 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
                 remisiones_no_asignadas, ['estado', 'ruta', 'secuencia_ruta', 'eta']
             )
 
+        # Los clientes que no reciben ese día quedan igual de limpios que los
+        # que no cupieron: si venían 'Asignado' de una corrida anterior contra
+        # una ruta que ésta ya borró, sin esto quedan apuntando a la nada.
+        dia_cerrado = data.get('remisiones_dia_cerrado', [])
+        for remision in dia_cerrado:
+            remision.estado = 'Pendiente'
+            remision.ruta = None
+            remision.secuencia_ruta = None
+            remision.eta = None
+        if dia_cerrado:
+            Remision.objects.bulk_update(dia_cerrado, ['estado', 'ruta', 'secuencia_ruta', 'eta'])
+
         pedidos_no_asignados = [r.doc_num for r in remisiones_no_asignadas]
         pedidos_sin_geo = [r.doc_num for r in data['remisiones_sin_geo']]
+        pedidos_dia_cerrado = [r.doc_num for r in dia_cerrado]
 
         mensajes_fuente = {
             "osrm_sin_casetas": "Rutas generadas con distancias reales de calle, evitando autopistas de cuota.",
@@ -371,6 +398,14 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
             message += f" {len(pedidos_no_asignados)} pedido(s) no cupieron en ninguna ruta: {pedidos_no_asignados}."
         if pedidos_sin_geo:
             message += f" {len(pedidos_sin_geo)} pedido(s) sin coordenadas, no considerados: {pedidos_sin_geo}."
+        if pedidos_dia_cerrado:
+            dia = data['dia_reparto']
+            DIAS = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo']
+            message += (
+                f" {len(pedidos_dia_cerrado)} pedido(s) NO se planearon porque el cliente "
+                f"no recibe en {DIAS[dia.weekday()]}: {pedidos_dia_cerrado}. "
+                f"Hay que moverlos a otro día o corregir el horario en SAP."
+            )
 
         return {
             "status": "success",
@@ -378,5 +413,6 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
             "rutas": rutas_generadas,
             "pedidos_no_asignados": pedidos_no_asignados,
             "pedidos_sin_geo": pedidos_sin_geo,
+            "pedidos_dia_cerrado": pedidos_dia_cerrado,
         }
 

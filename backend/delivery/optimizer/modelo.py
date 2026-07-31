@@ -3,6 +3,7 @@
 Aquí se traducen los pedidos reales a lo que el solver entiende: matriz de
 tiempos y distancias, demandas, ventanas y capacidades.
 """
+from ..api.comun import fecha_reparto_de
 from ..models import Remision
 from ..integrations.osrm import build_distance_time_matrices
 from .reglas import (
@@ -15,6 +16,7 @@ from .reglas import (
     _clave_lugar,
     _ventana_en_minutos,
     _ventana_recortada_a_turno,
+    recibe_ese_dia,
 )
 
 def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords, minutos_turno=MINUTOS_TURNO_MAXIMO, hora_cero=None):
@@ -39,15 +41,27 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords, minu
     # manda varios Ship-To en el mismo punto — duplicados de captura y varios
     # negocios en un mismo domicilio. Ver _clave_lugar para el detalle y las
     # cifras medidas.
+    # El día en que el camión LLEGA, que es contra el que se miden los días en
+    # que cada cliente recibe. No es el día del documento: lo capturado hoy sale
+    # mañana.
+    dia_reparto = fecha_reparto_de(fecha)
+
     grupos_por_lugar = {}
     remisiones_sin_geo = []
+    remisiones_dia_cerrado = []
     for r in remisiones:
-        if r.destino and r.destino.latitude is not None and r.destino.longitude is not None:
-            grupos_por_lugar.setdefault(_clave_lugar(r.destino), []).append(r)
-        else:
+        if not (r.destino and r.destino.latitude is not None and r.destino.longitude is not None):
             # Nunca se asignan silenciosamente: se reportan para que el dispatcher
             # los vea y pueda resolverlos (geocodificar manualmente, etc.)
             remisiones_sin_geo.append(r)
+        elif not recibe_ese_dia(r.destino, dia_reparto):
+            # El cliente no recibe ese día. Se saca del plan y se REPORTA, igual
+            # que los que no tienen coordenada: mandarle un camión a una puerta
+            # cerrada gasta una parada que sí ocupaba alguien más, y no decirlo
+            # dejaría al despachador buscando por qué ese pedido no aparece.
+            remisiones_dia_cerrado.append(r)
+        else:
+            grupos_por_lugar.setdefault(_clave_lugar(r.destino), []).append(r)
 
     # Nodo 0 es el CEDIS
     locations = [depot_coords]
@@ -79,7 +93,12 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords, minu
         remisiones_validas.append(remisiones_del_lugar)
 
     if len(locations) <= 1:
-        return {'sin_solucion': True, 'remisiones_sin_geo': remisiones_sin_geo}
+        return {
+            'sin_solucion': True,
+            'remisiones_sin_geo': remisiones_sin_geo,
+            'remisiones_dia_cerrado': remisiones_dia_cerrado,
+            'dia_reparto': dia_reparto,
+        }
 
     distance_matrix, time_matrix, fuente_matriz = build_distance_time_matrices(locations, VELOCIDAD_PROMEDIO_KMH)
 
@@ -103,6 +122,8 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords, minu
         'depot': 0,
         'remisiones_validas': remisiones_validas,
         'remisiones_sin_geo': remisiones_sin_geo,
+        'remisiones_dia_cerrado': remisiones_dia_cerrado,
+        'dia_reparto': dia_reparto,
         'fuente_matriz': fuente_matriz,
     }
 

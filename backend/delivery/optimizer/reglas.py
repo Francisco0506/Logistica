@@ -125,6 +125,46 @@ def _ventana_en_minutos(destino, minutos_turno=MINUTOS_TURNO_MAXIMO, hora_cero=N
 DECIMALES_MISMO_LUGAR = 4
 
 
+# Qué campo de `Destino` corresponde a cada día de la semana de Python
+# (lunes = 0 … domingo = 6). El domingo no existe como campo porque no se
+# reparte: ningún cliente tiene capturado si recibe en domingo.
+CAMPO_DIA_ENTREGA = {
+    0: 'ent_lun',
+    1: 'ent_mar',
+    2: 'ent_mie',
+    3: 'ent_jue',
+    4: 'ent_vie',
+    5: 'ent_sab',
+}
+
+
+def recibe_ese_dia(destino, dia):
+    """
+    ¿Este cliente recibe el día en que le tocaría llegar el camión?
+
+    `dia` es la fecha de REPARTO —cuándo llega el camión— no la de captura del
+    documento. Son días distintos: lo capturado hoy sale mañana.
+
+    Hasta ahora el optimizador NUNCA leía estos campos, aunque `Destino` los
+    guarda y tanto SAP como el Excel los llenaban. Medido: 68 de 195 destinos
+    tienen algún día restringido —casi todos "no reciben sábado"— y el sistema
+    les planeaba entregas ese día igual. El camión llegaba a una puerta cerrada.
+    Hoy casi no duele porque sobran camiones; cuando la cobertura suba, cada
+    parada desperdiciada es una que sí ocupaba otro cliente.
+
+    Ante la duda se DEJA PASAR: un destino sin el dato capturado se trata como
+    que sí recibe. Es mejor mandar un camión de más que dejar fuera del reparto
+    a un cliente por un campo que nadie llenó — y como la base productiva no
+    tiene estos UDF (ver docs/pendientes.md §3), ahí todos caen en este caso.
+    """
+    campo = CAMPO_DIA_ENTREGA.get(dia.weekday())
+    if campo is None:
+        # Domingo. No se reparte, pero si alguien fuerza una corrida, que no
+        # se caiga todo el plan: se trata como día hábil.
+        return True
+    return bool(getattr(destino, campo, True))
+
+
 def _clave_lugar(destino):
     """
     Identifica el LUGAR FÍSICO de un destino, no el registro de SAP.

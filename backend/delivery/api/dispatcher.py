@@ -17,7 +17,11 @@ from ..optimizer import (
 )
 from ..integrations.samsara import get_ubicaciones_isuzu
 from ..integrations.sap import sync_from_sap
-from .comun import DEPOT_COORDS, TRANSICIONES_VALIDAS, _rango_eta, _texto_ventana
+from ..optimizer.reglas import recibe_ese_dia
+from .comun import (
+    DEPOT_COORDS, TRANSICIONES_VALIDAS, _rango_eta, _texto_ventana,
+    fecha_reparto_de,
+)
 
 router = Router()
 
@@ -569,14 +573,27 @@ class AlertaOut(Schema):
 @router.get("/alertas", response=List[AlertaOut])
 def get_alertas(request, fecha: date):
     remisiones = Remision.objects.reales().filter(doc_date=fecha, estado='Pendiente').select_related('destino')
+    # El día en que llegaría el camión, para poder decir cuáles quedaron fuera
+    # porque el cliente no recibe ESE día. Sin esto, un pedido que el
+    # optimizador descartó por el día aparecía como "pendiente de asignar" y el
+    # despachador lo intentaba meter a mano una y otra vez.
+    dia = fecha_reparto_de(fecha)
+    DIAS = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo']
+
     alertas = []
     for r in remisiones:
         sin_geo = not r.destino or r.destino.latitude is None or r.destino.longitude is None
+        if sin_geo:
+            motivo = "Sin georreferencia en SAP B1"
+        elif not recibe_ese_dia(r.destino, dia):
+            motivo = f"El cliente no recibe en {DIAS[dia.weekday()]}"
+        else:
+            motivo = "Pendiente de asignar a una ruta"
         alertas.append({
             "id": r.id,
             "doc_num": r.doc_num,
             "card_name": r.card_name,
-            "motivo": "Sin georreferencia en SAP B1" if sin_geo else "Pendiente de asignar a una ruta",
+            "motivo": motivo,
         })
     return alertas
 
