@@ -133,10 +133,13 @@ las respuestas de arriba.
   (0 a las 09:49 del 28-jul, 27 a las 10:48). Lo que sale esa mañana se capturó
   ayer y ya está completo desde anoche.
 
-  **Falta cambiarlo:** que el panel abra con el último día con captura en vez de
-  con hoy, y que lo diga claro ("Entregas del 27-jul — salen hoy 28"). No hace
-  falta mover la hora de captura de almacén: el problema era del sistema, no de
-  la operación.
+  ✅ ~~**Falta cambiarlo:** que el panel abra con el último día con captura.~~
+  Hecho (`feba7dc`). `/jornada` decide con la hora: **antes de las 11** planea el
+  reparto de HOY con las entregas de ayer; **después de las 11** prepara MAÑANA
+  con las que se están capturando hoy. El selector de fecha muestra el día en
+  que SALE la mercancía, no el día del documento, y el panel explica cuál está
+  viendo. `fecha_reparto_de` (en `api/comun.py`) es el único calendario y lo
+  comparten el endpoint y el optimizador.
 
   **Decidido (Francisco y Sebastián, 27-jul-2026): el planeador trabaja SIEMPRE
   con órdenes de entrega. No es negociable y no hay ruta alterna por órdenes de
@@ -155,6 +158,42 @@ las respuestas de arriba.
 
   **Lo que hay que definir:** a qué hora queda capturada la entrega, y que esa
   hora sea antes de que salgan los camiones.
+
+- 🟡 **Lo capturado en la mañana sale el MISMO día, y el sistema lo manda al
+  siguiente.** Medido el 31-jul-2026 sobre 3,874 entregas (base de pruebas):
+  qué tan probable es que una entrega se facture el mismo día depende de la
+  hora a la que almacén la capturó.
+
+  | Capturada a las | Facturada el mismo día |
+  |---|---:|
+  | 07h | 100% (59 de 59) |
+  | 09h | 86% (95 de 110) |
+  | 11h | 63% (167 de 267) |
+  | 12h | 37% (188 de 513) |
+  | 16h | 16% (102 de 626) |
+
+  **El corte está cerca de las 11 am**: antes de esa hora la entrega alcanza la
+  facturación de esa misma mañana —o sea, alcanza el camión de ESE día—;
+  después sale al siguiente. El sábado el mismo día son 55%, el lunes 19%.
+
+  `fecha_reparto_de` manda **todo** lo del día X al día X+1. Para el grueso está
+  bien; para las ~365 entregas de la mañana está mal, y son justo las urgentes.
+  Antes de tocar el código hay que **confirmarlo contra productiva** (la
+  consulta está en [`flujo-documentos-sap.md`](flujo-documentos-sap.md)) y
+  preguntar en almacén si esas de la mañana de verdad se suben al camión del
+  día o se quedan para el siguiente. El dato dice cuándo se factura, no cuándo
+  sube al camión — son dos cosas y hoy se están tratando como una.
+
+- ⚪ **La factura puede ser el aviso automático de "el camión salió".** Hoy el
+  despachador tiene que apretar "Salida" a mano, y de eso dependen todas las
+  ETAs recalculadas. Medido: el 90% de las facturas caen entre las 7 y las 10
+  am, que es exactamente cuando el camión ya cargó y va saliendo (ejemplo real:
+  entregas capturadas el 10-jul de 17:19 a 18:58, facturadas el 11-jul a las
+  06:56, 07:15 y 07:27). Si el sync detecta que las entregas de una ruta se
+  facturaron, puede marcar la salida solo. **No sirve como hora exacta** —la
+  factura se emite antes de que el camión arranque— así que serviría de aviso
+  al despachador ("estas ya se facturaron, ¿ya salió el 027?"), no para
+  recalcular ETAs sin que alguien confirme.
 
 - 🔴 **La base productiva NO tiene las ventanas de recibo ni los días de
   entrega.** Los UDF `U_IniRecibo1`, `U_FinRecibo1`, `U_EntLun`…`U_EntSab`

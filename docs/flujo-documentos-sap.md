@@ -103,6 +103,41 @@ Sí sirve para otra cosa: **66 entregas llevan meses sin cerrar** —Pizza DePri
 (8, todas del 26-may), Cervecería Regiomontana (4), una de febrero de 2025— y
 son documentos olvidados que conviene revisar en SAP. No son reparto pendiente.
 
+## Lo capturado en la MAÑANA sale el mismo día
+
+Medido el 31-jul-2026 contra la base de **pruebas** (`DB_LABEN_12072026`, corte
+al 11-jul), 3,874 entregas desde el 1-jun con su factura ligada.
+
+El "22% se factura el mismo día" de arriba no está repartido al azar: depende
+de **la hora a la que almacén capturó la entrega**, y el gradiente es limpio.
+
+| Capturada a las | Facturada el mismo día |
+|---|---:|
+| 07h | 59 de 59 — **100%** |
+| 08h | 87 de 89 — 98% |
+| 09h | 95 de 110 — 86% |
+| 10h | 86 de 107 — 80% |
+| 11h | 167 de 267 — 63% |
+| 12h | 188 de 513 — 37% |
+| 16h | 102 de 626 — **16%** |
+| 18h | 65 de 443 — 15% |
+
+**El corte está cerca de las 11 am.** Lo capturado antes alcanza la facturación
+de esa misma mañana —o sea, alcanza el camión de ESE día—; lo capturado en la
+tarde sale al siguiente.
+
+También cambia por día de la semana: el sábado 202 de 368 se facturan el mismo
+día (55%), contra 185 de 992 el lunes (19%).
+
+**Por qué importa:** `fecha_reparto_de` manda TODO lo capturado el día X al día
+X+1. Para el grueso —que se captura de 12 a 7 pm— está bien. Para las ~365
+entregas de la mañana, no: esas ya salieron el mismo día y el sistema las
+planea para el siguiente. Ver `pendientes.md` §3.
+
+**Falta confirmarlo contra productiva.** Estos números salen de la base de
+pruebas, que es un respaldo congelado. La consulta está al final de este
+documento.
+
 ## Lo que SAP no dice
 
 **No hay ningún campo que diga qué día sale la mercancía.** `DocDate` y
@@ -133,4 +168,18 @@ WHERE D.DocNum = ?
 -- (CreateTS viene como HHMMSS en entero: /10000 da la hora)
 SELECT CreateTS/10000 AS hora, COUNT(*)
 FROM ODLN WHERE DocDate = ? GROUP BY CreateTS/10000 ORDER BY 1
+
+-- El gradiente: por hora de captura, cuántas se facturaron el MISMO día
+-- (DocTime viene como HHMM en entero: /100 da la hora)
+SELECT D.DocTime/100 AS hora_captura, COUNT(*) AS total,
+       SUM(CASE WHEN DATEDIFF(day, D.DocDate, F.DocDate) = 0 THEN 1 ELSE 0 END) AS mismo_dia
+FROM ODLN D
+CROSS APPLY (
+    SELECT TOP 1 I.DocDate
+    FROM INV1 L JOIN OINV I ON I.DocEntry = L.DocEntry
+    WHERE L.BaseEntry = D.DocEntry AND L.BaseType = 15
+    ORDER BY I.DocEntry
+) F
+WHERE D.DocDate >= ?
+GROUP BY D.DocTime/100 ORDER BY 1
 ```
