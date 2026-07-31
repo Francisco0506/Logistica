@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Truck, RefreshCw, Search, AlertCircle, Package, FileText, Clock, Loader, Plus, ChevronDown, ChevronUp } from 'lucide-react';
-import { CEDIS, PALETA_COLORES_CAMION } from '../../config/fleet';
+import { CEDIS } from '../../config/fleet';
+import { colorLibre } from '../../lib/color';
 import { useAviso } from '../../components/useAviso';
 import {
   syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado,
@@ -60,6 +61,8 @@ export default function DispatcherPanel() {
   // ── Flota (fuente única: backend/delivery/fleet.py) ──
   const [trucks, setTrucks]             = useState([]);
   const [ordenFlota, setOrdenFlota]     = useState([]);
+  // La paleta, tal como la manda el backend. Ya no hay copia en el frontend.
+  const [ordenColores, setOrdenColores] = useState([]);
   const [flotaCargada, setFlotaCargada] = useState(false);
 
   // ── Datos del día ──
@@ -131,6 +134,7 @@ export default function DispatcherPanel() {
       .then((flota) => {
         setTrucks(flota.map(aCamionDelPanel));
         setOrdenFlota(flota.map((c) => c.placa));
+        setOrdenColores(flota.map((c) => c.color));
         setFlotaCargada(true);
       })
       .catch((e) => { if (e.name !== 'AbortError') console.error('No se pudo cargar la flota:', e); });
@@ -459,7 +463,15 @@ export default function DispatcherPanel() {
 
   const agregarCamion = () => {
     if (!nuevaPlaca.trim()) return;
-    const color = PALETA_COLORES_CAMION[trucks.length % PALETA_COLORES_CAMION.length];
+    // Un color que NO esté ya en uso. Antes era `PALETA[trucks.length % 8]`
+    // contra una copia de la paleta que vivía en el frontend: esa copia se
+    // quedó en 8 colores mientras el backend creció a 11, y con 11 camiones
+    // `11 % 8 = 3` le daba al camión nuevo el MISMO color que al RJ97892. Dos
+    // camiones del mismo color, encimados en el mismo mapa.
+    //
+    // Los colores de referencia salen de la flota que ya mandó el backend, así
+    // que no hay ninguna copia que mantener sincronizada.
+    const color = colorLibre(trucks.map((t) => t.color), ordenColores);
     setTrucks((prev) => [...prev, {
       id: nuevaPlaca.trim().toUpperCase(),
       driver: nuevoChofer.trim(),

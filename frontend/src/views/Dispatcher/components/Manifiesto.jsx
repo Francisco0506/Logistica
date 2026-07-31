@@ -1,3 +1,4 @@
+import { textoSobre } from '../../../lib/color';
 import React from 'react';
 import { Eye, AlertCircle, Truck, Clock, Package } from 'lucide-react';
 
@@ -56,7 +57,7 @@ export default function Manifiesto({ camionesActivos, paradasDe, onVerPreview })
           return (
             <article key={camion.id} className="rounded-xl border border-gray-200 bg-white overflow-hidden flex flex-col">
               {/* Cabecera con el color del camión */}
-              <header className="px-4 py-3 text-white" style={{ backgroundColor: camion.color }}>
+              <header className="px-4 py-3" style={{ backgroundColor: camion.color, color: textoSobre(camion.color) }}>
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
                     <Truck className="w-4 h-4 flex-shrink-0 opacity-90" />

@@ -2,6 +2,7 @@ import React from 'react';
 import { Truck, ChevronDown, ChevronUp, MapPin, Clock, Power, Check, AlertTriangle } from 'lucide-react';
 import EstadoDespacho from './EstadoDespacho';
 import { etiquetaEstado } from '../../../config/estadosRuta';
+import { textoSobre } from '../../../lib/color';
 
 /**
  * Un camión en el panel: placa, ficha, y al abrirlo el avance de despacho y
@@ -135,7 +136,7 @@ export default function TarjetaCamion({
 
       {abierto && camion.active && (
         <div className="px-3 -mt-1 pb-1">
-          <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-white px-1.5 py-0.5 rounded" style={{ backgroundColor: camion.color }}>
+          <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded" style={{ backgroundColor: camion.color, color: textoSobre(camion.color) }}>
             <MapPin className="w-2.5 h-2.5" /> Viendo esta ruta en el mapa
           </span>
         </div>
@@ -285,9 +286,12 @@ export default function TarjetaCamion({
                         <AlertTriangle className="w-3 h-3 text-white" strokeWidth={3} />
                       </span>
                     ) : (
+                      // El texto se adapta al color de fondo: cinco de los
+                      // once camiones no dan el contraste mínimo con blanco
+                      // encima, empezando por el naranja de Laben.
                       <span
-                        className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0"
-                        style={{ backgroundColor: camion.color }}
+                        className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0"
+                        style={{ backgroundColor: camion.color, color: textoSobre(camion.color) }}
                       >
                         {/* La secuencia del plan, no el índice del arreglo:
                             es el mismo número que el chofer trae en su celular.

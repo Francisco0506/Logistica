@@ -19,10 +19,11 @@
 // cálculo de rutas usa las del backend (fleet.py:CEDIS, el mismo punto).
 export const CEDIS = [25.693214524592616, -100.48167993202988];
 
-// Colores para camiones que el despachador agrega a mano y que por lo tanto no
-// traen color asignado desde el backend. Es la misma paleta de fleet.py, para
-// que un camión agregado no desentone con los ocho de la flota.
-export const PALETA_COLORES_CAMION = [
-  '#EA580C', '#E11D48', '#7C3AED', '#059669',
-  '#2563EB', '#D97706', '#0891B2', '#C026D3',
-];
+// Aquí VIVÍA una copia de la paleta de colores de los camiones, para los que
+// el despachador agrega a mano. Se quitó: era una copia que había que mantener
+// igual a fleet.py y no se mantuvo — se quedó en 8 colores mientras el backend
+// creció a 11, así que no conocía los de los camiones que no son ISUZU.
+//
+// Ahora el color de un camión nuevo se escoge con `lib/color.js:colorLibre()`
+// a partir de la flota que el backend ya mandó, y se garantiza que no choque
+// con ninguno en uso.
