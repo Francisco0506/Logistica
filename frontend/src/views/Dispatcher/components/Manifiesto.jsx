@@ -74,7 +74,7 @@ export default function Manifiesto({ camionesActivos, paradasDe, onVerPreview })
               {/* Los dos números que importan antes de cargar */}
               <div className="grid grid-cols-2 divide-x divide-gray-100 border-b border-gray-100">
                 <div className="px-4 py-2.5">
-                  <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">Carga</div>
+                  <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Carga</div>
                   <div className={`text-sm font-extrabold ${sobrepeso ? 'text-red-600' : 'text-gray-800'}`}>
                     {conPeso.length
                       ? <>{peso.toLocaleString('es-MX', { maximumFractionDigits: 0 })}<span className="text-[11px] font-bold text-gray-400"> {camion.capacidadKg ? `/ ${camion.capacidadKg.toLocaleString('es-MX')} kg` : 'kg · capacidad sin registrar'}</span></>
@@ -90,11 +90,11 @@ export default function Manifiesto({ camionesActivos, paradasDe, onVerPreview })
                   )}
                 </div>
                 <div className="px-4 py-2.5">
-                  <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">En la calle</div>
+                  <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">En la calle</div>
                   <div className="text-sm font-extrabold text-gray-800 tabular-nums">
                     {span || <span className="text-gray-300">—</span>}
                   </div>
-                  <div className="text-[9px] text-gray-400 mt-1 flex items-center gap-1">
+                  <div className="text-[10px] text-gray-400 mt-1 flex items-center gap-1">
                     <Clock className="w-2.5 h-2.5" /> primera y última entrega
                   </div>
                 </div>

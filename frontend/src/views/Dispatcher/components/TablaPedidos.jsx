@@ -108,7 +108,7 @@ export default function TablaPedidos({
                   <td className="px-3 py-2 font-mono font-bold text-gray-800">#{o.doc_num}</td>
                   <td className="px-3 py-2 font-semibold">
                     <div className="truncate max-w-[180px]" title={o.card_name}>{o.card_name}</div>
-                    <div className="text-[9px] text-gray-400 truncate max-w-[180px]">{o.address}</div>
+                    <div className="text-[10px] text-gray-400 truncate max-w-[180px]">{o.address}</div>
                   </td>
                   <td className="px-3 py-2">
                     {o.truck ? (
@@ -125,13 +125,13 @@ export default function TablaPedidos({
                     {o.eta_desde ? (
                       <span className="font-semibold">
                         {/* Ya entregado: la hora es un hecho, no una promesa. */}
-                        {entregado && <span className="text-[9px] font-bold text-emerald-600 uppercase mr-1">Llegó</span>}
+                        {entregado && <span className="text-[10px] font-bold text-emerald-600 uppercase mr-1">Llegó</span>}
                         {o.eta_desde} - {o.eta_hasta}
                       </span>
                     ) : <span className="text-gray-300 italic text-[10px]">—</span>}
                   </td>
                   <td className="px-3 py-2">
-                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
                       CLASE_ESTADO[o.estado] || 'bg-gray-100 text-gray-500'
                     }`}>
                       {entregado && <Check className="w-2.5 h-2.5" strokeWidth={3.5} />}
@@ -156,7 +156,7 @@ export default function TablaPedidos({
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] font-mono font-bold text-gray-400">#{detalle.doc_num}</span>
-                  <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
                     CLASE_ESTADO[detalle.estado] || 'bg-gray-100 text-gray-500'
                   }`}>
                     {detalle.estado?.replace('_', ' ')}

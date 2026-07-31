@@ -569,7 +569,7 @@ export default function DispatcherPanel() {
           ].map((m) => (
             <div key={m.etiqueta} className="bg-white rounded-xl border border-gray-200 px-4 py-3 shadow-sm">
               <div className={`text-2xl font-extrabold leading-none ${m.clase}`}>{m.valor}</div>
-              <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide mt-1.5">{m.etiqueta}</div>
+              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mt-1.5">{m.etiqueta}</div>
             </div>
           ))}
         </section>
@@ -686,7 +686,7 @@ export default function DispatcherPanel() {
                 >
                   <Icono className="h-4 w-4 flex-shrink-0" /> {texto}
                   {badge != null && (
-                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
                       color === 'red' ? 'bg-red-100 text-red-700' : 'bg-white text-gray-500 border border-gray-200'
                     }`}>{badge}</span>
                   )}

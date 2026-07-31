@@ -55,7 +55,7 @@ export default function EstadoDespacho({ ruta, onCambiarEstado, cambiando }) {
                   actual ? 'text-orange-600' : hecho ? 'text-emerald-600' : 'text-gray-300'
                 } ${actual && paso.estado === 'Cargando' ? 'animate-pulse' : ''}`}
               />
-              <span className={`text-[9px] font-bold uppercase tracking-wide ${
+              <span className={`text-[10px] font-bold uppercase tracking-wide ${
                 actual ? 'text-orange-700' : hecho ? 'text-emerald-700' : 'text-gray-300'
               }`}>
                 {paso.etiqueta}
@@ -88,7 +88,7 @@ export default function EstadoDespacho({ ruta, onCambiarEstado, cambiando }) {
             >
               {cambiando ? 'Guardando…' : siguiente.texto}
             </button>
-            <p className="text-[9px] text-gray-400 text-center leading-snug">{siguiente.ayuda}</p>
+            <p className="text-[10px] text-gray-400 text-center leading-snug">{siguiente.ayuda}</p>
           </>
         ) : (
           <p className="text-[10px] text-gray-400 text-center italic py-1">

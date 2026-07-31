@@ -39,7 +39,7 @@ export default function HeaderDespacho({
     <header className="sticky top-0 z-[1100] bg-white/95 backdrop-blur border-b border-gray-200 px-6 py-3 flex items-center justify-between gap-4">
       <div className="flex items-center gap-3">
         <LabenLogo variant="horizontal" />
-        <span className="text-[9px] text-gray-300 font-bold tracking-[.2em] uppercase self-end pb-0.5">· Despacho</span>
+        <span className="text-[10px] text-gray-300 font-bold tracking-[.2em] uppercase self-end pb-0.5">· Despacho</span>
       </div>
 
       <div className="flex items-center gap-4">

@@ -96,7 +96,7 @@ export default function TarjetaCamion({
             {camion.capacidadKg && (
               <span
                 title={`${camion.modelo}: carga hasta ${camion.capacidadKg.toLocaleString()} kg y ha hecho hasta ${camion.maxParadas} entregas en un día (medido con GPS)`}
-                className="text-[9px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded-md flex-shrink-0"
+                className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded-md flex-shrink-0"
               >
                 {(camion.capacidadKg / 1000).toLocaleString('es-MX', { maximumFractionDigits: 1 })} ton · máx {camion.maxParadas}
               </span>
@@ -110,7 +110,7 @@ export default function TarjetaCamion({
         </div>
 
         {camion.active && paradas.length > 0 && (
-          <span className="text-[9px] font-bold bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-md flex-shrink-0">
+          <span className="text-[10px] font-bold bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-md flex-shrink-0">
             {paradas.length} hoy
           </span>
         )}
@@ -135,7 +135,7 @@ export default function TarjetaCamion({
 
       {abierto && camion.active && (
         <div className="px-3 -mt-1 pb-1">
-          <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide text-white px-1.5 py-0.5 rounded" style={{ backgroundColor: camion.color }}>
+          <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-white px-1.5 py-0.5 rounded" style={{ backgroundColor: camion.color }}>
             <MapPin className="w-2.5 h-2.5" /> Viendo esta ruta en el mapa
           </span>
         </div>
@@ -165,7 +165,7 @@ export default function TarjetaCamion({
               </span>
             )}
             {ruta && (
-              <span className={`text-[8px] font-bold uppercase px-1.5 py-0.5 rounded flex-shrink-0 ${
+              <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded flex-shrink-0 ${
                 ruta.estado === 'En_Ruta' ? 'bg-blue-50 text-blue-700'
                 : ruta.estado === 'Finalizada' ? 'bg-emerald-50 text-emerald-700'
                 : ruta.estado === 'Borrador' ? 'bg-gray-100 text-gray-500'
@@ -182,13 +182,13 @@ export default function TarjetaCamion({
               <div className="flex-1 h-1 bg-gray-100 rounded-full overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-all ${
-                    sobrecargado ? 'bg-red-500' : pctCarga > 85 ? 'bg-amber-500' : 'bg-slate-400'
+                    sobrecargado ? 'bg-red-500' : pctCarga > 85 ? 'bg-amber-500' : 'bg-gray-400'
                   }`}
                   style={{ width: `${pctCarga}%` }}
                 />
               </div>
               <span
-                className={`text-[9px] font-bold tabular-nums flex-shrink-0 ${sobrecargado ? 'text-red-600' : 'text-gray-400'}`}
+                className={`text-[10px] font-bold tabular-nums flex-shrink-0 ${sobrecargado ? 'text-red-600' : 'text-gray-400'}`}
                 title={`Salió con ${pesoSalida.toLocaleString('es-MX', { maximumFractionDigits: 0 })} kg de ${camion.capacidadKg.toLocaleString()} kg`}
               >
                 {Math.round(pesoABordo).toLocaleString('es-MX')} kg a bordo
@@ -222,7 +222,7 @@ export default function TarjetaCamion({
                 }`}>
                   {duracionTexto}
                 </span>
-                <span className="block text-[9px] text-gray-400 tabular-nums mt-0.5">
+                <span className="block text-[10px] text-gray-400 tabular-nums mt-0.5">
                   {!ruta?.hora_salida && '~'}{inicioRuta}–{finRuta}
                 </span>
               </span>
@@ -286,7 +286,7 @@ export default function TarjetaCamion({
                       </span>
                     ) : (
                       <span
-                        className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0"
+                        className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0"
                         style={{ backgroundColor: camion.color }}
                       >
                         {/* La secuencia del plan, no el índice del arreglo:

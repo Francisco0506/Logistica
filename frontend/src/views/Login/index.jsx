@@ -21,7 +21,7 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-gray-50 relative overflow-hidden font-sans p-6">
+    <div className="min-h-screen w-full flex items-center justify-center bg-gray-50 relative overflow-hidden p-6">
       
       {/* Se quitaron dos círculos difuminados de fondo: eran el único adorno
           de ese tipo en toda la app y hacían que el login pareciera de otro
