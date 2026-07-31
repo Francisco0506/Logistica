@@ -22,8 +22,14 @@ services:
       POSTGRES_DB: laben_routing
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+    # El puerto de AFUERA es 5432 salvo que la máquina ya tenga un Postgres
+    # nativo ocupándolo — en Windows pasa seguido, y el conflicto no da error:
+    # Docker dice que publicó el puerto, pero las conexiones se van al Postgres
+    # de Windows y fallan con "autentificación password falló". Para moverlo,
+    # poner DB_PUERTO_HOST=5433 en docker/.env (y el mismo valor en DB_PORT
+    # de backend/.env).
     ports:
-      - "5432:5432"
+      - "${DB_PUERTO_HOST:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
