@@ -1,11 +1,24 @@
-Django>=5.0
-django-ninja>=1.0.1
-django-cors-headers>=4.3.1
-psycopg2-binary>=2.9.9
-ortools>=9.8.3296
-python-dotenv>=1.0.1
-requests>=2.31.0
-openpyxl>=3.1.2
+# Versiones ACOTADAS a propósito (>=x,<y en vez de solo >=x).
+#
+# Antes era todo `>=`, o sea "la más nueva que exista el día que instales". Un
+# `pip install` dentro de seis meses traía Django 7 y el proyecto no arrancaba,
+# y dos computadoras instaladas con una semana de diferencia corrían versiones
+# distintas. El tope permite parches de seguridad sin permitir un cambio mayor.
+Django>=5.0,<6.0
+django-ninja>=1.0.1,<2.0
+django-cors-headers>=4.3.1,<5.0
+psycopg2-binary>=2.9.9,<3.0
+ortools>=9.8.3296,<10.0
+python-dotenv>=1.0.1,<2.0
+requests>=2.31.0,<3.0
+openpyxl>=3.1.2,<4.0
+
+# Pillow NO es opcional: `Remision.foto` es un ImageField y Django lo exige
+# —sin él ni siquiera corre `migrate`. Faltaba en esta lista, así que el
+# proyecto solo arrancaba en máquinas donde ya estuviera instalado por otro
+# lado. Es el clásico "en mi compu sí jala".
+Pillow>=10.0,<12.0
+
 # Opcional: solo para la conexion real a SAP B1 (SQL Server). sync.py funciona
 # sin el (reporta "SAP no configurado").
-pyodbc>=5.0
+pyodbc>=5.0,<6.0

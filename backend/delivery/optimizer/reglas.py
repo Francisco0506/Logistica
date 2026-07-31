@@ -4,13 +4,9 @@ Están aparte porque son las que se discuten con operación —cuánto dura una
 parada, hasta qué hora se puede entregar, qué cuenta como una sola parada— y
 conviene poder leerlas sin pasar por el código de OR-Tools.
 """
-from datetime import datetime, timedelta
-from ortools.constraint_solver import routing_enums_pb2
-from ortools.constraint_solver import pywrapcp
-from django.db import transaction
-from .. import fleet
-from ..models import Ruta, Remision
-from ..integrations.osrm import build_distance_time_matrices
+from datetime import datetime
+
+from ..models import ESTADOS_RUTA_DESPACHADA
 
 # ==========================================
 # 1. CONSTANTES DE TIEMPO Y CONFIGURACIÓN
@@ -53,7 +49,11 @@ INTERVALO_SALIDA_MINUTOS = 0
 # Estados de Ruta que ya fueron despachados/en proceso físico: nunca se destruyen
 # ni recalculan al re-optimizar, para no reasignarle a otro camión un pedido que
 # ya se cargó o que ya salió a la calle.
-ESTADOS_RUTA_CONGELADOS = ['Cargando', 'Listo', 'En_Ruta', 'Finalizada']
+#
+# La lista vive en models.py, junto a los estados que nombra. Aquí solo se le
+# pone el nombre con el que la conoce el optimizador; antes era una copia, y una
+# copia es algo que se puede olvidar de actualizar.
+ESTADOS_RUTA_CONGELADOS = ESTADOS_RUTA_DESPACHADA
 
 
 def _ventana_en_minutos(destino, minutos_turno=MINUTOS_TURNO_MAXIMO, hora_cero=None):

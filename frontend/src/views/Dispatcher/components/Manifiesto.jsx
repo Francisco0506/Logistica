@@ -47,7 +47,10 @@ export default function Manifiesto({ camionesActivos, paradasDe, onVerPreview })
           const pct = camion.capacidadKg ? Math.min(100, (peso / camion.capacidadKg) * 100) : 0;
           const sobrepeso = camion.capacidadKg && peso > camion.capacidadKg;
 
-          const horas = pedidos.map((o) => o.eta).filter((e) => /^\d{1,2}:\d{2}$/.test(e || '')).sort();
+          // `eta` puede venir en null (todavía sin calcular). El filtro ya lo
+          // contemplaba, pero antes el backend mandaba la palabra 'Pendiente'
+          // en su lugar y este regex era el único que la atajaba.
+          const horas = pedidos.map((o) => o.eta).filter((e) => /^\d{2}:\d{2}$/.test(e || '')).sort();
           const span = horas.length ? `${horas[0]} – ${horas.at(-1)}` : null;
 
           return (
@@ -74,7 +77,7 @@ export default function Manifiesto({ camionesActivos, paradasDe, onVerPreview })
                   <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">Carga</div>
                   <div className={`text-sm font-extrabold ${sobrepeso ? 'text-red-600' : 'text-gray-800'}`}>
                     {conPeso.length
-                      ? <>{peso.toLocaleString('es-MX', { maximumFractionDigits: 0 })}<span className="text-[11px] font-bold text-gray-400"> / {camion.capacidadKg.toLocaleString()} kg</span></>
+                      ? <>{peso.toLocaleString('es-MX', { maximumFractionDigits: 0 })}<span className="text-[11px] font-bold text-gray-400"> {camion.capacidadKg ? `/ ${camion.capacidadKg.toLocaleString('es-MX')} kg` : 'kg · capacidad sin registrar'}</span></>
                       : <span className="text-gray-300">Sin dato</span>}
                   </div>
                   {!!conPeso.length && (

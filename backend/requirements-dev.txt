@@ -1,0 +1,10 @@
+# Lo que hace falta para CORRER LAS PRUEBAS, no para operar el sistema.
+# Va aparte para que el servidor de producción no instale nada de esto.
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   DJANGO_TEST_DB=sqlite python manage.py test
+-r requirements.txt
+
+pytest>=8.0,<9.0
+pytest-django>=4.8,<5.0
+pyflakes>=3.0,<4.0

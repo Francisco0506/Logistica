@@ -4,6 +4,7 @@ Nunca destruye una ruta ya despachada: si el despachador vuelve a optimizar con
 camiones en la calle, esas rutas se respetan y solo se replanea lo que sigue en
 borrador.
 """
+import os
 from datetime import datetime, timedelta
 
 from django.db import transaction
@@ -12,21 +13,27 @@ from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
 from .. import fleet
 from ..models import Remision, Ruta
-from .modelo import build_data_model
+from .modelo import _SoloSimulacion, build_data_model
 from .reglas import (
-    DECIMALES_MISMO_LUGAR,
     ESTADOS_RUTA_CONGELADOS,
     HORA_CERO,
-    INTERVALO_SALIDA_MINUTOS,
     MINUTOS_TURNO_MAXIMO,
-    PESO_ESTIMADO_KG,
     TIEMPO_DESCARGA_MINUTOS,
-    VELOCIDAD_PROMEDIO_KMH,
-    _clave_lugar,
-    _horas_y_minutos,
-    _ventana_en_minutos,
-    _ventana_recortada_a_turno,
 )
+
+# Segundos que el solver se toma para exprimir una corrida normal.
+#
+# 20 s es el valor de operación: con 5 s el guided local search se quedaba corto
+# para las mejoras de 2-opt en rutas largas. Se deja configurable por entorno
+# para que la suite de pruebas —que corre el optimizador de verdad, no una
+# imitación— no tarde un minuto en dar el mismo veredicto:
+#
+#     OPTIMIZER_SEGUNDOS=2 python manage.py test delivery
+#
+# Bajarlo en producción da rutas peores, no rutas equivocadas: el solver
+# entrega la mejor solución que encontró en el tiempo que se le dio.
+SEGUNDOS_SOLVER = int(os.getenv("OPTIMIZER_SEGUNDOS", "20"))
+
 
 def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
               simular=False, segundos_solver=None):
@@ -139,11 +146,29 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
     # entre el camión más cargado y el más ligero, con los mismos kilómetros.
     time_dimension.SetGlobalSpanCostCoefficient(10)
 
+    # La ventana de recibo se mide contra la hora en que el camión LLEGA, pero
+    # el acumulado de la dimensión Time trae ya sumada la descarga de esta misma
+    # parada (el callback de tránsito la lleva dentro, ver build_data_model):
+    # o sea, CumulVar(nodo) es la hora de SALIDA de esa parada.
+    #
+    # Sin corregirlo, la ventana quedaba corrida 12 minutos hacia atrás: a un
+    # cliente que recibe hasta las 13:00 se le rechazaba una llegada a las 12:55
+    # (salida 13:07), y a uno que abre a las 15:00 se le aceptaba una llegada a
+    # las 14:48. El propio código ya reconocía este desfase al restar la
+    # descarga para calcular la ETA (más abajo), pero no aquí — así que el plan
+    # tiraba pedidos que sí cabían y prometía otros a puerta cerrada.
+    #
+    # Se desplaza la ventana en vez de quitar la descarga del callback porque
+    # ahí sí tiene que estar: es tiempo que consume el turno del chofer.
     for location_idx, time_window in enumerate(data['time_windows']):
         if location_idx == data['depot']:
             continue
         index = manager.NodeToIndex(location_idx)
-        time_dimension.CumulVar(index).SetRange(time_window[0], time_window[1])
+        # El tope sigue siendo el turno: salir de una parada después de que se
+        # acabó la jornada no es una opción, aunque el cliente siga abierto.
+        ini = min(time_window[0] + TIEMPO_DESCARGA_MINUTOS, minutos_turno)
+        fin = min(time_window[1] + TIEMPO_DESCARGA_MINUTOS, minutos_turno)
+        time_dimension.CumulVar(index).SetRange(ini, max(ini, fin))
 
     for vehicle_id in range(data['num_vehicles']):
         start_index = routing.Start(vehicle_id)
@@ -203,7 +228,7 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
     # Al simular escenarios se corren varios seguidos, así que ahí se usa un
     # límite más corto: interesa comparar cuántos pedidos caben en cada opción,
     # no exprimir el último minuto de manejo de cada una.
-    search_parameters.time_limit.FromSeconds(segundos_solver or 20)
+    search_parameters.time_limit.FromSeconds(segundos_solver or SEGUNDOS_SOLVER)
 
     solution = routing.SolveWithParameters(search_parameters)
 
@@ -308,8 +333,17 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
         for remision in remisiones_no_asignadas:
             remision.estado = 'Pendiente'
             remision.ruta = None
+            remision.secuencia_ruta = None
+            # La ETA también se borra. Si no, el pedido queda sin camión pero
+            # con la hora de la corrida anterior, y el panel de ventas le sigue
+            # diciendo a la vendedora "llega entre 13:20 y 13:35" de un pedido
+            # que no va en ningún camión — una hora inventada con toda la cara
+            # de ser real.
+            remision.eta = None
         if remisiones_no_asignadas:
-            Remision.objects.bulk_update(remisiones_no_asignadas, ['estado', 'ruta'])
+            Remision.objects.bulk_update(
+                remisiones_no_asignadas, ['estado', 'ruta', 'secuencia_ruta', 'eta']
+            )
 
         pedidos_no_asignados = [r.doc_num for r in remisiones_no_asignadas]
         pedidos_sin_geo = [r.doc_num for r in data['remisiones_sin_geo']]

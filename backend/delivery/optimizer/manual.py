@@ -10,12 +10,9 @@ from django.utils import timezone
 
 from .. import fleet
 from ..models import Remision, Ruta
-from ..integrations.osrm import build_distance_time_matrices, haversine_distance
+from ..integrations.osrm import build_distance_time_matrices
 from .reglas import (
-    DECIMALES_MISMO_LUGAR,
-    ESTADOS_RUTA_CONGELADOS,
     HORA_CERO,
-    INTERVALO_SALIDA_MINUTOS,
     MINUTOS_TURNO_MAXIMO,
     PESO_ESTIMADO_KG,
     TIEMPO_DESCARGA_MINUTOS,
@@ -23,7 +20,6 @@ from .reglas import (
     _clave_lugar,
     _horas_y_minutos,
     _ventana_en_minutos,
-    _ventana_recortada_a_turno,
 )
 
 def recalcular_etas_desde_salida(ruta, depot_coords, salida_dt=None):
@@ -45,7 +41,10 @@ def recalcular_etas_desde_salida(ruta, depot_coords, salida_dt=None):
     ]
     if not remisiones:
         return 0
-    salida_dt = salida_dt or datetime.now()
+    # localtime() y no datetime.now(): con USE_TZ=True, `now()` da la hora del
+    # SERVIDOR. En la compu de desarrollo coincide con Monterrey, pero en
+    # cualquier hosting va en UTC y todas las ETAs saldrían 6 h adelantadas.
+    salida_dt = salida_dt or timezone.localtime()
 
     # Paradas únicas en orden: documentos consecutivos que se entregan en el
     # mismo LUGAR comparten parada (el camión se estaciona una sola vez), aunque
@@ -145,15 +144,21 @@ def sugerir_camiones_para_remision(remision, depot_coords):
             )
             minutos_agregados = costo_con_insercion - costo_actual
 
-            # Hora de llegada al nuevo cliente si se inserta en esta posición:
-            # manejo de parada en parada MÁS la descarga de cada parada previa.
-            # Antes solo se sumaba el manejo, así que la llegada salía ~12 min
-            # optimista por cada parada anterior (con 10 paradas antes, dos
-            # horas de error) y no cuadraba con la ETA que calcula
-            # recalcular_etas_desde_salida.
-            minutos_llegada = sum(
-                time_matrix[k][k + 1] + (TIEMPO_DESCARGA_MINUTOS if k > 0 else 0)
-                for k in range(i + 1)
+            # Hora de llegada al NUEVO cliente si se inserta en esta posición:
+            # manejo de parada en parada hasta la parada `i`, más la descarga de
+            # cada parada previa, más el tramo de `i` al cliente nuevo.
+            #
+            # Ese último tramo es el que estaba mal: se sumaba
+            # time_matrix[i][i+1] —el tramo a la parada SIGUIENTE ya existente,
+            # o el regreso al CEDIS— en vez de time_matrix[i][idx_nuevo], que es
+            # el que de verdad se va a recorrer. Con el pedido nuevo lejos de la
+            # ruta el error llega a media hora, y como de esa hora depende el
+            # flag `en_ventana`, el panel decía "sí cabe" para un cliente al que
+            # el camión llega después de que cierra.
+            minutos_llegada = (
+                sum(time_matrix[k][k + 1] for k in range(i))
+                + i * TIEMPO_DESCARGA_MINUTOS
+                + time_matrix[i][idx_nuevo]
             )
             candidatas.append({
                 "posicion": i,
@@ -175,9 +180,15 @@ def sugerir_camiones_para_remision(remision, depot_coords):
         # con la mitad del camión libre.
         capacidad = fleet.capacidad_kg(ruta.camion)
 
-        # Tiempo total de la ruta si se agrega este pedido, contra el turno de
-        # 6h del camión (aproximado: se asume que ya venía ajustada al turno).
-        duracion_actual = sum(time_matrix[i][i + 1] for i in range(len(puntos) - 1))
+        # Tiempo total de la ruta si se agrega este pedido, contra el turno del
+        # chofer. Cuenta manejo Y descarga: antes solo sumaba el manejo, así que
+        # una ruta de 18 paradas se reportaba en 200 min cuando de verdad va en
+        # 200 + 18x12 = 416 —ya fuera del turno de 360— y el panel decía que
+        # todavía cabían dos horas más de pedidos.
+        duracion_actual = (
+            sum(time_matrix[i][i + 1] for i in range(len(puntos) - 1))
+            + len(paradas_ruta) * TIEMPO_DESCARGA_MINUTOS
+        )
         duracion_con_insercion = duracion_actual + mejor_costo
 
         motivos = []
@@ -256,8 +267,10 @@ def asignar_manualmente(remision, ruta_id, posicion=None, forzar=False):
         return {"status": "error", "message": "Ese camión ya salió a la calle o terminó su ruta, no se le puede agregar nada."}
 
     if not forzar:
-        depot = (25.693214524592616, -100.48167993202988)
-        sugerencias = sugerir_camiones_para_remision(remision, depot)
+        # El CEDIS sale de fleet.py, que es su única fuente de verdad. Aquí
+        # estaba escrito a mano otra vez: si algún día se muda la bodega, una
+        # copia se actualiza y la otra no.
+        sugerencias = sugerir_camiones_para_remision(remision, fleet.CEDIS)
         opcion = next((o for o in sugerencias.get("opciones", []) if o["ruta_id"] == ruta_id), None)
         if opcion and not opcion["factible"]:
             return {
@@ -269,10 +282,16 @@ def asignar_manualmente(remision, ruta_id, posicion=None, forzar=False):
     remisiones_ruta = list(ruta.remisiones.order_by('secuencia_ruta'))
     if posicion is None or posicion > len(remisiones_ruta):
         posicion = len(remisiones_ruta) + 1
+    # Una posición 0 o negativa dejaría dos pedidos con la misma secuencia y el
+    # orden de la ruta pasaría a depender del doc_num, no del plan.
+    posicion = max(1, posicion)
 
-    # Recorrer secuencia para abrir espacio en la posición indicada
+    # Recorrer secuencia para abrir espacio en la posición indicada.
+    # `secuencia_ruta` puede venir en null (un pedido metido a la ruta sin
+    # secuencia), y `None >= 1` truena con TypeError en Python 3. Se tratan
+    # como "sin lugar todavía": no estorban, así que no se recorren.
     for r in remisiones_ruta:
-        if r.secuencia_ruta >= posicion:
+        if r.secuencia_ruta is not None and r.secuencia_ruta >= posicion:
             r.secuencia_ruta += 1
     Remision.objects.bulk_update(remisiones_ruta, ['secuencia_ruta'])
 

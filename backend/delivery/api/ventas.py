@@ -8,6 +8,7 @@ from datetime import date
 from typing import List, Optional
 
 from django.db.models import Count
+from django.utils import timezone
 from ninja import Router, Schema
 
 from ..models import Remision
@@ -68,26 +69,22 @@ class PedidoVentasOut(Schema):
     recibio: Optional[str] = None
     faltantes: List[str] = []
     foto: Optional[str] = None
+    # La firma de quien recibió. Es lo que zanja una aclaración con el cliente
+    # ("nadie recibió eso") sin tener que llamarle al chofer.
+    firma: Optional[str] = None
     # Explicación en lenguaje de vendedora de qué está pasando con su pedido.
     situacion: str
     # True cuando el pedido ya tiene lugar en una ruta del día.
     programado: bool
 
 
-def _rango_eta(eta):
-    """'09:00' -> ('09:00', '09:15'). None si no hay ETA calculada."""
-    if not eta:
-        return None, None
-    try:
-        inicio = datetime.strptime(eta, "%H:%M")
-    except ValueError:
-        # ETAs viejas guardadas en 12 h ("09:00 AM") antes del cambio a 24 h.
-        try:
-            inicio = datetime.strptime(eta, "%I:%M %p")
-        except ValueError:
-            return None, None
-    fin = inicio + timedelta(minutes=MARGEN_ETA_MINUTOS)
-    return inicio.strftime("%H:%M"), fin.strftime("%H:%M")
+# `_rango_eta` vive en comun.py y se importa arriba. Aquí había una COPIA
+# pegada al partir el api.py original, y la copia le ganaba a la importada
+# porque se definía después: como no se trajo `datetime`, `timedelta` ni
+# `MARGEN_ETA_MINUTOS`, este endpoint reventaba con NameError en cuanto un
+# pedido traía ETA. O sea: el panel de ventas nunca funcionó desde la partición.
+# Se borra la copia. El margen de la ETA se define en UN solo lugar
+# (comun.MARGEN_ETA_MINUTOS) para que las dos pantallas prometan lo mismo.
 
 
 @router.get("/pedidos", response=List[PedidoVentasOut])
@@ -127,9 +124,16 @@ def get_pedidos_vendedor(request, fecha: date, slp_code: str):
                 if c['secuencia_ruta'] and c['secuencia_ruta'] < r.secuencia_ruta
             }
             antes = len(secuencias_antes)
+            # Una parada cuenta como HECHA aunque no se haya podido entregar:
+            # la pregunta que contesta este número es "¿ya mero?", o sea cuánto
+            # le falta al camión para llegar. Antes solo contaba 'Entregado', y
+            # una parada donde el cliente estaba cerrado —que el camión sí hizo
+            # y ya dejó atrás— se le reportaba al siguiente cliente como
+            # pendiente: "va en la 2 de 8" cuando el camión ya iba en la 3.
+            VISITADAS = ('Entregado', 'Entregado_Parcial', 'No_Entregado')
             entregadas = len({
                 c['secuencia_ruta'] for c in companeros
-                if c['secuencia_ruta'] in secuencias_antes and c['estado'] == 'Entregado'
+                if c['secuencia_ruta'] in secuencias_antes and c['estado'] in VISITADAS
             })
 
         # Qué renglones quedaron cortos, en palabras: "2 de 3 Queso manchego".
@@ -156,7 +160,7 @@ def get_pedidos_vendedor(request, fecha: date, slp_code: str):
                 if hora_entrega else "Entregado incompleto"
             )
         elif r.estado == 'No_Entregado':
-            situacion = f"NO se pudo entregar" + (f" (se reportó a las {hora_entrega})" if hora_entrega else "")
+            situacion = "NO se pudo entregar" + (f" (se reportó a las {hora_entrega})" if hora_entrega else "")
         elif r.estado == 'Entregado':
             situacion = f"Entregado completo a las {hora_entrega}" if hora_entrega else "Entregado"
         elif r.estado == 'En_Camino':
@@ -199,5 +203,6 @@ def get_pedidos_vendedor(request, fecha: date, slp_code: str):
             "recibio": r.recibio,
             "faltantes": faltantes,
             "foto": r.foto.url if r.foto else None,
+            "firma": r.firma.url if r.firma else None,
         })
     return resultado

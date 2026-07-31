@@ -131,6 +131,25 @@ export async function subirFotoEntrega(remisionId, archivo, { signal } = {}) {
 }
 
 /**
+ * La firma de quien recibe, tal como la trazó en la pantalla del celular.
+ *
+ * `imagen` es el Blob PNG que devuelve el recuadro de firma (PanelFirma).
+ * Va aparte de la confirmación por lo mismo que la foto: si la señal falla al
+ * subirla, la entrega ya quedó registrada de todos modos.
+ */
+export async function subirFirmaEntrega(remisionId, imagen, { signal } = {}) {
+  const datos = new FormData();
+  // El nombre del archivo importa: Django decide la extensión con él, y sin
+  // ella la firma se guarda sin `.png` y el navegador no sabe cómo mostrarla.
+  datos.append('firma', imagen, `firma-${remisionId}.png`);
+  const res = await fetch(`/api/chofer/paradas/${remisionId}/firma`, {
+    method: 'POST', body: datos, signal,
+  });
+  if (!res.ok) throw new Error(`Subir firma failed: ${res.status}`);
+  return res.json();
+}
+
+/**
  * "¿Qué hago para que quepan todos?" — corre el optimizador varias veces
  * cambiando UNA cosa cada vez (salir antes, más turno, otro camión) y regresa
  * cuántos pedidos entrarían en cada caso, ordenado por el que más ayuda.

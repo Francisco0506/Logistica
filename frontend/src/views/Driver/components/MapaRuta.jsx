@@ -155,7 +155,7 @@ export default function MapaRuta({ paradas, siguiente, miPosicion, alto = 'h-[30
             <Popup>
               <b>{p.card_name}</b><br />
               <span style={{ fontSize: 11, color: '#64748b' }}>
-                Parada {p.secuencia_ruta}{p.eta ? ` · llega ${p.eta}` : ''}
+                Parada {p.secuencia_ruta}{p.eta_desde ? ` · llega ${p.eta_desde}-${p.eta_hasta}` : ''}
               </span>
             </Popup>
           </Marker>

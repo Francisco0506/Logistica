@@ -20,12 +20,19 @@ TRANSICIONES_VALIDAS = {
     'Finalizada': [],
 }
 
-# Margen que se le suma a la ETA para presentarla como rango ("entre 09:00 y
-# 09:15") en vez de una hora exacta. Una hora al minuto suena a promesa que no
-# se puede cumplir; el rango dice la verdad: es una estimación.
-# OJO: es un margen de presentación, NO un intervalo de confianza medido. La
-# incertidumbre real es mayor mientras OSRM siga ~25% optimista
-# (ver docs/calibracion-tiempos-osrm.md).
+# Margen que se le pone a la ETA para presentarla como rango en vez de una hora
+# exacta. Va HACIA LOS DOS LADOS: una ETA de 09:00 se muestra como
+# "entre 08:45 y 09:15".
+#
+# Antes solo se sumaba hacia adelante (09:00 → "09:00 a 09:15"), y eso decía que
+# el camión nunca llega antes de la hora calculada, que es falso: llega antes o
+# después, nadie sabe si va a caer a la mera hora. Un rango de un solo lado se
+# lee como una promesa —"a partir de las 09:00"— y el cliente que sale a las
+# 08:50 y no encuentra al camión tiene razón en quejarse.
+#
+# OJO: es un margen de PRESENTACIÓN, no un intervalo de confianza medido. La
+# incertidumbre real es mayor (ver docs/calibracion-tiempos-osrm.md); estos 15
+# minutos son el mínimo honesto, no el error real.
 MARGEN_ETA_MINUTOS = 15
 
 
@@ -66,17 +73,23 @@ def _texto_ventana(destino):
 
 
 def _rango_eta(eta):
-    """'09:00' -> ('09:00', '09:15'). None si no hay ETA calculada."""
+    """
+    '09:00' -> ('08:45', '09:15'). None, None si no hay ETA calculada.
+
+    El rango va a los dos lados de la hora estimada, nunca solo hacia adelante:
+    el camión puede llegar antes o después y no hay forma de saberlo.
+    """
     if not eta:
         return None, None
     try:
-        inicio = datetime.strptime(eta, "%H:%M")
+        centro = datetime.strptime(eta, "%H:%M")
     except ValueError:
         # ETAs viejas guardadas en 12 h ("09:00 AM") antes del cambio a 24 h.
         try:
-            inicio = datetime.strptime(eta, "%I:%M %p")
+            centro = datetime.strptime(eta, "%I:%M %p")
         except ValueError:
             return None, None
-    fin = inicio + timedelta(minutes=MARGEN_ETA_MINUTOS)
-    return inicio.strftime("%H:%M"), fin.strftime("%H:%M")
+    desde = centro - timedelta(minutes=MARGEN_ETA_MINUTOS)
+    hasta = centro + timedelta(minutes=MARGEN_ETA_MINUTOS)
+    return desde.strftime("%H:%M"), hasta.strftime("%H:%M")
 

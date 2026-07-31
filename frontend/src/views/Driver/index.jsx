@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import LabenLogo from '../../components/LabenLogo';
 import { useAviso } from '../../components/useAviso';
-import { getRutas, getRutaChofer, confirmarEntrega, getCamionesGPS, subirFotoEntrega } from '../../services/api';
+import { getRutas, getRutaChofer, confirmarEntrega, getCamionesGPS, subirFotoEntrega, subirFirmaEntrega } from '../../services/api';
 import HojaEntrega from './components/HojaEntrega';
 import MapaRuta from './components/MapaRuta';
 
@@ -91,7 +91,17 @@ export default function DriverApp() {
   }, [camion, fecha]);
 
   const paradas = ruta?.paradas || [];
+  // Paradas ya VISITADAS: el camión pasó por ahí, se haya podido entregar o no.
+  // Es lo que mide el avance de la ruta.
   const hechas = paradas.filter((p) => ESTILO_ESTADO[p.estado]).length;
+  // Las que de verdad se entregaron (completas o a medias). Se cuentan aparte
+  // porque la barra decía "8 de 10 entregas" incluyendo las que NO se
+  // entregaron: el chofer terminaba su turno creyendo que le fue mejor de lo
+  // que le fue, y el número no cuadraba con lo que veía ventas.
+  const entregadas = paradas.filter(
+    (p) => p.estado === 'Entregado' || p.estado === 'Entregado_Parcial',
+  ).length;
+  const completas = paradas.filter((p) => p.estado === 'Entregado').length;
   // La primera que todavía no se reporta. Sin useMemo a propósito: son 20
   // elementos y `paradas` se recrea en cada render, así que memorizarlo no
   // ahorraría nada y solo escondería la dependencia.
@@ -106,19 +116,38 @@ export default function DriverApp() {
   // justo el problema que esta app viene a resolver.
   const puedeEntregar = ruta?.estado === 'En_Ruta';
 
-  const confirmar = async (datos, foto) => {
+  const confirmar = async (datos, foto, firma) => {
     setGuardando(true);
     try {
       const res = await confirmarEntrega(abierta.id, datos);
+
+      // El backend contesta 200 aunque no haya guardado nada (ninja manda los
+      // errores de negocio en el cuerpo, con status 'error'). Antes eso caía al
+      // camino feliz: se cerraba la hoja y se refrescaba como si la entrega
+      // hubiera quedado registrada. En la app cuyo único propósito es que
+      // "Entregado" signifique algo, eso es lo peor que puede pasar.
+      if (res.status === 'error') {
+        avisar(res.message || 'No se pudo guardar la entrega.', 'error');
+        return;
+      }
+
       avisar(res.message, res.estado === 'Entregado' ? 'exito' : 'info');
 
-      // La foto se sube DESPUÉS y aparte: si falla por mala señal, la entrega
-      // ya quedó registrada, que es lo que importa. Solo se avisa del fallo.
+      // La foto y la firma se suben DESPUÉS y aparte: si fallan por mala
+      // señal, la entrega ya quedó registrada, que es lo que importa. Solo se
+      // avisa del fallo.
       if (foto) {
         try {
           await subirFotoEntrega(abierta.id, foto);
         } catch {
           avisar('La entrega se guardó, pero la foto no se pudo subir. Revisa tu señal.', 'error');
+        }
+      }
+      if (firma) {
+        try {
+          await subirFirmaEntrega(abierta.id, firma);
+        } catch {
+          avisar('La entrega se guardó, pero la firma no se pudo subir. Revisa tu señal.', 'error');
         }
       }
       setAbierta(null);
@@ -229,7 +258,10 @@ export default function DriverApp() {
         {!!paradas.length && (
           <div className="px-4 pb-3">
             <div className="flex items-center justify-between text-[11px] font-bold mb-1.5">
-              <span className="text-gray-500">{hechas} de {paradas.length} entregas</span>
+              <span className="text-gray-500">
+                {hechas} de {paradas.length} paradas
+                {hechas > entregadas && ` · ${entregadas} entregadas`}
+              </span>
               <span className="text-gray-400">
                 {ruta?.hora_salida ? `Salió ${ruta.hora_salida}` : 'Sin salir del CEDIS'}
               </span>
@@ -267,7 +299,10 @@ export default function DriverApp() {
             <section className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
               {[
                 { etiqueta: 'Por entregar', valor: pendientes.length, clase: pendientes.length ? 'text-orange-600' : 'text-gray-300' },
-                { etiqueta: 'Entregadas', valor: hechas - incompletas, clase: 'text-emerald-600' },
+                // Solo las completas: este recuadro y "Con problema" tienen que
+                // sumar las paradas hechas sin encimarse, o los cuatro números
+                // no cuadran entre sí.
+                { etiqueta: 'Completas', valor: completas, clase: 'text-emerald-600' },
                 { etiqueta: 'Con problema', valor: incompletas, clase: incompletas ? 'text-amber-600' : 'text-gray-300' },
                 { etiqueta: 'Total del día', valor: paradas.length, clase: 'text-gray-800' },
               ].map((m) => (
@@ -407,9 +442,9 @@ function TarjetaParada({ parada, destacada = false, puedeEntregar = true, onAbri
           <div className="text-[12px] text-gray-400 mt-0.5">{parada.address || 'Sin dirección'}</div>
 
           <div className="flex items-center gap-2.5 mt-1.5 flex-wrap">
-            {parada.eta && (
+            {parada.eta_desde && (
               <span className="text-[11px] font-bold text-gray-500 flex items-center gap-1">
-                <Clock className="w-3 h-3" /> {parada.eta}
+                <Clock className="w-3 h-3" /> {parada.eta_desde}-{parada.eta_hasta}
               </span>
             )}
             {parada.ventana && <span className="text-[11px] text-gray-400">recibe {parada.ventana}</span>}

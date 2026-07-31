@@ -112,7 +112,7 @@ export default function PreviewManifiesto({ camion, paradas, fecha, onCerrar }) 
                     <div className="text-[10px] text-gray-600">#{o.doc_num}{o.address ? ` · ${o.address}` : ''}</div>
                   </td>
                   <td className="py-2 pr-2 text-[10px]">{o.ventana || '—'}</td>
-                  <td className="py-2 pr-2">{o.eta || '—'}</td>
+                  <td className="py-2 pr-2">{o.eta_desde ? `${o.eta_desde}-${o.eta_hasta}` : '—'}</td>
                   <td className="py-2 text-right">{o.peso_kg != null ? o.peso_kg : '—'}</td>
                 </tr>
               ))}

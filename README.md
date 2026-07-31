@@ -41,14 +41,20 @@ npm run dev
 
 El panel del despachador queda en http://localhost:5173/dispatcher
 
-### La primera vez: cargar los destinos
+### Los destinos
 
-Las coordenadas y ventanas de recibo de los 195 Ship-To salen de un Excel de SAP:
+Las coordenadas y ventanas de recibo de cada Ship-To salen de **SAP**, del sync
+normal (`U_Latitud`, `U_Longitud`, `U_IniRecibo1`…). No hay que cargarlos aparte.
 
-```bash
-cd backend
-python manage.py importar_direcciones_excel delivery/data/Carga_direcciones_LineNum_AdresType.xlsx
-```
+Antes se importaban de un Excel (`importar_direcciones_excel`). Ese camino se
+eliminó: la fuente de verdad es SAP y tener dos era justo lo que hacía que un
+sync borrara los horarios cargados por el otro lado. El archivo además traía la
+cartera de clientes reales dentro del repositorio.
+
+> **Ojo:** el Excel sigue existiendo en el HISTORIAL de git. Borrarlo de la
+> rama no lo saca de los commits viejos. Si este repositorio se va a hacer
+> público alguna vez, hay que limpiarlo del historial antes
+> (`git filter-repo`), no basta con este borrado.
 
 ### Probar sin SAP
 

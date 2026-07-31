@@ -367,7 +367,7 @@ export default function MapaRutas({
                   <Popup>
                     <b>{camion.id}</b> — Parada {i + 1}<br />
                     <span style={{ fontSize: 11, color: '#64748b' }}>#{o.doc_num} {o.card_name}</span>
-                    {o.eta && <><br /><span style={{ fontSize: 11, color: '#64748b' }}>Llega {o.eta}</span></>}
+                    {o.eta_desde && <><br /><span style={{ fontSize: 11, color: '#64748b' }}>Llega entre {o.eta_desde} y {o.eta_hasta}</span></>}
                     {o.ventana && <><br /><span style={{ fontSize: 11, color: '#64748b' }}>Recibe {o.ventana}</span></>}
                   </Popup>
                 </Marker>

@@ -1,7 +1,7 @@
 import os
 from datetime import date
 from django.db import transaction
-from ..models import Remision, Destino, LineaRemision
+from ..models import ESTADOS_RUTA_DESPACHADA, Destino, LineaRemision, Remision
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -239,6 +239,7 @@ def sync_from_sap(fecha: date):
                 O.DocNum,
                 O.CardCode,
                 O.CardName,
+                O.DocDate,
                 O.DocDueDate,
                 O.DocTotal,
                 O.SlpCode,
@@ -355,21 +356,42 @@ def sync_from_sap(fecha: date):
                 }
             )
 
+            # REGLA DE ORO DE ESTE BLOQUE: solo se escribe lo que SAP realmente
+            # mandó. Si un UDF no existe en esta base, el campo NO se toca.
+            #
+            # Antes solo la primera ventana tenía esa guardia. La segunda
+            # ventana y contacto/teléfono/referencias se asignaban a pelo, y
+            # como `getattr(row, "UdfIni2", None)` devuelve None cuando la
+            # columna no vino en el SELECT, cada sync los ponía en NULL.
+            # Efecto real: importas los 195 destinos del Excel con sus
+            # horarios, el primer sync contra la base productiva —que no tiene
+            # esos UDF— los borra todos, y el optimizador vuelve a planear como
+            # si todo el mundo recibiera a cualquier hora. El auto-sync corre
+            # cada 45 s, así que no había forma de notar de dónde salió.
+            def _si_vino(campo_modelo, nombre_columna):
+                if hasattr(row, nombre_columna):
+                    setattr(destino, campo_modelo, getattr(row, nombre_columna))
+
             if has_window_udf:
                 destino.ini_recibo_1 = getattr(row, "UdfIni1", None)
                 destino.fin_recibo_1 = getattr(row, "UdfFin1", None)
 
-            destino.ini_recibo_2 = getattr(row, "UdfIni2", None)
-            destino.fin_recibo_2 = getattr(row, "UdfFin2", None)
+            _si_vino("ini_recibo_2", "UdfIni2")
+            _si_vino("fin_recibo_2", "UdfFin2")
 
-            # Días de entrega permitidos: SAP guarda 'S'/'N' en cada UDF
+            # Días de entrega permitidos: SAP guarda 'S'/'N' en cada UDF.
+            # Igual que arriba: si el UDF no existe en esta base, se deja lo que
+            # ya estuviera guardado (que puede venir del Excel) en vez de
+            # ponerlo todo en True y perder las restricciones.
             for campo in udf_dias:
-                valor = getattr(row, f"Udf_{campo}", None)
-                setattr(destino, campo, str(valor).strip().upper() == "S" if valor is not None else True)
+                columna = f"Udf_{campo}"
+                if hasattr(row, columna):
+                    valor = getattr(row, columna)
+                    setattr(destino, campo, str(valor).strip().upper() == "S" if valor is not None else True)
 
-            destino.contacto = getattr(row, "UdfContacto", None)
-            destino.telefono = getattr(row, "UdfTelefono", None)
-            destino.referencias = getattr(row, "UdfReferencias", None)
+            _si_vino("contacto", "UdfContacto")
+            _si_vino("telefono", "UdfTelefono")
+            _si_vino("referencias", "UdfReferencias")
 
             if has_geo_udf and getattr(row, "UdfLat", None) and getattr(row, "UdfLng", None):
                 if _coordenada_creible(row.UdfLat, row.UdfLng):
@@ -404,7 +426,24 @@ def sync_from_sap(fecha: date):
                     "doc_num": row.DocNum,
                     "card_code": row.CardCode,
                     "card_name": row.CardName,
-                    "doc_date": row.DocDueDate,
+                    # DocDate = el día en que se CAPTURÓ la entrega, que es por
+                    # el que filtra la consulta de arriba (WHERE O.DocDate = ?)
+                    # y por el que pregunta todo el panel (`doc_date=fecha`).
+                    #
+                    # Antes aquí se guardaba `DocDueDate`, la fecha de
+                    # vencimiento. Hoy funciona de casualidad porque SAP copia
+                    # una en la otra al crear el documento; el día que un
+                    # capturista toque el vencimiento a mano, ese pedido se
+                    # pide con una fecha y se guarda con otra, así que
+                    # DESAPARECE del panel — y peor, la limpieza de sobrantes
+                    # del final (que filtra por doc_date) podría borrar pedidos
+                    # buenos de otro día.
+                    #
+                    # La regla del negocio "la entrega capturada hoy sale
+                    # mañana" NO se guarda aquí: vive en el endpoint /jornada,
+                    # que traduce día de captura -> día de reparto. Esta columna
+                    # es el dato crudo de SAP y nada más.
+                    "doc_date": row.DocDate,
                     "doc_total": row.DocTotal,
                     "slp_code": str(row.SlpCode),
                     "slp_name": row.SlpName or "Vendedor General",
@@ -446,12 +485,11 @@ def sync_from_sap(fecha: date):
         # NO se toca lo que ya salió: si una ruta está Cargando, Listo, En_Ruta o
         # Finalizada, sus pedidos se quedan aunque SAP ya no los mande. Borrar un
         # pedido que va en un camión sería peor que dejar uno de más.
-        DESPACHADAS = ['Cargando', 'Listo', 'En_Ruta', 'Finalizada']
         sobrantes = (
             Remision.objects
             .filter(doc_date=fecha)
             .exclude(doc_entry__in=doc_entries_sap)
-            .exclude(ruta__estado__in=DESPACHADAS)
+            .exclude(ruta__estado__in=ESTADOS_RUTA_DESPACHADA)
         )
         borradas = sobrantes.count()
         sobrantes.delete()

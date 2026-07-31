@@ -122,11 +122,11 @@ export default function TablaPedidos({
                     {o.ventana || <span className="italic text-gray-300">sin horario</span>}
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">
-                    {o.eta && o.eta !== 'Pendiente' ? (
+                    {o.eta_desde ? (
                       <span className="font-semibold">
                         {/* Ya entregado: la hora es un hecho, no una promesa. */}
                         {entregado && <span className="text-[9px] font-bold text-emerald-600 uppercase mr-1">Llegó</span>}
-                        {o.eta}
+                        {o.eta_desde} - {o.eta_hasta}
                       </span>
                     ) : <span className="text-gray-300 italic text-[10px]">—</span>}
                   </td>
@@ -200,9 +200,9 @@ export default function TablaPedidos({
                 <div>
                   <div className="text-[10px] font-bold text-gray-400 uppercase">Horario del cliente</div>
                   <div className="text-gray-700">{detalle.ventana || 'Sin horario capturado'}</div>
-                  {detalle.eta && detalle.eta !== 'Pendiente' && (
+                  {detalle.eta_desde && (
                     <div className="text-gray-700 mt-0.5">
-                      {detalle.estado === 'Entregado' ? 'Llegó' : 'Llega'} a las <b>{detalle.eta}</b>
+                      {detalle.estado === 'Entregado' ? 'Llegó' : 'Llega'} entre <b>{detalle.eta_desde}</b> y <b>{detalle.eta_hasta}</b>
                     </div>
                   )}
                 </div>

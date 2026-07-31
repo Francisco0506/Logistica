@@ -6,7 +6,6 @@ calcula la velocidad EN MOVIMIENTO, que es la comparación correcta contra el
 tiempo de manejo que devuelve OSRM (OSRM no incluye el tiempo detenido).
 """
 import os
-import sys
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -21,7 +20,11 @@ BASE = "https://api.samsara.com"
 
 # Los 5 que de verdad operan (docs/flota.md).
 OPERAN = {"013", "016", "017", "023", "027"}
-DIAS = int(sys.argv[-1]) if sys.argv[-1].isdigit() else 7
+# Cuántos días hacia atrás se miden por default. El valor real llega por
+# argumento a handle(); aquí estaba `int(sys.argv[-1])`, que se evaluaba al
+# IMPORTAR el módulo —o sea cada vez que Django descubre los comandos, incluso
+# corriendo otro— leyendo un argumento que casi nunca era el suyo.
+DIAS = 7
 MOVIENDOSE_KMH = 5      # debajo de esto se considera detenido
 CEDIS = (25.693215, -100.48168)
 

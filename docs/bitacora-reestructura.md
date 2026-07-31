@@ -250,3 +250,126 @@ git show <commit>                  # el detalle de uno
 
 Cada commit explica **por qué** se hizo el cambio, no solo qué cambió. Varios
 traen la medición que lo justifica.
+
+---
+
+# 31 de julio de 2026 — Cacería de bugs, pruebas y firma de entrega
+
+Revisión completa del código con la pregunta "¿esto está listo para lanzarse?".
+No lo estaba: había tres módulos que **nunca se habían ejecutado** desde que se
+partieron los archivos grandes, y dos rutinas que borraban datos en silencio.
+
+## Lo que estaba roto y nadie lo sabía
+
+Al partir `api.py` (960 líneas) y `optimizer.py` (859) en módulos, el bloque de
+imports se copió completo a unos archivos y se olvidó en otros. Resultado: tres
+`NameError` esperando a que alguien pasara por ahí.
+
+| Dónde | Qué pasaba |
+|---|---|
+| `api/ventas.py` | Una COPIA de `_rango_eta` sin sus imports le ganaba a la importada. **El panel de ventas devolvía 500 siempre.** |
+| `api/chofer.py` | `api.create_response` con `api` sin importar. El chofer que abría su celular antes de que existiera el plan veía un 500 en vez de "no tienes ruta". |
+| `optimizer/solver.py` | `_SoloSimulacion` sin importar: el botón "¿qué hago para que quepan todos?" reventaba. |
+
+Ninguno es un error sutil de lógica. Son módulos que no se ejecutaron nunca.
+**Por eso lo primero que se hizo después de arreglarlos fue escribir las
+pruebas**: cualquiera de ellas los caza en medio segundo.
+
+## Lo que borraba datos
+
+- **`sync.py` guardaba `DocDueDate` filtrando por `DocDate`.** Hoy funciona de
+  casualidad porque SAP copia una fecha en la otra al crear el documento. El
+  día que un capturista toque el vencimiento a mano, ese pedido se pide con una
+  fecha y se guarda con otra: desaparece del panel, y la limpieza de sobrantes
+  —que filtra por `doc_date`— podría borrar pedidos buenos de otro día.
+- **Cada sync borraba la segunda ventana de recibo y los datos de contacto.**
+  La primera ventana tenía guardia (`if has_window_udf`), la segunda no: como
+  `getattr(row, "UdfIni2", None)` devuelve `None` cuando la columna no vino en
+  el SELECT, se sobreescribía con `None` lo que ya estuviera cargado. Contra la
+  base productiva —que no tiene esos UDF— eso borraba los horarios en cada
+  corrida, cada 45 segundos, sin dejar rastro.
+
+## Lo que planeaba mal
+
+- **La ventana de recibo se aplicaba a la hora de SALIDA de la parada, no a la
+  de llegada.** El acumulado de la dimensión Time trae la descarga sumada, así
+  que la ventana quedaba corrida 12 minutos: a un cliente que cierra a las
+  13:00 se le rechazaba una llegada a las 12:55, y a uno que abre a las 15:00
+  se le aceptaba una llegada a las 14:48. El código ya reconocía el desfase al
+  calcular la ETA, pero no al poner la restricción.
+- **La sugerencia de "en qué camión lo meto" calculaba mal la hora de
+  llegada** (sumaba el tramo a la parada siguiente en vez del tramo al cliente
+  nuevo) y **la duración de la ruta no contaba el tiempo de descarga**: una
+  ruta de 18 paradas se reportaba en 200 min cuando iba en 416, o sea ya fuera
+  del turno, y el panel decía que todavía cabían dos horas más de pedidos.
+- **Los pedidos que no cupieron conservaban su ETA vieja.** Quedaban sin camión
+  pero ventas les seguía prometiendo al cliente una hora de llegada.
+
+## Lo que se rompía en producción, no aquí
+
+- Faltaba **Pillow** en `requirements.txt` (`ImageField` lo exige): el proyecto
+  solo arrancaba en máquinas que ya lo tuvieran instalado por otro lado.
+- `datetime.now()` en vez de `timezone.localtime()` en dos lugares: en un
+  hosting en UTC, la salida de las 09:00 se guarda como 15:00 y de ahí salen
+  mal todas las ETAs recalculadas.
+- `MEDIA_URL` sin diagonal inicial: las fotos de evidencia daban 404.
+- `settings.py` abría una conexión a Postgres al **importarse**, lo que rompía
+  `collectstatic`, los tests y el CI, y abría una conexión de más por worker.
+  Se movió a `apps.py:ready()`, que es cuando de verdad importa.
+
+## Las pruebas
+
+88, en `delivery/tests/`, verdes en 35 s sin Postgres ni SAP ni OSRM. Cada una
+existe por un bug que ya se cometió, no por cubrir líneas.
+
+**Se verificó que sirven**: se volvieron a meter cuatro de los bugs arreglados
+y las pruebas los cazaron. Una prueba que pasa con el código roto no es una
+prueba, y esa comprobación es la única forma de saberlo.
+
+El límite de tiempo del solver quedó configurable (`OPTIMIZER_SEGUNDOS`) para
+que la suite no tarde un minuto en dar el mismo veredicto. Bajarlo da rutas
+peores, no rutas equivocadas.
+
+## Lo nuevo: firma de quien recibe
+
+La app del chofer abre un recuadro donde el cliente firma con el dedo. Se
+guarda como PNG en `Remision.firma` y la ven el chofer y el panel de ventas.
+
+Es distinta del nombre escrito que ya se capturaba: ese lo teclea el chofer y
+puede poner cualquier cosa; la firma la traza quien recibe, delante de él. Va
+en una petición aparte de la confirmación, igual que la foto, para que una
+falla de señal no tire el reporte de la entrega.
+
+## La ETA ahora es un rango de verdad
+
+Era "de 09:00 a 09:15" —solo hacia adelante—, que se lee como "no llega antes
+de las 09:00". Es falso: el camión llega antes o después. Ahora es ±15 min
+("entre 08:45 y 09:15") en las tres pantallas.
+
+De paso se quitó la palabra `"Pendiente"` que viajaba en el campo `eta` como si
+fuera una hora: salía impresa en la guía del almacén, en el popup del mapa y en
+la tarjeta del camión. Ahora ese campo es `null` cuando no hay ETA, que es lo
+que es.
+
+## El Excel
+
+Se eliminó del repositorio junto con su comando de importación: ya no se usa y
+la fuente de verdad es SAP. Tener dos fuentes era justo lo que hacía que un
+sync borrara lo cargado por el otro lado.
+
+**Sigue en el historial de git.** Si el repo se hace público, hay que limpiarlo
+con `git filter-repo` — borrarlo de la rama no lo saca de los commits viejos.
+
+## Lo que NO se hizo
+
+- **Autenticación.** Sigue sin existir: 25 endpoints abiertos y un login que es
+  un selector de rol. Es el bloqueador #1 y no se tocó hoy.
+- **El refactor de `Dispatcher/index.jsx`** a hooks. Los bugs de carrera del
+  archivo se arreglaron uno por uno (token de corrida contra respuestas viejas,
+  candado en las sugerencias, errores del backend que se tomaban por éxito),
+  pero las 880 líneas y los 40 `useState` siguen ahí. Hay un plan de 8 pasos.
+  Hacerlo hoy, sin una sola prueba de frontend, habría sido cambiar bugs
+  conocidos por bugs nuevos.
+- **`DocDate` vs `DocDueDate`**: el código ya es consistente, pero falta
+  confirmar contra SAP que las dos columnas traen lo mismo:
+  `SELECT TOP 20 DocNum, DocDate, DocDueDate FROM ODLN ORDER BY DocEntry DESC`.

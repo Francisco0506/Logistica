@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Truck, RefreshCw, Search, AlertCircle, Package, FileText, Clock, Loader, Plus, ChevronDown, ChevronUp } from 'lucide-react';
 import { CEDIS, PALETA_COLORES_CAMION } from '../../config/fleet';
@@ -189,20 +189,49 @@ export default function DispatcherPanel() {
     }
   };
 
+  // Contador de corridas de `fetchData`. Cada llamada se queda con su número y
+  // solo escribe en pantalla si sigue siendo la más reciente al volver.
+  //
+  // Hay tres cosas que llaman a esto a la vez: el refresco de 45 s, el botón
+  // Actualizar, y el refetch después de cada acción (optimizar, dar salida,
+  // asignar). Sin candado se mezclaban:
+  //
+  //   - El despachador da "Salida" y enseguida cambia el día de reparto. El
+  //     refetch de la salida sigue vivo con la fecha VIEJA y sus respuestas
+  //     pisan los pedidos del día nuevo. El panel termina mostrando un día bajo
+  //     un encabezado que dice otro.
+  //   - Optimizar tarda ~30 s; a media corrida entra el tick de 45 s y escribe
+  //     los pedidos sin ruta. Durante un ciclo se ven camiones con 0 paradas.
+  //
+  // El AbortController no alcanzaba: solo cancela lo del efecto, no lo que
+  // dispararon los botones.
+  const corridaActual = useRef(0);
+
   const fetchData = async (signal) => {
     const fecha = selectedDate;
+    const corrida = ++corridaActual.current;
+    // ¿Esta corrida sigue siendo la buena? Si ya salió otra después, lo que
+    // traiga ésta es viejo y no debe tocar la pantalla.
+    const vigente = () => corridaActual.current === corrida;
     try {
       const syncData = await syncSAP(fecha, { signal });
+      if (!vigente()) return;
       setSyncStatus(syncData.message);
       setSyncStatusTipo(syncData.status === 'success' ? 'ok' : syncData.status === 'warning' ? 'warning' : 'error');
 
       // `truck` ya viene como placa real del backend.
       const remData = await getRemisiones(fecha, { signal });
+      if (!vigente()) return;
       setOrders(remData.map((o) => ({ ...o, truck: o.truck || null })));
 
       const rutData = await getRutas(fecha, { signal });
+      if (!vigente()) return;
       setRutas(rutData);
-      if (rutData.length > 0) setRoutesGenerated(true);
+      // Con `else`: antes solo se prendía. Al cambiar del reparto de hoy (con
+      // rutas) al de mañana (sin rutas), la bandera se quedaba en true y el
+      // panel seguía pintando la leyenda "Rutas en el mapa" y camiones de 0
+      // paradas de un plan que no existe.
+      setRoutesGenerated(rutData.length > 0);
 
       setAlertas(await getAlertas(fecha, { signal }));
     } catch (e) {
@@ -441,14 +470,35 @@ export default function DispatcherPanel() {
   };
 
 
+  // Qué alerta se está consultando AHORA. Sin este candado, abrir una alerta
+  // lenta y enseguida otra dejaba que la respuesta de la primera llegara al
+  // final y pisara las sugerencias de la segunda: la tarjeta mostraba los
+  // camiones calculados para OTRO pedido, y al apretar "asignar" el pedido se
+  // iba a la ruta equivocada sin que nada se viera raro.
+  const alertaEnCurso = useRef(null);
+
   const toggleAlerta = async (alerta) => {
-    if (alertaAbierta === alerta.id) { setAlertaAbierta(null); setSugerencias(null); return; }
+    if (alertaAbierta === alerta.id) {
+      alertaEnCurso.current = null;
+      setAlertaAbierta(null); setSugerencias(null);
+      return;
+    }
+    alertaEnCurso.current = alerta.id;
     setAlertaAbierta(alerta.id);
     setSugerencias(null);
     setCargandoSugerencias(true);
-    try { setSugerencias(await getSugerencias(alerta.id)); }
-    catch (e) { console.error('Error al pedir sugerencias:', e); }
-    finally { setCargandoSugerencias(false); }
+    try {
+      const res = await getSugerencias(alerta.id);
+      if (alertaEnCurso.current !== alerta.id) return;   // ya se abrió otra
+      setSugerencias(res);
+    } catch (e) {
+      console.error('Error al pedir sugerencias:', e);
+      if (alertaEnCurso.current === alerta.id) {
+        avisar('No se pudieron calcular las opciones para este pedido.', 'error');
+      }
+    } finally {
+      if (alertaEnCurso.current === alerta.id) setCargandoSugerencias(false);
+    }
   };
 
   const handleAsignar = async (remisionId, opcion, forzar = false) => {
@@ -461,6 +511,16 @@ export default function DispatcherPanel() {
         setConfirmacion({ remisionId, opcion, mensaje: res.message });
         return;
       }
+      // El backend manda los errores de negocio con HTTP 200 y `status:'error'`
+      // en el cuerpo, así que `fetch` no los ve. Sin esta rama se caía al
+      // camino feliz: se cerraba la tarjeta y se refrescaba como si el pedido
+      // hubiera quedado asignado. Pasa de verdad cuando otro despachador ya lo
+      // asignó desde otra pestaña.
+      if (res.status === 'error') {
+        avisar(res.message || 'No se pudo asignar el pedido.', 'error');
+        return;
+      }
+      alertaEnCurso.current = null;
       setAlertaAbierta(null); setSugerencias(null);
       await fetchData();
     } catch (e) {

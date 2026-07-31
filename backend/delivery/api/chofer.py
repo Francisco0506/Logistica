@@ -10,10 +10,11 @@ from typing import List, Optional
 from django.db import transaction
 from django.utils import timezone
 from ninja import File, Router, Schema
+from ninja.errors import HttpError
 from ninja.files import UploadedFile
 
 from ..models import LineaRemision, Remision, Ruta
-from .comun import _texto_ventana
+from .comun import _rango_eta, _texto_ventana
 
 router = Router()
 
@@ -35,6 +36,10 @@ class ParadaChoferOut(Schema):
     address: str = ""
     ventana: Optional[str] = None
     eta: Optional[str] = None
+    # La ETA como rango (±15 min). Es la que el chofer le dice al cliente por
+    # teléfono, y una hora exacta ahí es una promesa que no se puede cumplir.
+    eta_desde: Optional[str] = None
+    eta_hasta: Optional[str] = None
     lat: Optional[float] = None
     lng: Optional[float] = None
     telefono: Optional[str] = None
@@ -47,6 +52,7 @@ class ParadaChoferOut(Schema):
     recibio: Optional[str] = None
     entregado_en: Optional[str] = None
     foto: Optional[str] = None
+    firma: Optional[str] = None
 
 
 class RutaChoferOut(Schema):
@@ -67,14 +73,18 @@ def get_ruta_chofer(request, fecha: date, camion: str):
     (ver docs/pendientes.md §1). Cuando haya usuarios de chofer, la placa saldrá
     de su sesión.
     """
-    try:
-        ruta = Ruta.objects.get(fecha=fecha, camion=camion)
-    except Ruta.DoesNotExist:
-        return api.create_response(
-            request,
-            {"detail": f"El {camion} no tiene ruta para el {fecha}."},
-            status=404,
-        )
+    # `.filter().first()` y no `.get()`: no hay unicidad (fecha, camion) en la
+    # base, así que dos rutas del mismo camión el mismo día —que pasa si el
+    # panel manda la misma placa dos veces al optimizar— hacían que la app del
+    # chofer devolviera un 500 de MultipleObjectsReturned, sin mensaje.
+    ruta = Ruta.objects.filter(fecha=fecha, camion=camion).order_by('id').first()
+    if ruta is None:
+        # HttpError y no `api.create_response`: `api` no existe en este módulo
+        # (vive en __init__.py y importarlo haría un ciclo), así que la versión
+        # anterior reventaba con NameError justo en el caso más común de la
+        # mañana — el chofer abre su celular antes de que exista el plan y en
+        # vez de "no tienes ruta" veía un 500.
+        raise HttpError(404, f"El {camion} no tiene ruta para el {fecha}.")
 
     remisiones = (
         ruta.remisiones.select_related('destino')
@@ -94,6 +104,8 @@ def get_ruta_chofer(request, fecha: date, camion: str):
             "address": (d.street or "") if d else "",
             "ventana": _texto_ventana(d),
             "eta": r.eta,
+            "eta_desde": _rango_eta(r.eta)[0],
+            "eta_hasta": _rango_eta(r.eta)[1],
             "lat": d.latitude if d else None,
             "lng": d.longitude if d else None,
             "telefono": d.telefono if d else None,
@@ -115,6 +127,7 @@ def get_ruta_chofer(request, fecha: date, camion: str):
             "recibio": r.recibio,
             "entregado_en": timezone.localtime(r.entregado_en).strftime("%H:%M") if r.entregado_en else None,
             "foto": r.foto.url if r.foto else None,
+            "firma": r.firma.url if r.firma else None,
         })
 
     return {
@@ -174,11 +187,24 @@ def confirmar_entrega(request, remision_id: int, payload: ConfirmarEntregaIn):
                 linea.cantidad_entregada = linea.cantidad
             LineaRemision.objects.bulk_update(lineas.values(), ['cantidad_entregada'])
 
-        pedido_completo = all(l.completa for l in lineas.values()) if lineas else not payload.motivo
-        nada_entregado = (
-            all((l.cantidad_entregada or 0) == 0 for l in lineas.values()) if lineas
-            else False
-        )
+        if lineas:
+            pedido_completo = all(l.completa for l in lineas.values())
+            nada_entregado = all((l.cantidad_entregada or 0) == 0 for l in lineas.values())
+        else:
+            # Pedido sin renglones (SAP no mandó líneas). No hay cantidades de
+            # dónde deducir el estado, así que lo dice el MOTIVO, que ya
+            # distingue los dos casos:
+            #
+            #   cerrado / sin quién reciba / sin espacio -> no se bajó nada
+            #   rechazo parcial / dañado / faltó         -> se entregó una parte
+            #
+            # Antes `nada_entregado` era False por construcción en esta rama, o
+            # sea que un pedido sin líneas NUNCA podía llegar a 'No_Entregado':
+            # el chofer marcaba "el cliente estaba cerrado" y el sistema lo
+            # guardaba como 'Entregado_Parcial'. Para ventas y para facturación
+            # eso es exactamente lo contrario de lo que pasó.
+            pedido_completo = not payload.motivo
+            nada_entregado = payload.motivo in Remision.MOTIVOS_SIN_ENTREGA
 
         if nada_entregado:
             remision.estado = 'No_Entregado'
@@ -224,3 +250,26 @@ def subir_foto_entrega(request, remision_id: int, foto: UploadedFile = File(...)
     remision.foto = foto
     remision.save(update_fields=['foto'])
     return {"status": "success", "url": remision.foto.url}
+
+
+@router.post("/paradas/{remision_id}/firma")
+def subir_firma_entrega(request, remision_id: int, firma: UploadedFile = File(...)):
+    """
+    La firma de quien recibe, trazada con el dedo en la pantalla.
+
+    Va aparte de la confirmación por la misma razón que la foto: es un archivo,
+    y una falla al subirlo —con la señal de la calle pasa seguido— no debe
+    tumbar la confirmación de la entrega, que es el dato que de verdad importa.
+
+    Lo que llega es el PNG que el celular exporta del recuadro de firma. No se
+    guardan los trazos punto por punto: lo que se va a necesitar después es
+    ENSEÑAR la firma en una aclaración, no volver a dibujarla.
+    """
+    try:
+        remision = Remision.objects.get(id=remision_id)
+    except Remision.DoesNotExist:
+        return {"status": "error", "message": "Ese pedido no existe."}
+
+    remision.firma = firma
+    remision.save(update_fields=['firma'])
+    return {"status": "success", "url": remision.firma.url}

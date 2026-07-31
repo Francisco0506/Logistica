@@ -19,6 +19,17 @@ class Ruta(models.Model):
         return f"{self.camion} - {self.fecha}"
 
 
+# Los estados en que la ruta YA es física: la mercancía se está subiendo, está
+# arriba, o el camión ya se fue. Nada de esto se replanea ni se borra.
+#
+# Vive aquí, junto a los estados que nombra, porque estaba copiado en tres
+# lugares —optimizer/reglas.py, integrations/sap.py y la API— y las tres copias
+# tenían que decir lo mismo para que el sistema no se contradijera. Agregar un
+# estado y olvidar una copia significaría reasignar un pedido que ya va en un
+# camión.
+ESTADOS_RUTA_DESPACHADA = ['Cargando', 'Listo', 'En_Ruta', 'Finalizada']
+
+
 class Destino(models.Model):
     card_code = models.CharField(max_length=50)
     ship_to_code = models.CharField(max_length=100)
@@ -104,6 +115,15 @@ class Remision(models.Model):
         ('otro', 'Otro motivo'),
     ]
 
+    # Motivos en los que NO SE BAJÓ NADA del camión: el camión llegó y se
+    # regresó con todo. Se distinguen de los otros tres —rechazo parcial,
+    # producto dañado, faltó en el camión— donde sí se entregó una parte.
+    #
+    # Sirve para deducir el estado cuando el pedido no trae renglones y no hay
+    # cantidades de dónde sacarlo. Con renglones NO se usa: ahí manda lo que el
+    # chofer capturó, que es más preciso que cualquier regla.
+    MOTIVOS_SIN_ENTREGA = ('cerrado', 'sin_quien_reciba', 'sin_espacio')
+
     doc_entry = models.IntegerField(unique=True)
     doc_num = models.IntegerField(unique=True)
     card_code = models.CharField(max_length=50)
@@ -133,9 +153,17 @@ class Remision(models.Model):
     entregado_en = models.DateTimeField(null=True, blank=True)
     motivo = models.CharField(max_length=30, choices=MOTIVOS, null=True, blank=True)
     observaciones = models.TextField(null=True, blank=True)
-    # Quién recibió, tal como lo escribe el chofer. La firma viene después
-    # (ver docs/pendientes-vendedor-chofer.md).
+    # Quién recibió, tal como lo escribe el chofer.
     recibio = models.CharField(max_length=150, null=True, blank=True)
+    # La FIRMA de quien recibió, trazada con el dedo en la pantalla del celular
+    # al momento de la entrega. Es distinta del nombre escrito de arriba: el
+    # nombre lo teclea el chofer y puede poner cualquier cosa; la firma la hace
+    # la persona que recibe, delante de él.
+    #
+    # Se guarda como imagen (PNG con fondo transparente) y no como los puntos
+    # del trazo, porque lo que se va a necesitar es enseñarla —en una
+    # aclaración con el cliente, en la guía impresa— no volver a dibujarla.
+    firma = models.ImageField(upload_to='firmas/%Y/%m/', null=True, blank=True)
     # Foto de evidencia tomada en la puerta del cliente. Sirve sobre todo
     # cuando la entrega salió incompleta o no se pudo entregar: es la prueba de
     # lo que el chofer reporta.

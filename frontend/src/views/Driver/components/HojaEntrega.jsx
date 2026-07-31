@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { X, Check, Minus, Plus, AlertTriangle, Camera, Trash2 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { X, Check, Minus, Plus, AlertTriangle, Camera, Trash2, PenLine } from 'lucide-react';
+import PanelFirma from './PanelFirma';
 
 /**
  * La hoja donde el chofer confirma qué dejó en una parada.
@@ -34,6 +35,18 @@ export default function HojaEntrega({ parada, onCerrar, onConfirmar, guardando, 
   const [recibio, setRecibio] = useState('');
   const [foto, setFoto] = useState(null);          // File que se va a subir
   const [vistaPrevia, setVistaPrevia] = useState(null);
+  const [firma, setFirma] = useState(null);        // Blob PNG de la firma
+  const [vistaFirma, setVistaFirma] = useState(null);
+  const [firmando, setFirmando] = useState(false);
+
+  // Los object URL de la foto y de la firma se sueltan al cerrar la hoja.
+  // Antes solo se liberaba la foto, y solo si el chofer apretaba el bote de
+  // basura: en un turno de 20 entregas con evidencia, el celular se quedaba
+  // con 20 imágenes retenidas en memoria.
+  useEffect(() => () => {
+    if (vistaPrevia) URL.revokeObjectURL(vistaPrevia);
+    if (vistaFirma) URL.revokeObjectURL(vistaFirma);
+  }, [vistaPrevia, vistaFirma]);
 
   const ajustar = (linea, delta) => {
     setCantidades((prev) => {
@@ -61,7 +74,20 @@ export default function HojaEntrega({ parada, onCerrar, onConfirmar, guardando, 
     setVistaPrevia(null);
   };
 
-  const enviarCompleto = () => onConfirmar({ recibio: recibio.trim() || undefined }, foto);
+  const guardarFirma = (blob) => {
+    if (vistaFirma) URL.revokeObjectURL(vistaFirma);
+    setFirma(blob);
+    setVistaFirma(URL.createObjectURL(blob));
+    setFirmando(false);
+  };
+
+  const quitarFirma = () => {
+    if (vistaFirma) URL.revokeObjectURL(vistaFirma);
+    setFirma(null);
+    setVistaFirma(null);
+  };
+
+  const enviarCompleto = () => onConfirmar({ recibio: recibio.trim() || undefined }, foto, firma);
 
   const enviarParcial = () => {
     onConfirmar({
@@ -72,7 +98,7 @@ export default function HojaEntrega({ parada, onCerrar, onConfirmar, guardando, 
       motivo: motivo || 'otro',
       observaciones: observaciones.trim() || undefined,
       recibio: recibio.trim() || undefined,
-    }, foto);
+    }, foto, firma);
   };
 
   return (
@@ -230,11 +256,50 @@ export default function HojaEntrega({ parada, onCerrar, onConfirmar, guardando, 
           <input
             value={recibio}
             onChange={(e) => setRecibio(e.target.value)}
-            placeholder="Nombre de quien firmó"
+            placeholder="Nombre de quien recibe"
             className="w-full px-3 py-3 bg-gray-50 border border-gray-200 rounded-xl text-[15px] focus:outline-none focus:ring-2 focus:ring-orange-200"
           />
         </div>
+
+        {/* La FIRMA de esa persona. Va debajo del nombre porque es el mismo
+            momento: se teclea quién recibe y se le pasa el teléfono. */}
+        <div className="px-4 pb-4">
+          <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wide block mb-1.5">
+            Firma <span className="font-semibold normal-case text-gray-300">(opcional)</span>
+          </label>
+
+          {vistaFirma ? (
+            <div className="relative">
+              <img
+                src={vistaFirma}
+                alt="Firma de quien recibió"
+                className="w-full h-28 object-contain rounded-xl border border-gray-200 bg-white"
+              />
+              <button
+                onClick={quitarFirma}
+                className="absolute top-2 right-2 bg-white/95 border border-gray-200 rounded-lg p-2 shadow-sm active:bg-gray-100"
+              >
+                <Trash2 className="w-4 h-4 text-red-500" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setFirmando(true)}
+              className="flex items-center justify-center gap-2 w-full py-4 border-2 border-dashed border-gray-200 rounded-xl text-[13px] font-bold text-gray-500 active:bg-gray-50"
+            >
+              <PenLine className="w-5 h-5" /> Pedir firma
+            </button>
+          )}
+        </div>
       </div>
+
+      {firmando && (
+        <PanelFirma
+          nombre={recibio}
+          onCerrar={() => setFirmando(false)}
+          onGuardar={guardarFirma}
+        />
+      )}
 
       {/* ── Acciones, pegadas abajo donde alcanza el pulgar ── */}
       <div className="border-t border-gray-200 p-4 space-y-2 flex-shrink-0 bg-white">

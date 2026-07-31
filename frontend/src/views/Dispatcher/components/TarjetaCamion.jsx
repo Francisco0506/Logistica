@@ -173,7 +173,7 @@ export default function TarjetaCamion({
             {proxima ? (
               <span className="text-[9px] text-gray-500 truncate min-w-0">
                 <span className="font-bold text-gray-400">Sigue:</span> {proxima.card_name}
-                {proxima.eta && <span className="text-gray-400"> · {proxima.eta}</span>}
+                {proxima.eta_desde && <span className="text-gray-400"> · {proxima.eta_desde}-{proxima.eta_hasta}</span>}
               </span>
             ) : <span className="text-[9px] text-emerald-600 font-bold">Todo entregado</span>}
 
@@ -259,7 +259,7 @@ export default function TarjetaCamion({
                       </div>
                       <div className="text-[9px] text-gray-500 font-medium flex items-center gap-2">
                         <span className={`flex items-center gap-1 ${entregado ? 'text-emerald-600 font-bold' : ''}`}>
-                          <Clock className="w-3 h-3" /> {entregado ? 'Llegó' : 'Llega'} {o.eta || '—'}
+                          <Clock className="w-3 h-3" /> {entregado ? 'Llegó' : 'Llega'} {o.eta_desde ? `${o.eta_desde}-${o.eta_hasta}` : '—'}
                         </span>
                         {/* La ventana de recibo, que antes no se veía en ningún
                             lado: es lo que explica si la ETA es viable o no. */}

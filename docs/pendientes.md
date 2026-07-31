@@ -1,6 +1,6 @@
 # Pendientes del proyecto
 
-Lista viva de lo que falta. Actualizada el **26 de julio de 2026**.
+Lista viva de lo que falta. Actualizada el **31 de julio de 2026**.
 
 El detalle de alcance de los paneles de Vendedor y Chofer está aparte, en
 [`pendientes-vendedor-chofer.md`](pendientes-vendedor-chofer.md).
@@ -304,30 +304,40 @@ las respuestas de arriba.
   hay que comprar o solicitar el equipo, esa gestión pesa más en el calendario
   que todo lo que falta programar.
 
-- 🔴 **`SECRET_KEY` está escrita en `core/settings.py`** y ese archivo sí está en
-  GitHub. Debe salir del `.env` y hay que **generar una nueva**, porque la actual
-  ya es pública.
-- 🔴 **`DEBUG = True`** — muestra el código y las variables de entorno en
-  cualquier error.
-- 🔴 **`CORS_ALLOW_ALL_ORIGINS = True`** y `ALLOWED_HOSTS = []`.
+- ✅ ~~**`SECRET_KEY` está escrita en `core/settings.py`**~~ — sale del `.env` y
+  el backend no arranca sin ella. La vieja quedó quemada y no se debe reusar.
+- ✅ ~~**`DEBUG = True`**~~ — se controla por `.env` (`DJANGO_DEBUG=False` en
+  producción).
+- ✅ ~~**`CORS_ALLOW_ALL_ORIGINS = True`**~~ — ahora vale lo mismo que `DEBUG`.
+  En producción solo se aceptan los orígenes de `CORS_ORIGINS` del `.env`.
+  Antes era `True` fijo con un comentario que decía "solo para desarrollo", y
+  nada lo apagaba al salir de desarrollo.
 - 🔴 **El login no valida nada.** Es un selector de rol: quien abra la URL entra.
 - 🟡 **Apagar el botón "Cargar pedidos de prueba" fuera de desarrollo.** Borra
   todas las rutas del día, **incluidas las ya despachadas**.
 - 🟡 **No hay entorno virtual ni versiones fijadas** de las librerías de Python.
   Hoy corre contra la instalación global (Python 3.14).
-- 🔴 **Cero pruebas automatizadas.** `tests.py` sigue siendo la plantilla vacía
-  de Django, y `optimizer.py` ya son **859 líneas** con reglas delicadas. Todo
-  lo que se arregló hasta hoy se verificó a mano.
+- ✅ ~~**Cero pruebas automatizadas.**~~ **88 pruebas** en `delivery/tests/`,
+  todas verdes, en 35 s y sin necesitar Postgres, SAP ni OSRM:
 
-  Las ~15 pruebas que harían falta, cada una por un bug que ya se cometió o se
-  estuvo a punto de cometer:
-  - Ventanas: medianoche (`00:00` como cierre), segunda ventana, horario
-    corrupto de SAP (`fin <= ini`), ventana que abre después del turno.
-  - Que una ruta despachada **jamás** se destruya al re-optimizar.
-  - Que la ETA del plan y la de `recalcular_etas_desde_salida` coincidan.
-  - Que apagar un camión y prender otro use las capacidades correctas.
-  - Que dos clientes en el mismo domicilio cuenten como **una** parada.
-  - Que un pedido que no cupo regrese a `Pendiente` y sin ruta.
+  ```bash
+  cd backend
+  OPTIMIZER_SEGUNDOS=3 DJANGO_TEST_DB=sqlite python manage.py test delivery
+  ```
+
+  Cubren lo que estaba en esta lista y más: ventanas (medianoche, segunda
+  ventana, horario corrupto, ventana después del turno), que una ruta
+  despachada jamás se destruya, que dos clientes en el mismo domicilio sean UNA
+  parada, que un pedido que no cupo regrese limpio a `Pendiente`, que el sync
+  no borre lo que va en un camión, y que cada endpoint conteste.
+
+  **Se verificó que sirven**: se volvieron a meter cuatro de los bugs
+  arreglados y las pruebas los cazaron. Una prueba que pasa con el código roto
+  no es una prueba.
+
+  Lo que **falta** cubrir: el frontend no tiene ninguna (no hay corredor de
+  pruebas instalado), y `recalcular_etas_desde_salida` solo está cubierta de
+  refilón.
 - 🔴 **Cero autenticación.** Ninguna mención de login, permisos ni sesión en los
   587 renglones de `api.py`. Cualquiera en la red que sepa la dirección puede
   rehacer el plan del día — o llamar a `/pedidos/cargar-prueba`, que **borra
@@ -345,16 +355,22 @@ las respuestas de arriba.
   `api.py` va en 587. Convendría partirlos y agrupar lo que habla con el
   exterior (SAP, Samsara, OSRM) en `integrations/`. Es cosmético al lado de lo
   de arriba.
-- ⚪ **El Excel de direcciones tiene datos reales de clientes y está en el
-  repositorio.** Si el repo es privado no pasa nada; si algún día se hace
-  público, ahí va la lista de clientes de Laben.
+- 🟡 **El Excel de direcciones salió del repositorio** (31-jul-2026), junto con
+  el comando `importar_direcciones_excel`: ya no se usa, la fuente de verdad es
+  SAP. **PERO sigue en el HISTORIAL de git.** Si este repo se va a hacer
+  público alguna vez, hay que limpiarlo del historial con `git filter-repo`;
+  borrarlo de la rama no basta.
 
 ## 6. Interfaz
 
 - 🟡 **El panel de ventas se hace desde cero.** Lo que hay son 4 pedidos
   inventados escritos a mano; no llama al backend ni una vez.
-- 🟡 **`DispatcherPanel.jsx` son 1,173 líneas en un solo archivo** — header,
-  camiones, alertas, tabla, manifiesto, mapa y modal, todo junto.
+- 🟡 **`Dispatcher/index.jsx` son 880 líneas y ~40 `useState`.** Los
+  componentes de presentación ya se partieron; lo que falta es sacar el ESTADO
+  a hooks (`useFlota`, `useJornada`, `useDatosDelDia`, `useOptimizacion`,
+  `useAsignacionManual`). Hay un plan de 8 pasos, cada uno compilable por
+  separado, en la bitácora del 31-jul. Los bugs de carrera del archivo ya se
+  arreglaron uno por uno; el refactor es para que no vuelvan a aparecer.
 - 🟡 **La ventana de recibo del cliente no se muestra en ninguna parte**, aunque
   los 195 destinos la tienen capturada. Es justo el dato que explica por qué las
   rutas van apretadas (97 de 195 cierran antes de las 14:00).
@@ -364,8 +380,9 @@ las respuestas de arriba.
   orden con los productos de cada pedido, entrega completa en un toque, entrega
   incompleta renglón por renglón con motivo y nota, foto de evidencia, y no deja
   reportar antes de que el camión salga del CEDIS.
-- 🟡 **Falta la FIRMA de quien recibe** en la app del chofer. Hoy se captura su
-  nombre escrito, que no es lo mismo que una firma.
+- ✅ ~~**Falta la FIRMA de quien recibe**~~ — la app del chofer abre un recuadro
+  donde el cliente firma con el dedo y se guarda como PNG en `Remision.firma`.
+  La ve el chofer, el panel de ventas y queda como evidencia de la entrega.
 - ✅ ~~**El botón "Descargar Guía"**~~ ahora abre la vista previa de la guía y se
   imprime, con el logo de Laben y el orden de carga LIFO.
 - 🟡 **La guía no se descarga como archivo**, solo se imprime desde el navegador.

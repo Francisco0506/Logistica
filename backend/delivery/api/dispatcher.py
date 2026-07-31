@@ -6,20 +6,18 @@ corre el optimizador y mueve las rutas por sus estados hasta que salen.
 from datetime import date, datetime, timedelta
 from typing import List, Optional
 
-from django.db import transaction
-from django.db.models import Count
 from django.utils import timezone
 from ninja import Router, Schema
 
 from .. import fleet
-from ..models import Remision, Ruta
+from ..models import ESTADOS_RUTA_DESPACHADA, Remision, Ruta
 from ..optimizer import (
-    solve_vrp, sugerir_camiones_para_remision, asignar_manualmente,
-    recalcular_etas_desde_salida,
+    SEGUNDOS_SOLVER, solve_vrp, sugerir_camiones_para_remision,
+    asignar_manualmente, recalcular_etas_desde_salida,
 )
 from ..integrations.samsara import get_ubicaciones_isuzu
 from ..integrations.sap import sync_from_sap
-from .comun import DEPOT_COORDS, TRANSICIONES_VALIDAS, _texto_ventana
+from .comun import DEPOT_COORDS, TRANSICIONES_VALIDAS, _rango_eta, _texto_ventana
 
 router = Router()
 
@@ -30,7 +28,19 @@ class RemisionOut(Schema):
     estado: str
     ship_to_code: str
     doc_total: float
-    eta: str = "Pendiente"
+    # Hora estimada de llegada, o `null` si todavía no se calcula.
+    #
+    # Antes el default era la palabra "Pendiente", que viajaba por la API como
+    # si fuera una hora: el popup del mapa decía "Llega Pendiente", la guía
+    # impresa que se lleva el almacén traía "Pendiente" en la columna de hora, y
+    # la tarjeta del camión "Sigue: CLIENTE · Pendiente". Un campo de hora que a
+    # veces trae una palabra obliga a cada pantalla a acordarse de filtrarla, y
+    # tres de ellas no se acordaban.
+    eta: Optional[str] = None
+    # La misma ETA como rango (±15 min), que es como se le debe decir a la
+    # gente: el camión llega antes o después, nunca a la mera hora.
+    eta_desde: Optional[str] = None
+    eta_hasta: Optional[str] = None
     address: str = ""
     lat: Optional[float] = None
     lng: Optional[float] = None
@@ -76,7 +86,9 @@ def get_remisiones(request, fecha: date):
             "ship_to_code": r.destino.ship_to_code if r.destino else "",
             "doc_total": float(r.doc_total),
             "address": r.destino.street if r.destino and r.destino.street else "Sin direccion en SAP",
-            "eta": r.eta if r.eta else "Pendiente",
+            "eta": r.eta or None,
+            "eta_desde": _rango_eta(r.eta)[0],
+            "eta_hasta": _rango_eta(r.eta)[1],
             "lat": lat,
             "lng": lng,
             "truck": r.ruta.camion if r.ruta else None,
@@ -273,6 +285,13 @@ def generar_rutas(request, payload: GenerarRutasIn):
     if not payload.camiones:
         return {"status": "error", "message": "Activa al menos un camión antes de optimizar."}
 
+    # Sin placas repetidas, conservando el orden. Si el panel manda la misma
+    # placa dos veces (pasa al agregar a mano una que ya estaba en la lista) se
+    # creaban DOS rutas del mismo camión el mismo día, y de ahí en adelante
+    # nadie sabe cuál es la buena: la app del chofer tronaba y el manifiesto
+    # mostraba media carga.
+    payload.camiones = list(dict.fromkeys(payload.camiones))
+
     # Un camión agregado a mano desde el panel no está en la flota conocida:
     # entra a la corrida con capacidad y tope conservadores (fleet.py), pero se
     # avisa, porque el plan que salga para ese camión es una estimación.
@@ -330,7 +349,9 @@ class EscenariosIn(Schema):
 
 # Segundos de solver por escenario. Corto porque se corren varios seguidos y lo
 # que interesa es comparar cuántos pedidos caben, no exprimir cada ruta.
-SEGUNDOS_POR_ESCENARIO = 6
+# Se acota al límite general del solver: si alguien lo baja (pruebas, máquina
+# lenta), no tiene sentido que un escenario tarde más que una corrida completa.
+SEGUNDOS_POR_ESCENARIO = min(6, SEGUNDOS_SOLVER)
 
 
 @router.post("/rutas/escenarios")
@@ -338,7 +359,19 @@ def evaluar_escenarios(request, payload: EscenariosIn):
     if not payload.camiones:
         return {"status": "error", "message": "Activa al menos un camión."}
 
-    total_pedidos = Remision.objects.reales().filter(doc_date=payload.fecha).count()
+    payload.camiones = list(dict.fromkeys(payload.camiones))
+
+    # Solo lo que este análisis puede mover: los pedidos que NO van ya en un
+    # camión despachado. Antes se contaban TODAS las remisiones del día contra
+    # un `base` que sí excluye las rutas congeladas, así que dos camiones en la
+    # calle con 40 pedidos salían reportados como "40 sin asignar, hay que
+    # acomodarlos a mano" cuando se estaban entregando en ese momento.
+    total_pedidos = (
+        Remision.objects.reales()
+        .filter(doc_date=payload.fecha)
+        .exclude(ruta__estado__in=ESTADOS_RUTA_DESPACHADA)
+        .count()
+    )
 
     def _cuantos_caben(camiones, horas, salida):
         res = solve_vrp(
@@ -486,7 +519,12 @@ def update_ruta_estado(request, ruta_id: int, payload: RutaEstadoIn):
 
     ruta.estado = payload.estado
     if payload.estado == 'En_Ruta':
-        ruta.hora_salida = datetime.now().time()
+        # localtime() y no datetime.now(): con USE_TZ=True `now()` da la hora
+        # del SERVIDOR, que en cualquier hosting va en UTC. La salida de las
+        # 09:00 se guardaría como 15:00 y de ahí saldrían mal TODAS las ETAs
+        # que se recalculan abajo. En la compu de desarrollo no se nota porque
+        # el reloj ya está en Monterrey.
+        ruta.hora_salida = timezone.localtime().time()
     ruta.save()
 
     if payload.estado == 'En_Ruta':

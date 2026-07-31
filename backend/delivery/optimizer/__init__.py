@@ -20,10 +20,11 @@ from .reglas import (
     TIEMPO_DESCARGA_MINUTOS,
     VELOCIDAD_PROMEDIO_KMH,
 )
-from .solver import solve_vrp
+from .solver import SEGUNDOS_SOLVER, solve_vrp
 
 __all__ = [
     "solve_vrp",
+    "SEGUNDOS_SOLVER",
     "build_data_model",
     "recalcular_etas_desde_salida",
     "sugerir_camiones_para_remision",

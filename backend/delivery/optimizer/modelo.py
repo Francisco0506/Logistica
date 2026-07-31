@@ -3,23 +3,16 @@
 Aquí se traducen los pedidos reales a lo que el solver entiende: matriz de
 tiempos y distancias, demandas, ventanas y capacidades.
 """
-from datetime import datetime, timedelta
-
-from django.utils import timezone
-
-from ..models import Destino, Remision, Ruta
+from ..models import Remision
 from ..integrations.osrm import build_distance_time_matrices
 from .reglas import (
-    DECIMALES_MISMO_LUGAR,
     ESTADOS_RUTA_CONGELADOS,
-    HORA_CERO,
     INTERVALO_SALIDA_MINUTOS,
     MINUTOS_TURNO_MAXIMO,
     PESO_ESTIMADO_KG,
     TIEMPO_DESCARGA_MINUTOS,
     VELOCIDAD_PROMEDIO_KMH,
     _clave_lugar,
-    _horas_y_minutos,
     _ventana_en_minutos,
     _ventana_recortada_a_turno,
 )

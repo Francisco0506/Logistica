@@ -95,51 +95,61 @@ WSGI_APPLICATION = 'core.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-import os
-import psycopg2
-from dotenv import load_dotenv
-
-load_dotenv()
-
 DB_NAME = os.getenv('DB_NAME', 'laben_routing')
 DB_USER = os.getenv('DB_USER', 'postgres')
 DB_PASSWORD = os.getenv('DB_PASSWORD', 'postgres')
 DB_HOST = os.getenv('DB_HOST', 'localhost')
 DB_PORT = os.getenv('DB_PORT', '5432')
 
-# PostgreSQL es la ÚNICA base de datos. Antes había un fallback silencioso a
-# SQLite si Postgres no respondía en 2s al arrancar; se quitó porque generaba
-# una segunda fuente de verdad con datos viejos (pedidos/rutas fantasma en el
-# panel) sin que nadie se diera cuenta. Si Postgres no está disponible, mejor
-# tronar aquí con instrucciones claras que trabajar contra datos equivocados.
-try:
-    conn = psycopg2.connect(
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        host=DB_HOST,
-        port=DB_PORT,
-        connect_timeout=5
-    )
-    conn.close()
-except Exception as e:
-    raise RuntimeError(
-        f"PostgreSQL no está disponible en {DB_HOST}:{DB_PORT} ({e}). "
-        "Levántalo con: cd docker && docker compose up -d db"
-    )
-
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': DB_NAME,
-        'USER': DB_USER,
-        'PASSWORD': DB_PASSWORD,
-        'HOST': DB_HOST,
-        'PORT': DB_PORT,
+# PostgreSQL es la ÚNICA base de datos en operación. Antes había un fallback
+# silencioso a SQLite si Postgres no respondía; se quitó porque generaba una
+# segunda fuente de verdad con datos viejos (pedidos/rutas fantasma en el panel)
+# sin que nadie se diera cuenta.
+#
+# La comprobación de que Postgres responde vive en delivery/apps.py:ready(), NO
+# aquí. Estaba a nivel de módulo en este archivo, y eso significa que se abría
+# una conexión con solo IMPORTAR settings: rompía `collectstatic`,
+# `makemigrations --check`, los tests y cualquier CI, y abría una conexión de
+# más por cada worker de gunicorn al arrancar.
+#
+# EXCEPCIÓN para pruebas: con DJANGO_TEST_DB=sqlite se corre contra SQLite en
+# memoria. Es lo contrario del fallback que se quitó — aquel era automático y
+# silencioso (podías estar trabajando contra datos viejos sin saberlo); éste hay
+# que pedirlo a mano por variable de entorno y solo lo usa la suite de pruebas.
+if os.getenv('DJANGO_TEST_DB') == 'sqlite':
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': ':memory:',
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': DB_NAME,
+            'USER': DB_USER,
+            'PASSWORD': DB_PASSWORD,
+            'HOST': DB_HOST,
+            'PORT': DB_PORT,
+        }
+    }
 
-CORS_ALLOW_ALL_ORIGINS = True  # For development only
+# De dónde se acepta que hable el navegador.
+#
+# Antes esto era `CORS_ALLOW_ALL_ORIGINS = True` fijo, con un comentario que
+# decía "solo para desarrollo" — pero no había nada que lo apagara al salir de
+# desarrollo. Con la API sin autenticación, eso significa que cualquier página
+# web que el despachador abriera podía leer la cartera de clientes y rehacer el
+# plan del día desde su navegador.
+#
+# Ahora: en desarrollo se permite todo (cómodo, y ahí no hay nada real); en
+# producción solo lo que se liste en CORS_ORIGINS del .env.
+CORS_ALLOW_ALL_ORIGINS = DEBUG
+CORS_ALLOWED_ORIGINS = [
+    o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()
+]
+CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
 
 
 # Password validation
@@ -181,7 +191,11 @@ STATIC_URL = 'static/'
 # Archivos que suben los usuarios: hoy solo las fotos de evidencia que toma el
 # chofer al entregar. En producción esto debe apuntar a un disco con respaldo,
 # no a la carpeta del proyecto.
-MEDIA_URL = 'media/'
+# Con diagonal inicial. Sin ella, `remision.foto.url` devuelve una ruta
+# RELATIVA ("media/entregas/…"), que el navegador resuelve contra la página
+# actual del panel y da 404: las fotos de evidencia no se veían desde ningún
+# lado que no fuera la raíz.
+MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 # Default primary key field type
