@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import LabenLogo from '../../components/LabenLogo';
 import { useAviso } from '../../components/useAviso';
-import { getRutas, getRutaChofer, confirmarEntrega, getCamionesGPS, subirFotoEntrega, subirFirmaEntrega } from '../../services/api';
+import { getRutas, getRutaChofer, confirmarEntrega, getCamionesGPS, getFlota, subirFotoEntrega, subirFirmaEntrega } from '../../services/api';
 import HojaEntrega from './components/HojaEntrega';
 import MapaRuta from './components/MapaRuta';
 
@@ -47,6 +47,12 @@ export default function DriverApp() {
   // saldrá de su sesión y la lista desaparece.
   const camion = params.get('camion') || '';
   const [rutasDelDia, setRutasDelDia] = useState([]);
+  // Distinguir "todavía no llega la respuesta" de "no hay rutas". Sin esto, con
+  // la señal de la calle el chofer veía "Sin rutas todavía · Pregunta en el
+  // CEDIS" durante segundos aunque sus rutas SÍ existieran — y ese chofer marca
+  // al CEDIS por nada.
+  const [buscandoRutas, setBuscandoRutas] = useState(true);
+  const [flota, setFlota] = useState([]);
   const [ruta, setRuta] = useState(null);
   const [cargando, setCargando] = useState(false);
   const [abierta, setAbierta] = useState(null);   // parada con la hoja de entrega abierta
@@ -61,9 +67,28 @@ export default function DriverApp() {
   // camión que no va a ninguna parte.
   useEffect(() => {
     const c = new AbortController();
-    getRutas(fecha, { signal: c.signal }).then(setRutasDelDia).catch(() => {});
-    return () => c.abort();
+    // Se vuelve a preguntar cada 30 s. Antes se pedía UNA sola vez al abrir la
+    // app: si el despachador generaba las rutas a las 6:40 y el chofer había
+    // abierto a las 6:35, la pantalla se quedaba vacía PARA SIEMPRE hasta que
+    // se le ocurriera recargar el navegador — y un chofer no tiene por qué
+    // saber recargar un navegador.
+    const traer = () => getRutas(fecha, { signal: c.signal })
+      .then(setRutasDelDia)
+      .catch(() => {})
+      .finally(() => setBuscandoRutas(false));
+    traer();
+    const i = setInterval(traer, 30_000);
+    return () => { c.abort(); clearInterval(i); };
   }, [fecha]);
+
+  // El color del camión, que lo identifica en TODAS las demás pantallas. Esta
+  // era la única donde no aparecía.
+  useEffect(() => {
+    const c = new AbortController();
+    getFlota({ signal: c.signal }).then(setFlota).catch(() => {});
+    return () => c.abort();
+  }, []);
+  const colorDe = (placa) => flota.find((f) => f.placa === placa)?.color || '#94a3b8';
 
   // Su propia posición, para verse en el mapa. Aparte de la ruta: si Samsara
   // falla, la lista de paradas sigue funcionando.
@@ -163,60 +188,94 @@ export default function DriverApp() {
   // ── Escoger camión ──
   if (!camion) {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col" style={{ fontFamily: "'Inter', sans-serif" }}>
+      <div className="min-h-screen bg-gray-50 flex flex-col">
         <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <LabenLogo variant="horizontal" />
             <span className="text-[9px] text-gray-300 font-bold tracking-[.2em] uppercase self-end pb-0.5">· Chofer</span>
           </div>
-          <button onClick={() => navigate('/')} className="text-xs font-bold text-gray-400 flex items-center gap-1.5">
-            <LogOut className="w-3.5 h-3.5" /> Salir
+          {/* Con padding de verdad: iba a ~20 px de alto en la esquina del
+              pulgar, así que al querer cerrar algo el chofer se salía del
+              sistema sin querer. */}
+          <button onClick={() => navigate('/')} className="text-[13px] font-bold text-gray-500 flex items-center gap-1.5 px-3 py-2.5 -mr-2 rounded-lg active:bg-gray-100">
+            <LogOut className="w-4 h-4" /> Salir
           </button>
         </header>
 
         <div className="flex-1 p-4">
-          <h1 className="text-lg font-extrabold text-gray-800 mb-1">¿Cuál camión traes?</h1>
-          <p className="text-[13px] text-gray-500 mb-4">
-            {rutasDelDia.length
-              ? 'Estas son las unidades que salen hoy.'
-              : 'Todavía no hay rutas para hoy.'}
+          {/* El título va CHICO y la placa grande: el chofer ya sabe la
+              pregunta antes de abrir la app, lo único que escanea es su placa. */}
+          <h1 className="text-[15px] font-bold text-gray-500 mb-1">¿Cuál camión traes?</h1>
+          <p className="text-[14px] text-gray-600 mb-4">
+            {rutasDelDia.length ? 'Estos son los que salen hoy.' : ''}
           </p>
 
-          {!rutasDelDia.length && (
+          {buscandoRutas && !rutasDelDia.length && (
             <div className="bg-white rounded-xl border border-gray-200 text-center py-12 px-4">
-              <Truck className="w-8 h-8 mx-auto mb-3 text-gray-200" />
-              <p className="text-sm font-bold text-gray-600">Sin rutas todavía</p>
-              <p className="text-xs text-gray-400 mt-1">
-                Pregunta en el CEDIS cuando ya estén generadas.
+              <RefreshCw className="w-7 h-7 mx-auto mb-3 text-gray-300 animate-spin" />
+              <p className="text-[15px] font-bold text-gray-600">Buscando tus rutas…</p>
+            </div>
+          )}
+
+          {!buscandoRutas && !rutasDelDia.length && (
+            <div className="bg-white rounded-xl border border-gray-200 text-center py-10 px-5">
+              <Truck className="w-10 h-10 mx-auto mb-3 text-gray-300" />
+              <p className="text-[17px] font-extrabold text-gray-700">Todavía no hay camiones para hoy</p>
+              <p className="text-[14px] text-gray-500 mt-1.5 leading-snug">
+                En el CEDIS aún no arman las rutas. Esta pantalla se actualiza
+                sola; no tienes que hacer nada.
               </p>
+              <button
+                onClick={() => { setBuscandoRutas(true); getRutas(fecha).then(setRutasDelDia).catch(() => {}).finally(() => setBuscandoRutas(false)); }}
+                className="mt-5 inline-flex items-center gap-2 bg-gray-100 active:bg-gray-200 text-gray-700 font-bold text-[15px] px-5 py-3 rounded-xl"
+              >
+                <RefreshCw className="w-4 h-4" /> Volver a buscar
+              </button>
             </div>
           )}
 
           <div className="space-y-2">
-            {rutasDelDia.map((r) => {
+            {/* Las terminadas hasta abajo: un camión que ya cerró su día no
+                debe estorbarle al que todavía no sale. */}
+            {[...rutasDelDia]
+              .sort((a, b) => (a.estado === 'Finalizada') - (b.estado === 'Finalizada'))
+              .map((r) => {
               const salio = r.estado === 'En_Ruta';
               const cerrada = r.estado === 'Finalizada';
               return (
                 <button
                   key={r.id}
                   onClick={() => setParams({ camion: r.camion })}
-                  className="w-full flex items-center gap-3 bg-white border border-gray-200 active:bg-gray-50 rounded-xl px-4 py-4 text-left transition"
+                  className="w-full flex items-stretch gap-3 bg-white border border-gray-200 active:bg-gray-50 rounded-xl px-4 py-4 text-left transition"
                 >
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[18px] font-extrabold text-gray-800 tracking-wide">{r.camion}</div>
-                    <div className="text-[12px] text-gray-500 mt-0.5">
-                      {r.pedidos_count} entregas
+                  {/* La franja de color: es el mismo con el que este camión
+                      aparece en el mapa y en el manifiesto del CEDIS. */}
+                  <span className="w-1.5 self-stretch rounded-full flex-shrink-0" style={{ backgroundColor: colorDe(r.camion) }} />
+
+                  <div className="flex-1 min-w-0 self-center">
+                    {/* A 26 px la placa se lee a un brazo de distancia, sin
+                        tener que acercarse el celular a la cara — que es el
+                        gesto que no puede hacer con una mano ocupada. */}
+                    <div className="text-[26px] font-extrabold text-gray-900 tracking-wider leading-none">{r.camion}</div>
+                    {/* El nombre del chofer es el dato que de verdad decide: si
+                        dice su nombre, no tiene que acordarse de ninguna placa. */}
+                    {r.chofer && <div className="text-[15px] font-bold text-gray-700 mt-1">{r.chofer}</div>}
+                    <div className="text-[14px] text-gray-600 mt-1">
+                      {r.pedidos_count} {r.pedidos_count === 1 ? 'entrega' : 'entregas'}
                       {r.hora_salida && ` · salió ${r.hora_salida}`}
                     </div>
                   </div>
-                  <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded-full flex-shrink-0 ${
-                    salio ? 'bg-blue-50 text-blue-700'
-                      : cerrada ? 'bg-emerald-50 text-emerald-700'
-                      : 'bg-gray-100 text-gray-500'
+
+                  {/* Fondos -100 y no -50: al sol, un bg-blue-50 sobre blanco
+                      es prácticamente invisible. */}
+                  <span className={`text-[11px] font-bold uppercase px-2 py-1 rounded-full flex-shrink-0 self-center ${
+                    salio ? 'bg-blue-100 text-blue-800'
+                      : cerrada ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-gray-100 text-gray-600'
                   }`}>
                     {salio ? 'En ruta' : cerrada ? 'Terminada' : 'En el CEDIS'}
                   </span>
-                  <ChevronRight className="w-5 h-5 text-gray-300 flex-shrink-0" />
+                  <ChevronRight className="w-5 h-5 text-gray-400 flex-shrink-0 self-center" />
                 </button>
               );
             })}
@@ -227,7 +286,7 @@ export default function DriverApp() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-6" style={{ fontFamily: "'Inter', sans-serif" }}>
+    <div className="min-h-screen bg-gray-50 pb-6">
       {/* ═══ CABECERA — pegada arriba, con el avance siempre visible ═══ */}
       <header className="sticky top-0 z-20 bg-white border-b border-gray-200">
         <div className="px-4 py-3 flex items-center justify-between gap-3">

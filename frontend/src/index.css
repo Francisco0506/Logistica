@@ -53,6 +53,22 @@
   }
 }
 
+/*
+ * LA TIPOGRAFÍA DE TODA LA APP, en un solo lugar.
+ *
+ * Antes tres pantallas (Dispatcher, Driver, Sales) declaraban
+ * `style={{ fontFamily: "'Inter', sans-serif" }}` en línea... pero Inter NO se
+ * cargaba en ninguna parte: ni un <link> en index.html ni un @import aquí. O
+ * sea que Driver y Sales caían a la `sans-serif` genérica del aparato
+ * (Arial en una compu, Roboto en un Android), Dispatcher heredaba esta pila, y
+ * Login usaba la de Tailwind. Cuatro pantallas, tres tipografías distintas,
+ * ninguna a propósito.
+ *
+ * Se resuelve con la pila del sistema y no cargando Inter de una CDN, porque
+ * el chofer abre esto desde la calle con señal mala: una fuente que tarda en
+ * bajar es texto que parpadea o que no se ve. La del sistema ya está en el
+ * aparato y se ve nativa en cada uno.
+ */
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',

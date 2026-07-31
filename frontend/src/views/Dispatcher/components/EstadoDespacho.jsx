@@ -1,5 +1,6 @@
 import React from 'react';
-import { PencilLine, PackageOpen, PackageCheck, Truck, Flag } from 'lucide-react';
+import { Truck } from 'lucide-react';
+import { PASOS } from '../../../config/estadosRuta';
 
 /**
  * El avance de despacho de una ruta.
@@ -12,21 +13,6 @@ import { PencilLine, PackageOpen, PackageCheck, Truck, Flag } from 'lucide-react
  * Finalizada), en qué paso estás, y UNA sola acción: la que sigue.
  */
 
-// El icono dice lo que ese paso significa para quien opera:
-//   Borrador  -> el lápiz: esta ruta TODAVÍA SE PUEDE CAMBIAR. Es lo único que
-//                importa saber de un borrador; una carpeta o un icono de plan
-//                no decían nada útil.
-//   Cargando  -> caja abriéndose, el almacén está subiendo mercancía.
-//   Listo     -> caja cerrada y palomeada, ya cargado esperando salir.
-//   En ruta   -> el camión, ya está en la calle y no se le puede tocar nada.
-//   Terminó   -> bandera de meta.
-const PASOS = [
-  { estado: 'Borrador',   etiqueta: 'Borrador',  icono: PencilLine,   acabado: 'Todavía se puede cambiar' },
-  { estado: 'Cargando',   etiqueta: 'Cargando',  icono: PackageOpen,  acabado: 'Subiendo mercancía' },
-  { estado: 'Listo',      etiqueta: 'Listo',     icono: PackageCheck, acabado: 'Cargado y esperando' },
-  { estado: 'En_Ruta',    etiqueta: 'En ruta',   icono: Truck,        acabado: 'En la calle' },
-  { estado: 'Finalizada', etiqueta: 'Terminó',   icono: Flag,         acabado: 'Terminada' },
-];
 
 // Qué se puede hacer desde cada estado. Coincide con TRANSICIONES_VALIDAS del
 // backend (api.py): no se pueden saltar pasos.
@@ -69,7 +55,7 @@ export default function EstadoDespacho({ ruta, onCambiarEstado, cambiando }) {
                   actual ? 'text-orange-600' : hecho ? 'text-emerald-600' : 'text-gray-300'
                 } ${actual && paso.estado === 'Cargando' ? 'animate-pulse' : ''}`}
               />
-              <span className={`text-[8px] font-bold uppercase tracking-wide ${
+              <span className={`text-[9px] font-bold uppercase tracking-wide ${
                 actual ? 'text-orange-700' : hecho ? 'text-emerald-700' : 'text-gray-300'
               }`}>
                 {paso.etiqueta}

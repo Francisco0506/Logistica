@@ -543,7 +543,7 @@ export default function DispatcherPanel() {
     // La página se recorre. Antes era una aplicación clavada a la pantalla
     // (h-screen + overflow-hidden): no se podía bajar, y todo tenía que caber
     // en el alto del monitor a costa de letra chica y scrolls internos.
-    <div className="min-h-screen w-full bg-gray-50 text-gray-800" style={{ fontFamily: "'Inter', sans-serif" }}>
+    <div className="min-h-screen w-full bg-gray-50 text-gray-800">
       <HeaderDespacho
         fecha={selectedDate}
         onFecha={setSelectedDate}

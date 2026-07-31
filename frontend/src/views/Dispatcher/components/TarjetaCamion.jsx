@@ -1,6 +1,7 @@
 import React from 'react';
-import { Truck, ChevronDown, ChevronUp, MapPin, Clock, Power, Check } from 'lucide-react';
+import { Truck, ChevronDown, ChevronUp, MapPin, Clock, Power, Check, AlertTriangle } from 'lucide-react';
 import EstadoDespacho from './EstadoDespacho';
+import { etiquetaEstado } from '../../../config/estadosRuta';
 
 /**
  * Un camión en el panel: placa, ficha, y al abrirlo el avance de despacho y
@@ -18,10 +19,29 @@ export default function TarjetaCamion({
   onCambiarEstado,
   onEnfocar,
 }) {
+  // Una parada VISITADA es una por la que el camión ya pasó, se haya podido
+  // entregar o no. Es lo que mide el avance de la ruta.
+  //
+  // Antes todo esto miraba solo 'Entregado', y eso rompía cuatro cosas a la vez:
+  // un camión que cerró su día con dos clientes cerrados se quedaba en 8/10
+  // para siempre; "Sigue:" apuntaba a un cliente que el chofer YA reportó y al
+  // que no va a volver; el peso a bordo nunca bajaba de esas paradas, así que
+  // el panel creía que el camión traía encima mercancía que ya regresó al
+  // CEDIS; y el despachador no tenía por dónde enterarse de que hubo un
+  // problema de entrega, aunque el dato estuviera en la base.
+  const VISITADAS = ['Entregado', 'Entregado_Parcial', 'No_Entregado'];
+  const esVisitada = (o) => VISITADAS.includes(o.estado);
+
+  const visitadas = paradas.filter(esVisitada).length;
   const entregadas = paradas.filter((o) => o.estado === 'Entregado').length;
-  const porcentajeEntregado = paradas.length ? (entregadas / paradas.length) * 100 : 0;
-  // La próxima parada es la primera que todavía no se entrega.
-  const proxima = paradas.find((o) => o.estado !== 'Entregado');
+  // Las que el camión hizo pero salieron mal. Es el número que hace que el
+  // despachador levante el teléfono, así que se muestra aparte.
+  const conProblema = paradas.filter(
+    (o) => o.estado === 'Entregado_Parcial' || o.estado === 'No_Entregado',
+  ).length;
+  const porcentajeEntregado = paradas.length ? (visitadas / paradas.length) * 100 : 0;
+  // La próxima parada es la primera por la que el camión NO ha pasado.
+  const proxima = paradas.find((o) => !esVisitada(o));
 
   // ── Carga a bordo ──
   // Lo que el camión TODAVÍA lleva: el peso de lo que no se ha entregado. Baja
@@ -30,7 +50,7 @@ export default function TarjetaCamion({
   const conPeso = paradas.filter((o) => o.peso_kg != null);
   const pesoSalida = conPeso.reduce((s, o) => s + o.peso_kg, 0);
   const pesoABordo = conPeso
-    .filter((o) => o.estado !== 'Entregado')
+    .filter((o) => !esVisitada(o))
     .reduce((s, o) => s + o.peso_kg, 0);
   const hayPesos = conPeso.length > 0 && !!camion.capacidadKg;
   const pctCarga = hayPesos ? Math.min(100, (pesoABordo / camion.capacidadKg) * 100) : 0;
@@ -78,7 +98,7 @@ export default function TarjetaCamion({
                 title={`${camion.modelo}: carga hasta ${camion.capacidadKg.toLocaleString()} kg y ha hecho hasta ${camion.maxParadas} entregas en un día (medido con GPS)`}
                 className="text-[9px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded-md flex-shrink-0"
               >
-                {(camion.capacidadKg / 1000).toLocaleString('es-MX', { maximumFractionDigits: 1 })} ton · {camion.maxParadas} ped.
+                {(camion.capacidadKg / 1000).toLocaleString('es-MX', { maximumFractionDigits: 1 })} ton · máx {camion.maxParadas}
               </span>
             )}
           </div>
@@ -91,7 +111,7 @@ export default function TarjetaCamion({
 
         {camion.active && paradas.length > 0 && (
           <span className="text-[9px] font-bold bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-md flex-shrink-0">
-            {paradas.length} ped.
+            {paradas.length} hoy
           </span>
         )}
 
@@ -134,9 +154,16 @@ export default function TarjetaCamion({
                 style={{ width: `${porcentajeEntregado}%`, backgroundColor: camion.color }}
               />
             </div>
-            <span className="text-[9px] font-bold text-gray-400 tabular-nums flex-shrink-0">
-              {entregadas}/{paradas.length}
+            {/* Este contador es lo que más se consulta de toda la tarjeta y
+                era lo más chico y más claro que había. */}
+            <span className="text-[11px] font-bold text-gray-600 tabular-nums flex-shrink-0">
+              {visitadas}/{paradas.length}
             </span>
+            {conProblema > 0 && (
+              <span className="text-[10px] font-bold text-amber-600 flex-shrink-0 whitespace-nowrap">
+                {conProblema} con problema
+              </span>
+            )}
             {ruta && (
               <span className={`text-[8px] font-bold uppercase px-1.5 py-0.5 rounded flex-shrink-0 ${
                 ruta.estado === 'En_Ruta' ? 'bg-blue-50 text-blue-700'
@@ -144,7 +171,7 @@ export default function TarjetaCamion({
                 : ruta.estado === 'Borrador' ? 'bg-gray-100 text-gray-500'
                 : 'bg-orange-50 text-orange-700'
               }`}>
-                {ruta.estado.replace('_', ' ')}
+                {etiquetaEstado(ruta.estado)}
               </span>
             )}
           </div>
@@ -171,11 +198,15 @@ export default function TarjetaCamion({
 
           <div className="flex items-end justify-between gap-2">
             {proxima ? (
-              <span className="text-[9px] text-gray-500 truncate min-w-0">
-                <span className="font-bold text-gray-400">Sigue:</span> {proxima.card_name}
+              <span className="text-[10px] text-gray-500 truncate min-w-0">
+                <span className="font-bold text-gray-500">Sigue:</span> {proxima.card_name}
                 {proxima.eta_desde && <span className="text-gray-400"> · {proxima.eta_desde}-{proxima.eta_hasta}</span>}
               </span>
-            ) : <span className="text-[9px] text-emerald-600 font-bold">Todo entregado</span>}
+            ) : conProblema ? (
+              <span className="text-[10px] text-amber-600 font-bold">
+                Terminó · {entregadas} de {paradas.length} entregadas
+              </span>
+            ) : <span className="text-[10px] text-emerald-600 font-bold">Todo entregado</span>}
 
             {/* La jornada del camión se lee más grande: es el número con el que
                 el despachador decide si esa ruta cabe en el turno o se pasa. */}
@@ -224,16 +255,18 @@ export default function TarjetaCamion({
               Paradas ({paradas.length})
             </span>
             {paradas.length > 0 ? (
-              <div className="space-y-1.5 max-h-[180px] overflow-y-auto pr-1">
+              <div className="space-y-1.5 max-h-[420px] overflow-y-auto overscroll-contain pr-1">
                 {paradas.map((o, i) => {
                   const entregado = o.estado === 'Entregado';
+                  const visitado = esVisitada(o);
+                  const salioMal = visitado && !entregado;
                   return (
                   <div
                     key={o.id}
                     onClick={(e) => { e.stopPropagation(); onEnfocar([o.lat, o.lng]); }}
                     className={`flex items-center gap-2 border rounded-lg px-2.5 py-2 cursor-pointer transition ${
-                      entregado
-                        ? 'bg-emerald-50/50 border-emerald-100'
+                      entregado ? 'bg-emerald-50/50 border-emerald-100'
+                        : salioMal ? 'bg-amber-50/60 border-amber-200'
                         : 'bg-white border-gray-200 hover:border-gray-300'
                     }`}
                   >
@@ -244,20 +277,34 @@ export default function TarjetaCamion({
                       <span className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 bg-emerald-500">
                         <Check className="w-3 h-3 text-white" strokeWidth={3.5} />
                       </span>
+                    ) : salioMal ? (
+                      // El camión ya pasó por aquí pero no se entregó bien. Ni
+                      // palomita (no está hecho) ni número de orden (ya no va a
+                      // volver): es un aviso.
+                      <span className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 bg-amber-500">
+                        <AlertTriangle className="w-3 h-3 text-white" strokeWidth={3} />
+                      </span>
                     ) : (
                       <span
                         className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0"
                         style={{ backgroundColor: camion.color }}
                       >
-                        {i + 1}
+                        {/* La secuencia del plan, no el índice del arreglo:
+                            es el mismo número que el chofer trae en su celular.
+                            Cuando alguna parada venía sin secuencia, los
+                            números del panel y los del chofer dejaban de
+                            coincidir — y esa llamada de "voy en la 7" / "aquí
+                            la 7 es otra" es justo la fricción que este sistema
+                            viene a quitar. */}
+                        {o.secuencia_ruta ?? i + 1}
                       </span>
                     )}
 
                     <div className="flex-1 min-w-0">
-                      <div className={`font-bold text-[11px] truncate ${entregado ? 'text-gray-500 line-through decoration-gray-300' : 'text-gray-700'}`}>
+                      <div className={`font-bold text-[12px] truncate ${entregado ? 'text-gray-500 line-through decoration-gray-300' : salioMal ? 'text-amber-900' : 'text-gray-700'}`}>
                         <span className="text-gray-400 no-underline">#{o.doc_num}</span> {o.card_name}
                       </div>
-                      <div className="text-[9px] text-gray-500 font-medium flex items-center gap-2">
+                      <div className="text-[10px] text-gray-500 font-medium flex items-center gap-2">
                         <span className={`flex items-center gap-1 ${entregado ? 'text-emerald-600 font-bold' : ''}`}>
                           <Clock className="w-3 h-3" /> {entregado ? 'Llegó' : 'Llega'} {o.eta_desde ? `${o.eta_desde}-${o.eta_hasta}` : '—'}
                         </span>

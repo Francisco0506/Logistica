@@ -157,7 +157,7 @@ export default function SalesPanel() {
   }, [pedidos]);
 
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-800" style={{ fontFamily: "'Inter', sans-serif" }}>
+    <div className="min-h-screen bg-gray-50 text-gray-800">
       {/* ═══ HEADER — mismo patrón que el dispatcher ═══ */}
       <header className="sticky top-0 z-[1100] bg-white/95 backdrop-blur border-b border-gray-200 px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">
