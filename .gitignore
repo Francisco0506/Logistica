@@ -27,8 +27,10 @@ docker/docker-compose.override.yml
 media/
 
 # Reportes con datos reales de clientes: se generan localmente, no se suben.
-entregas_pesos.csv
+# `*.csv` ya cubre entregas_pesos.csv y cualquier otro que salga.
 *.csv
 
-# Reportes de cobertura con datos de clientes
-backend/delivery/data/DESGLOSE_COBERTURA.xlsx
+# Excel con datos de clientes. La regla apuntaba a backend/delivery/data/, que
+# ya no existe: el Excel semilla se eliminó y SAP es la única fuente. Se deja a
+# nivel de patrón para que ningún reporte nuevo se suba por descuido.
+*.xlsx

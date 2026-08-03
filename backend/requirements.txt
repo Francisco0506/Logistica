@@ -11,7 +11,6 @@ psycopg2-binary>=2.9.9,<3.0
 ortools>=9.8.3296,<10.0
 python-dotenv>=1.0.1,<2.0
 requests>=2.31.0,<3.0
-openpyxl>=3.1.2,<4.0
 
 # Pillow NO es opcional: `Remision.foto` es un ImageField y Django lo exige
 # —sin él ni siquiera corre `migrate`. Faltaba en esta lista, así que el
@@ -19,6 +18,12 @@ openpyxl>=3.1.2,<4.0
 # lado. Es el clásico "en mi compu sí jala".
 Pillow>=10.0,<12.0
 
-# Opcional: solo para la conexion real a SAP B1 (SQL Server). sync.py funciona
-# sin el (reporta "SAP no configurado").
+# Opcional: solo para la conexión real a SAP B1 (SQL Server). Sin él,
+# `integrations/sap.py` reporta "SAP B1 no está configurado" y el panel sigue
+# sirviendo con lo que ya está en Postgres.
+#
+# OJO al instalar en macOS (Apple Silicon): pyodbc necesita además el driver de
+# Microsoft, que se instala aparte y NO existe en su versión 17 ni como Native
+# Client. Ver scripts/produccion.md §0 — es el punto más probable de falla al
+# mover esto a la Mac del cliente.
 pyodbc>=5.0,<6.0

@@ -47,7 +47,10 @@ services:
   # ocupado. Requiere haber procesado el mapa antes (ver prepare).
   # ─────────────────────────────────────────────────────────────
   osrm:
-    image: osrm/osrm-backend:latest
+    # Tag FIJO, no `latest`. Con `latest`, un `docker compose pull` cualquier
+    # día cambia el motor de ruteo por debajo y las rutas dejan de coincidir con
+    # las de ayer sin que nadie haya tocado nada.
+    image: osrm/osrm-backend:v5.27.1
     container_name: logistica-osrm
     command: osrm-routed --algorithm mld --max-table-size 10000 /data/mexico-latest.osrm
     volumes:
@@ -55,6 +58,15 @@ services:
     ports:
       - "5001:5000"
     restart: unless-stopped
+    # Sin healthcheck, Docker solo reinicia si el PROCESO se muere. Un OSRM que
+    # se cuelga sigue "arriba" y el optimizador se cae a línea recta sin que
+    # nadie sepa por qué. Con esto, un OSRM colgado se reinicia solo.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5000/route/v1/driving/-100.48,25.69;-100.31,25.67 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
 volumes:
   pgdata:
