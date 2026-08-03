@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Truck, Clock, MapPin, CheckCircle2, AlertCircle, Package, ChevronDown } from 'lucide-react';
+import { Truck, Clock, MapPin, CheckCircle2, AlertCircle, AlertTriangle, XCircle, Package, ChevronDown } from 'lucide-react';
 import MiniMapa from '../../../components/MiniMapa';
 
 /**
@@ -15,11 +15,20 @@ import MiniMapa from '../../../components/MiniMapa';
  * minuto suena a promesa que no se puede cumplir.
  */
 
+// Los tres estados FINALES no estaban aquí, y por eso un pedido que el chofer
+// reportó como "no se pudo entregar" caía al `|| ESTILOS.Pendiente` y le salía
+// a la vendedora con la pastilla gris "SIN PROGRAMAR" —que significa lo
+// contrario: "todavía no entra a ninguna ruta"—. Si abría la tarjeta, el texto
+// de adentro decía "NO se pudo entregar (se reportó a las 11:20)". Dos cosas
+// contrarias en la misma tarjeta, y la falsa era la de arriba, que es la que se
+// lee de reojo en una lista de 80.
 const ESTILOS = {
-  Entregado: { icono: CheckCircle2, pill: 'bg-emerald-50 text-emerald-700', barra: 'bg-emerald-500', texto: 'Entregado' },
-  En_Camino: { icono: Truck,        pill: 'bg-blue-50 text-blue-700',       barra: 'bg-blue-500',    texto: 'En camino' },
-  Asignado:  { icono: Package,      pill: 'bg-orange-50 text-orange-700',   barra: 'bg-orange-400',  texto: 'Programado' },
-  Pendiente: { icono: AlertCircle,  pill: 'bg-gray-100 text-gray-600',      barra: 'bg-gray-300',    texto: 'Sin programar' },
+  Entregado:         { icono: CheckCircle2, pill: 'bg-emerald-50 text-emerald-700', barra: 'bg-emerald-500', texto: 'Entregado' },
+  Entregado_Parcial: { icono: AlertTriangle, pill: 'bg-amber-50 text-amber-700',    barra: 'bg-amber-500',   texto: 'Incompleto' },
+  No_Entregado:      { icono: XCircle,      pill: 'bg-red-50 text-red-700',         barra: 'bg-red-500',     texto: 'No entregado' },
+  En_Camino:         { icono: Truck,        pill: 'bg-blue-50 text-blue-700',       barra: 'bg-blue-500',    texto: 'En camino' },
+  Asignado:          { icono: Package,      pill: 'bg-orange-50 text-orange-700',   barra: 'bg-orange-400',  texto: 'Programado' },
+  Pendiente:         { icono: AlertCircle,  pill: 'bg-gray-100 text-gray-600',      barra: 'bg-gray-300',    texto: 'Sin programar' },
 };
 
 export default function TarjetaPedido({ pedido, camion, color }) {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ChevronDown, Check } from 'lucide-react';
 
 /**
@@ -19,7 +19,21 @@ export default function MenuSeleccion({
   className = '',
 }) {
   const [abierto, setAbierto] = useState(false);
-  const actual = opciones.find((o) => o.valor === valor) || opciones[0];
+  const actual = opciones.find((o) => o.valor === valor);
+
+  // Si el valor filtrado ya no está entre las opciones, se avisa al padre para
+  // que lo suelte, en vez de enseñar `opciones[0]` como si nada.
+  //
+  // Antes caía a `|| opciones[0]`: el botón decía "Todos los camiones" mientras
+  // el filtro viejo SEGUÍA aplicado. La vendedora filtraba por una placa,
+  // cambiaba de día, y la lista le salía vacía con el control diciendo que no
+  // había ningún filtro puesto. Y si ese día solo había un camión, el selector
+  // ni se dibujaba: no había forma de quitarlo salvo recargar el navegador.
+  useEffect(() => {
+    if (!actual && opciones.length) onCambio(opciones[0].valor);
+  }, [actual, opciones, onCambio]);
+
+  const mostrado = actual || opciones[0];
 
   return (
     <div className={`relative ${className}`}>
@@ -27,10 +41,10 @@ export default function MenuSeleccion({
         onClick={() => setAbierto((v) => !v)}
         className="flex items-center gap-2 bg-gray-50 border border-gray-200 hover:bg-gray-100 rounded-lg pl-2.5 pr-2 py-1.5 text-[11px] font-bold text-gray-600 transition w-full"
       >
-        {actual?.color && (
-          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: actual.color }} />
+        {mostrado?.color && (
+          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: mostrado.color }} />
         )}
-        <span className="truncate">{actual?.texto}</span>
+        <span className="truncate">{mostrado?.texto}</span>
         <ChevronDown className="w-3.5 h-3.5 text-gray-400 ml-auto flex-shrink-0" />
       </button>
 

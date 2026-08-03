@@ -14,23 +14,35 @@ import { PASOS } from '../../../config/estadosRuta';
  */
 
 
-// Qué se puede hacer desde cada estado. Coincide con TRANSICIONES_VALIDAS del
-// backend (api.py): no se pueden saltar pasos.
+// CÓMO SE LLAMA cada acción. Solo el texto: a qué estado lleva cada paso lo
+// decide el BACKEND y llega por /api/config.
+//
+// Antes este archivo tenía su propia copia de la máquina de estados, con un
+// comentario que decía "coincide con TRANSICIONES_VALIDAS del backend".
+// Coincidía HOY. En cuanto se desfasara, el botón mandaría una transición que
+// el backend rechaza —y la rechaza con HTTP 200 y `status: 'error'`, así que se
+// vería como un botón que simplemente no hace nada.
 //
 // TODAS las acciones van en el naranja de Laben. Es el color de la marca y el
 // de la acción principal en todo el sistema: cambiarlo por paso hacía que el
 // botón se sintiera de otra aplicación.
-const SIGUIENTE = {
-  Borrador:  { estado: 'Cargando',   texto: 'Empezar a cargar',  ayuda: 'El almacén empieza a subir la mercancía' },
-  Cargando:  { estado: 'Listo',      texto: 'Marcar como listo', ayuda: 'Ya está cargado y esperando salir' },
-  Listo:     { estado: 'En_Ruta',    texto: 'Dar salida',        ayuda: 'Las ETAs se recalculan desde la hora real de salida' },
-  En_Ruta:   { estado: 'Finalizada', texto: 'Cerrar la ruta',    ayuda: 'El camión regresó y terminó sus entregas' },
-  Finalizada: null,
+const TEXTO_ACCION = {
+  Cargando:   { texto: 'Empezar a cargar',  ayuda: 'El almacén empieza a subir la mercancía' },
+  Listo:      { texto: 'Marcar como listo', ayuda: 'Ya está cargado y esperando salir' },
+  En_Ruta:    { texto: 'Dar salida',        ayuda: 'Las ETAs se recalculan desde la hora real de salida' },
+  Finalizada: { texto: 'Cerrar la ruta',    ayuda: 'El camión regresó y terminó sus entregas' },
 };
 
-export default function EstadoDespacho({ ruta, onCambiarEstado, cambiando }) {
+export default function EstadoDespacho({ ruta, onCambiarEstado, cambiando, transiciones }) {
   const indiceActual = PASOS.findIndex((p) => p.estado === ruta.estado);
-  const siguiente = SIGUIENTE[ruta.estado];
+
+  // El primer estado al que el backend deja pasar desde el actual. Si algún día
+  // se agrega un paso allá, el botón sale solo con un texto genérico en vez de
+  // no salir.
+  const destino = (transiciones?.[ruta.estado] ?? [])[0] ?? null;
+  const siguiente = destino
+    ? { estado: destino, ...(TEXTO_ACCION[destino] ?? { texto: `Pasar a ${destino}`, ayuda: '' }) }
+    : null;
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
@@ -88,7 +100,9 @@ export default function EstadoDespacho({ ruta, onCambiarEstado, cambiando }) {
             >
               {cambiando ? 'Guardando…' : siguiente.texto}
             </button>
-            <p className="text-[10px] text-gray-400 text-center leading-snug">{siguiente.ayuda}</p>
+            {siguiente.ayuda && (
+              <p className="text-[10px] text-gray-400 text-center leading-snug">{siguiente.ayuda}</p>
+            )}
           </>
         ) : (
           <p className="text-[10px] text-gray-400 text-center italic py-1">

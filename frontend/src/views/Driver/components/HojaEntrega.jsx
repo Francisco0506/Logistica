@@ -15,17 +15,35 @@ import PanelFirma from './PanelFirma';
  *     porcentaje.
  */
 
-const MOTIVOS = [
-  ['cliente_rechazo', 'El cliente aceptó menos'],
-  ['producto_danado', 'Producto dañado'],
-  ['falto_en_camion', 'No venía en el camión'],
-  ['cerrado', 'Estaba cerrado'],
-  ['sin_quien_reciba', 'No había quién recibiera'],
-  ['sin_espacio', 'No tenían dónde meterlo'],
-  ['otro', 'Otro motivo'],
-];
+// Cómo se le dice a cada motivo EN EL CELULAR. Los textos son más cortos que
+// los del backend a propósito: aquí se leen de pie, en la calle, en una
+// pantalla angosta.
+//
+// La LISTA de motivos ya no se escribe aquí: llega de /api/config, del mismo
+// catálogo de `models.MOTIVOS`. Estaba duplicada, y el desfase era silencioso
+// en las dos direcciones: si alguien agregaba un motivo en el modelo, el chofer
+// nunca lo veía; y si un id se desfasaba, Django lo guardaba igual —no valida
+// `choices` en `save()`— dejando basura en el catálogo con el que se pretende
+// contar después ("¿cuántas veces al mes nos rechazan producto?").
+const TEXTO_CORTO = {
+  cliente_rechazo: 'El cliente aceptó menos',
+  producto_danado: 'Producto dañado',
+  falto_en_camion: 'No venía en el camión',
+  cerrado: 'Estaba cerrado',
+  sin_quien_reciba: 'No había quién recibiera',
+  sin_espacio: 'No tenían dónde meterlo',
+  otro: 'Otro motivo',
+};
 
-export default function HojaEntrega({ parada, onCerrar, onConfirmar, guardando, puedeEntregar = true }) {
+export default function HojaEntrega({
+  parada, onCerrar, onConfirmar, guardando, puedeEntregar = true,
+  // El catálogo del backend. El default es el de siempre, para que la hoja
+  // siga sirviendo aunque /api/config no haya contestado.
+  motivos = Object.keys(TEXTO_CORTO).map((id) => ({ id, texto: TEXTO_CORTO[id] })),
+}) {
+  // Si el backend manda un motivo nuevo que no tiene texto corto aquí, se usa
+  // el largo del backend en vez de no mostrarlo.
+  const MOTIVOS = motivos.map((m) => [m.id, TEXTO_CORTO[m.id] ?? m.texto]);
   const [modo, setModo] = useState(null);   // null | 'parcial'
   const [cantidades, setCantidades] = useState(
     () => Object.fromEntries(parada.lineas.map((l) => [l.id, l.cantidad]))

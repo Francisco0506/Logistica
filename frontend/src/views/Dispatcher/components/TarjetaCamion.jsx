@@ -1,7 +1,7 @@
 import React from 'react';
 import { Truck, ChevronDown, ChevronUp, MapPin, Clock, Power, Check, AlertTriangle } from 'lucide-react';
 import EstadoDespacho from './EstadoDespacho';
-import { etiquetaEstado } from '../../../config/estadosRuta';
+import { esVisitada, etiquetaEstado, salioMal } from '../../../config/estadosRuta';
 import { textoSobre } from '../../../lib/color';
 
 /**
@@ -19,6 +19,11 @@ export default function TarjetaCamion({
   onCambiarChofer,
   onCambiarEstado,
   onEnfocar,
+  // El turno con el que se corrió el plan. Con default para que la tarjeta
+  // siga sirviendo si el padre todavía no lo tiene.
+  horasTurno = 6,
+  // La máquina de estados del despacho, tal como la manda el backend.
+  transiciones,
 }) {
   // Una parada VISITADA es una por la que el camión ya pasó, se haya podido
   // entregar o no. Es lo que mide el avance de la ruta.
@@ -30,19 +35,16 @@ export default function TarjetaCamion({
   // el panel creía que el camión traía encima mercancía que ya regresó al
   // CEDIS; y el despachador no tenía por dónde enterarse de que hubo un
   // problema de entrega, aunque el dato estuviera en la base.
-  const VISITADAS = ['Entregado', 'Entregado_Parcial', 'No_Entregado'];
-  const esVisitada = (o) => VISITADAS.includes(o.estado);
-
-  const visitadas = paradas.filter(esVisitada).length;
+  // La lista de los tres estados finales ya no se escribe aquí: vive en
+  // config/estadosRuta.js, que es la única copia del frontend.
+  const visitadas = paradas.filter((o) => esVisitada(o.estado)).length;
   const entregadas = paradas.filter((o) => o.estado === 'Entregado').length;
   // Las que el camión hizo pero salieron mal. Es el número que hace que el
   // despachador levante el teléfono, así que se muestra aparte.
-  const conProblema = paradas.filter(
-    (o) => o.estado === 'Entregado_Parcial' || o.estado === 'No_Entregado',
-  ).length;
+  const conProblema = paradas.filter((o) => salioMal(o.estado)).length;
   const porcentajeEntregado = paradas.length ? (visitadas / paradas.length) * 100 : 0;
   // La próxima parada es la primera por la que el camión NO ha pasado.
-  const proxima = paradas.find((o) => !esVisitada(o));
+  const proxima = paradas.find((o) => !esVisitada(o.estado));
 
   // ── Carga a bordo ──
   // Lo que el camión TODAVÍA lleva: el peso de lo que no se ha entregado. Baja
@@ -51,7 +53,7 @@ export default function TarjetaCamion({
   const conPeso = paradas.filter((o) => o.peso_kg != null);
   const pesoSalida = conPeso.reduce((s, o) => s + o.peso_kg, 0);
   const pesoABordo = conPeso
-    .filter((o) => !esVisitada(o))
+    .filter((o) => !esVisitada(o.estado))
     .reduce((s, o) => s + o.peso_kg, 0);
   const hayPesos = conPeso.length > 0 && !!camion.capacidadKg;
   const pctCarga = hayPesos ? Math.min(100, (pesoABordo / camion.capacidadKg) * 100) : 0;
@@ -218,8 +220,13 @@ export default function TarjetaCamion({
                   ? `Horas recalculadas desde la salida real (${ruta.hora_salida})`
                   : 'Horas del PLAN: suponen que este camión sale a la hora configurada. Se recalculan solas al dar Salida.'}
               >
+                {/* El ámbar se mide contra el turno CON EL QUE SE CORRIÓ el
+                    plan, no contra un 6 clavado. Con el 6 fijo, optimizar con
+                    turno de 8 h pintaba TODAS las tarjetas de ámbar avisando de
+                    un problema que no existía — y una advertencia que siempre
+                    está prendida es una advertencia que nadie vuelve a mirar. */}
                 <span className={`text-[12px] font-extrabold tabular-nums ${
-                  duracionMin > 6 * 60 ? 'text-amber-600' : 'text-gray-700'
+                  duracionMin > horasTurno * 60 ? 'text-amber-600' : 'text-gray-700'
                 }`}>
                   {duracionTexto}
                 </span>
@@ -248,7 +255,12 @@ export default function TarjetaCamion({
           </div>
 
           {ruta && (
-            <EstadoDespacho ruta={ruta} onCambiarEstado={onCambiarEstado} cambiando={cambiandoEstado} />
+            <EstadoDespacho
+              ruta={ruta}
+              onCambiarEstado={onCambiarEstado}
+              cambiando={cambiandoEstado}
+              transiciones={transiciones}
+            />
           )}
 
           <div>
@@ -259,15 +271,14 @@ export default function TarjetaCamion({
               <div className="space-y-1.5 max-h-[420px] overflow-y-auto overscroll-contain pr-1">
                 {paradas.map((o, i) => {
                   const entregado = o.estado === 'Entregado';
-                  const visitado = esVisitada(o);
-                  const salioMal = visitado && !entregado;
+                  const fallo = salioMal(o.estado);
                   return (
                   <div
                     key={o.id}
                     onClick={(e) => { e.stopPropagation(); onEnfocar([o.lat, o.lng]); }}
                     className={`flex items-center gap-2 border rounded-lg px-2.5 py-2 cursor-pointer transition ${
                       entregado ? 'bg-emerald-50/50 border-emerald-100'
-                        : salioMal ? 'bg-amber-50/60 border-amber-200'
+                        : fallo ? 'bg-amber-50/60 border-amber-200'
                         : 'bg-white border-gray-200 hover:border-gray-300'
                     }`}
                   >
@@ -278,7 +289,7 @@ export default function TarjetaCamion({
                       <span className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 bg-emerald-500">
                         <Check className="w-3 h-3 text-white" strokeWidth={3.5} />
                       </span>
-                    ) : salioMal ? (
+                    ) : fallo ? (
                       // El camión ya pasó por aquí pero no se entregó bien. Ni
                       // palomita (no está hecho) ni número de orden (ya no va a
                       // volver): es un aviso.
@@ -305,7 +316,7 @@ export default function TarjetaCamion({
                     )}
 
                     <div className="flex-1 min-w-0">
-                      <div className={`font-bold text-[12px] truncate ${entregado ? 'text-gray-500 line-through decoration-gray-300' : salioMal ? 'text-amber-900' : 'text-gray-700'}`}>
+                      <div className={`font-bold text-[12px] truncate ${entregado ? 'text-gray-500 line-through decoration-gray-300' : fallo ? 'text-amber-900' : 'text-gray-700'}`}>
                         <span className="text-gray-400 no-underline">#{o.doc_num}</span> {o.card_name}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium flex items-center gap-2">

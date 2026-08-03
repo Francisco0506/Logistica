@@ -27,4 +27,13 @@ export default defineConfig({
       },
     },
   },
+  // Las pruebas del frontend. El backend tiene 112 y el frontend tenía CERO,
+  // y es justo donde viven los bugs de carrera que se arreglaron uno por uno a
+  // mano. `jsdom` alcanza: aquí no se prueba el mapa ni Leaflet, se prueban las
+  // cuentas y las decisiones.
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    include: ['src/**/*.test.{js,jsx}'],
+  },
 })

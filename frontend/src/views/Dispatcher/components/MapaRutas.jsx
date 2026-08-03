@@ -5,6 +5,7 @@ import L from 'leaflet';
 import { textoSobre } from '../../../lib/color';
 import { Compass, X, ZoomIn, ZoomOut, Maximize2, Minimize2 } from 'lucide-react';
 import { CEDIS } from '../../../config/fleet';
+import { ESTILO_ENTREGA, esVisitada, salioMal } from '../../../config/estadosRuta';
 
 // ── Iconos de Leaflet ──
 // Vienen de un CDN externo: si algún día se bloquea, los pines dejan de verse.
@@ -359,14 +360,33 @@ export default function MapaRutas({
               />
               {paradas.map((o, i) => (
                 <Marker
-                  key={`s-${camion.id}-${i}`}
+                  key={`s-${camion.id}-${o.id ?? i}`}
                   position={[o.lat, o.lng]}
-                  icon={iconoParada(camion.color, i + 1, o.estado === 'Entregado')}
+                  // El número sale de `secuencia_ruta`, NO del índice del arreglo.
+                  //
+                  // Era `i + 1`, y sobre un arreglo ya filtrado por coordenadas
+                  // (arriba: `.filter(o => o.lat && o.lng)`). Bastaba que una
+                  // parada viniera sin coordenada para que el mapa la saltara y
+                  // corriera un número TODAS las siguientes: la tarjeta del
+                  // camión y el celular del chofer decían "6" donde el mapa
+                  // decía "5". Es justo la llamada de "voy en la 7 / aquí la 7
+                  // es otra" que este sistema viene a quitar.
+                  //
+                  // Y se atenúa por VISITADA, no por `=== 'Entregado'`: una
+                  // parada donde el camión pasó y no pudo entregar seguía
+                  // pintada a color pleno, idéntica a una pendiente.
+                  icon={iconoParada(camion.color, o.secuencia_ruta ?? i + 1, esVisitada(o.estado))}
                 >
                   {/* Cada ruta numera desde 1, así que varios círculos "1" cercanos
                       son normales — el popup aclara a qué camión pertenece. */}
                   <Popup>
-                    <b>{camion.id}</b> — Parada {i + 1}<br />
+                    <b>{camion.id}</b> — Parada {o.secuencia_ruta ?? i + 1}
+                    {salioMal(o.estado) && (
+                      <> · <span style={{ color: ESTILO_ENTREGA[o.estado].color, fontWeight: 700 }}>
+                        {ESTILO_ENTREGA[o.estado].corto}
+                      </span></>
+                    )}
+                    <br />
                     <span style={{ fontSize: 11, color: '#64748b' }}>#{o.doc_num} {o.card_name}</span>
                     {o.eta_desde && <><br /><span style={{ fontSize: 11, color: '#64748b' }}>Llega entre {o.eta_desde} y {o.eta_hasta}</span></>}
                     {o.ventana && <><br /><span style={{ fontSize: 11, color: '#64748b' }}>Recibe {o.ventana}</span></>}

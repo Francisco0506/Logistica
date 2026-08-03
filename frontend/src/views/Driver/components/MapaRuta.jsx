@@ -4,6 +4,7 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { Compass, ZoomIn, ZoomOut, Crosshair } from 'lucide-react';
 import { CEDIS } from '../../../config/fleet';
+import { esVisitada } from '../../../config/estadosRuta';
 
 /**
  * El mapa de la ruta del chofer.
@@ -148,7 +149,7 @@ export default function MapaRuta({ paradas, siguiente, miPosicion, alto = 'h-[30
             position={[p.lat, p.lng]}
             icon={iconoParada(
               p.secuencia_ruta,
-              ['Entregado', 'Entregado_Parcial', 'No_Entregado'].includes(p.estado),
+              esVisitada(p.estado),
               siguiente?.id === p.id,
             )}
           >

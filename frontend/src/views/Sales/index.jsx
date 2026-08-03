@@ -2,11 +2,13 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search, LogOut, User, RefreshCw, Truck, CheckCircle2, Package, AlertCircle,
-  Map as MapIcon, List, Clock, ChevronDown, ChevronUp,
+  AlertTriangle, Map as MapIcon, List, Clock, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import LabenLogo from '../../components/LabenLogo';
 import { useAviso } from '../../components/useAviso';
 import MenuSeleccion from '../../components/MenuSeleccion';
+import { esVisitada, salioMal } from '../../config/estadosRuta';
+import { hoyLocal } from '../../lib/fecha';
 import { getVendedores, getPedidosVendedor, getCamionesGPS, getFlota } from '../../services/api';
 import TarjetaPedido from './components/TarjetaPedido';
 import MapaPedidos from './components/MapaPedidos';
@@ -17,11 +19,6 @@ const REFRESH_INTERVAL_MS = 60_000;
 // El GPS por su cuenta y más seguido: es lo único que se mueve solo.
 const GPS_INTERVAL_MS = 20_000;
 
-const hoy = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
-
 // Filtros en el orden en que le urgen a la vendedora: primero lo que está
 // pasando ahora, luego lo programado, luego lo que NO va a salir (que es lo que
 // tiene que resolver) y al final lo entregado, que ya no requiere nada.
@@ -30,6 +27,12 @@ const FILTROS = [
   { id: 'En_Camino', texto: 'En camino', icono: Truck, color: 'text-blue-600' },
   { id: 'Asignado', texto: 'Programados', icono: Package, color: 'text-orange-600' },
   { id: 'Pendiente', texto: 'Sin programar', icono: AlertCircle, color: 'text-red-600' },
+  // Lo que salió mal es LO QUE LA VENDEDORA TIENE QUE RESOLVER, y era justo lo
+  // único que no se podía filtrar: un pedido `No_Entregado` o
+  // `Entregado_Parcial` no caía en ninguna categoría y solo aparecía en
+  // "Todos", perdido entre 80. Va antes que "Entregados" a propósito: lo que
+  // requiere una llamada al cliente pesa más que lo que ya se cerró.
+  { id: 'con_problema', texto: 'Con problema', icono: AlertTriangle, color: 'text-amber-600' },
   { id: 'Entregado', texto: 'Entregados', icono: CheckCircle2, color: 'text-emerald-600' },
 ];
 
@@ -37,7 +40,7 @@ export default function SalesPanel() {
   const navigate = useNavigate();
   const avisar = useAviso();
 
-  const [fecha, setFecha]           = useState(hoy());
+  const [fecha, setFecha]           = useState(hoyLocal());
   const [vendedores, setVendedores] = useState([]);
   const [slpCode, setSlpCode]       = useState('');
   const [pedidos, setPedidos]       = useState([]);
@@ -116,9 +119,14 @@ export default function SalesPanel() {
 
   const vendedor = vendedores.find((v) => v.slp_code === slpCode);
 
+  // `con_problema` no es un estado del backend sino un grupo de dos, así que
+  // se cuenta con su propio criterio en vez de comparar contra el id.
+  const cumpleFiltro = (p, id) =>
+    id === 'todos' ? true : id === 'con_problema' ? salioMal(p.estado) : p.estado === id;
+
   const cuenta = useMemo(() => {
     const c = { todos: pedidos.length };
-    for (const f of FILTROS.slice(1)) c[f.id] = pedidos.filter((p) => p.estado === f.id).length;
+    for (const f of FILTROS.slice(1)) c[f.id] = pedidos.filter((p) => cumpleFiltro(p, f.id)).length;
     return c;
   }, [pedidos]);
 
@@ -131,7 +139,7 @@ export default function SalesPanel() {
   const colorDe = (placa) => flota.find((c) => c.placa === placa)?.color || '#94a3b8';
 
   const visibles = useMemo(() => {
-    let lista = filtro === 'todos' ? pedidos : pedidos.filter((p) => p.estado === filtro);
+    let lista = pedidos.filter((p) => cumpleFiltro(p, filtro));
     // El filtro de camión se encadena con el de estado: filtrar por vendedora y
     // luego por camión deja SOLO sus pedidos en ese camión, que es lo que se
     // ocupa para contestar "¿y los míos que van en el 027?".
@@ -148,10 +156,17 @@ export default function SalesPanel() {
     return lista;
   }, [pedidos, filtro, busqueda, camionFiltro]);
 
-  // El que urge: lo primero que va a llegar de lo que todavía no llega.
+  // El que urge: lo primero que va a llegar DE LO QUE TODAVÍA NO LLEGA.
+  //
+  // Se descartan las tres finales, no solo 'Entregado'. Comparando contra
+  // 'Entregado' a secas, un pedido `No_Entregado` conservaba su `eta_desde` y
+  // la franja de arriba seguía anunciando a la 1 de la tarde "Lo próximo en
+  // llegar: RESTAURANTE X · 09:04–09:34" de un cliente donde el camión ya
+  // había pasado sin poder entregar. Es el número que la vendedora lee
+  // mientras tiene al cliente en el teléfono.
   const proximo = useMemo(() => {
     const enCurso = pedidos
-      .filter((p) => p.eta_desde && p.estado !== 'Entregado')
+      .filter((p) => p.eta_desde && !esVisitada(p.estado))
       .sort((a, b) => a.eta_desde.localeCompare(b.eta_desde));
     return enCurso[0] || null;
   }, [pedidos]);

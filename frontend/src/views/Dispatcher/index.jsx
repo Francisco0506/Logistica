@@ -1,14 +1,17 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Truck, RefreshCw, Search, AlertCircle, Package, FileText, Clock, Loader, Plus, ChevronDown, ChevronUp } from 'lucide-react';
 import { CEDIS } from '../../config/fleet';
-import { colorLibre } from '../../lib/color';
+import { useConfig } from '../../config/useConfig';
 import { useAviso } from '../../components/useAviso';
-import {
-  syncSAP, getRemisiones, getRutas, getAlertas, generarRutas, updateRutaEstado,
-  getSugerencias, asignarManual, getCamionesGPS, getFlota,
-  evaluarEscenarios, getJornada,
-} from '../../services/api';
+import { useCamionesGPS } from './hooks/useCamionesGPS';
+import { useEnfoqueMapa } from './hooks/useEnfoqueMapa';
+import { useFlota } from './hooks/useFlota';
+import { useJornada } from './hooks/useJornada';
+import { useDatosDelDia } from './hooks/useDatosDelDia';
+import { useRutasOsrm } from './hooks/useRutasOsrm';
+import { useAsignacionManual } from './hooks/useAsignacionManual';
+import { useOptimizacion } from './hooks/useOptimizacion';
 import HeaderDespacho from './components/HeaderDespacho';
 import TarjetaCamion from './components/TarjetaCamion';
 import PanelSinAsignar from './components/PanelSinAsignar';
@@ -18,67 +21,62 @@ import MapaRutas from './components/MapaRutas';
 import ModalForzar from './components/ModalForzar';
 import PreviewManifiesto from './components/PreviewManifiesto';
 
-// Cada cuánto se refresca la vista para traer lo más nuevo (pedidos nuevos de
-// SAP, cambios de estado de otros usuarios) sin recargar la página a mano.
-const REFRESH_INTERVAL_MS = 45_000;
-// El GPS va por su cuenta y más seguido: es lo único que se mueve solo en el
-// mapa. Samsara reporta cada pocos segundos, así que 15 s se ve fluido sin
-// castigar su límite de llamadas.
-const GPS_INTERVAL_MS = 15_000;
-// La ruta que dibuja el mapa evita autopistas de cuota, mismo criterio que el
-// optimizador del backend, para no cruzar casetas ni visual ni realmente.
-const OSRM_EXCLUDE = 'motorway';
-// Servidor OSRM propio (Docker), igual que OSRM_BASE en el backend. OJO: que el
-// contenedor esté corriendo no basta — el backend solo lo usa si OSRM_BASE está
-// puesto en su .env; si no, sigue pegándole al público y su límite de 100 paradas.
-const OSRM_BASE = import.meta.env.VITE_OSRM_BASE || 'http://localhost:5001';
-
-// Fecha del sistema en hora LOCAL. No se usa toISOString(): se adelanta de día
-// después de las 6 pm en México y rompe la sincronización.
-const hoy = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
-
-// Un camión como lo manda el backend -> como lo usa el panel. `driver` arranca
-// vacío a propósito: quién maneja cada unidad no es un dato que el sistema tenga
-// (ver docs/pendientes.md §1), y antes se mostraba un "Chofer 1" inventado.
-const aCamionDelPanel = (c) => ({
-  id: c.placa,
-  samsara: c.samsara,
-  modelo: c.modelo,
-  capacidadKg: c.capacidad_kg,
-  maxParadas: c.max_paradas,
-  color: c.color,
-  active: c.activo_default,
-  driver: '',
-});
-
+/**
+ * El panel del despachador: donde se arma el día.
+ *
+ * Este archivo ya NO tiene lógica: orquesta. Cada pieza de estado vive en su
+ * hook, con el porqué de sus decisiones al lado:
+ *
+ *   useJornada          qué día se está viendo (y la traducción carga↔reparto)
+ *   useDatosDelDia      pedidos, rutas y alertas + el candado de corridas
+ *   useFlota            qué camiones hay y cuáles se pueden apagar
+ *   useOptimizacion     armar el plan, probar escenarios y despachar
+ *   useAsignacionManual meter a mano lo que no cupo
+ *   useRutasOsrm        el trazo por calles reales (accesorio del mapa)
+ *   useCamionesGPS      dónde están los camiones ahora
+ *   useEnfoqueMapa      a dónde apunta el mapa
+ *
+ * Eran 952 líneas y 40 `useState` en un solo archivo. El problema no era el
+ * tamaño: era que para saber por qué el mapa se quedaba vacío había que leer
+ * los 40 estados buscando cuál lo apagaba.
+ */
 export default function DispatcherPanel() {
   const navigate = useNavigate();
   const avisar = useAviso();
 
-  // ── Flota (fuente única: backend/delivery/fleet.py) ──
-  const [trucks, setTrucks]             = useState([]);
-  const [ordenFlota, setOrdenFlota]     = useState([]);
-  // La paleta, tal como la manda el backend. Ya no hay copia en el frontend.
-  const [ordenColores, setOrdenColores] = useState([]);
-  const [flotaCargada, setFlotaCargada] = useState(false);
+  // Las reglas del backend (estados, transiciones, escalones de turno) en vez
+  // de transcritas aquí. Nunca bloquea el render: si /api/config no contesta,
+  // `config` trae los mismos valores que antes estaban clavados en el código.
+  const { config } = useConfig();
 
-  // ── Datos del día ──
-  const [orders, setOrders]             = useState([]);
-  const [rutas, setRutas]               = useState([]);
-  const [alertas, setAlertas]           = useState([]);
-  const [camionesGPS, setCamionesGPS]   = useState([]);
+  // ── Flota (fuente única: backend/delivery/fleet.py) ──
+  // `rutaDe` se le pasa porque necesita saber si un camión ya salió antes de
+  // dejar apagarlo, pero no tiene por qué saber de dónde salen las rutas.
+  const {
+    trucks, camionesActivos, ordenFlota, flotaCargada,
+    toggleTruck, changeDriver, agregarCamion: altaCamion, colorOf,
+  } = useFlota((placa) => rutaDe(placa), avisar);
+
+  // Dónde están los camiones ahora mismo. En su propio ciclo, aparte: si
+  // Samsara falla, el panel sigue sirviendo (ver hooks/useCamionesGPS.js).
+  const camionesGPS = useCamionesGPS();
   // El panel NO abre en hoy. La entrega capturada un día sale al siguiente, así
   // que en la mañana lo que va a salir se capturó ayer; pedir "hoy" mostraba el
   // panel vacío hasta el mediodía y parecía que el sistema fallaba. El backend
   // dice cuál es el día bueno (/dispatcher/jornada). Se arranca en `hoy()` solo
   // para no dejar el estado vacío mientras contesta.
-  const [selectedDate, setSelectedDate] = useState(hoy());
-  const [jornada, setJornada]           = useState(null);
-  const [syncStatus, setSyncStatus]     = useState('Conectando…');
-  const [syncStatusTipo, setSyncStatusTipo] = useState('cargando');
+  const {
+    fecha: selectedDate, setFecha: setSelectedDate, jornada, cambiarDiaDeReparto,
+  } = useJornada(avisar);
+
+  // ── Los datos del día ──
+  // Se lleva el candado de corridas: sin él, la respuesta de una petición vieja
+  // podía pisar la de la nueva (ver hooks/useDatosDelDia.js).
+  const {
+    orders, rutas, alertas, routesGenerated, syncStatus, syncStatusTipo,
+    actualizando, actualizarAhora,
+    refrescar: fetchData,
+  } = useDatosDelDia(selectedDate);
 
   // ── Interfaz ──
   // El mapa se puede ensanchar a toda la página cuando hace falta verlo grande.
@@ -99,211 +97,24 @@ export default function DispatcherPanel() {
   const [expandedTrucks, setExpandedTrucks] = useState(() => new Set());
   // `token` sube en cada petición de centrado: permite volver a centrar en el
   // MISMO punto (apretar CEDIS dos veces), que antes no hacía nada.
-  const [focusedCoords, setFocusedCoords] = useState(CEDIS);
-  const [focusToken, setFocusToken] = useState(0);
+  const { coords: focusedCoords, token: focusToken, enfocar: focus } = useEnfoqueMapa(CEDIS);
 
-  // ── Optimización y despacho ──
-  const [routesGenerated, setRoutesGenerated] = useState(false);
-  const [isOptimizing, setIsOptimizing] = useState(false);
-  const [horasTurno, setHorasTurno]     = useState(6);
-  const [cambiandoEstado, setCambiandoEstado] = useState(null);
-  const [osrmRoutes, setOsrmRoutes]     = useState({});
-  const [osrmCache, setOsrmCache]       = useState({});
-
-  // ── Asignación manual ──
-  const [alertaAbierta, setAlertaAbierta] = useState(null);
-  const [sugerencias, setSugerencias]   = useState(null);
-  const [cargandoSugerencias, setCargandoSugerencias] = useState(false);
-  const [asignando, setAsignando]       = useState(null);
-  const [confirmacion, setConfirmacion] = useState(null);
-  const [analisis, setAnalisis] = useState(null);   // resultado de "¿qué hago para que quepan?"
-  const [analizando, setAnalizando] = useState(false);
-  const [mandando, setMandando] = useState(null);   // id de la remisión que se está forzando
+  // ── Meter a mano lo que no cupo ──
+  // Se lleva el candado que evita que las sugerencias de una alerta pisen las
+  // de otra (ver hooks/useAsignacionManual.js).
+  const {
+    alertaAbierta, sugerencias, cargandoSugerencias, asignando, mandando,
+    confirmacion, setConfirmacion,
+    toggleAlerta, handleAsignar, mandarDeTodosModos,
+  } = useAsignacionManual(fetchData, avisar);
 
   // ── Formularios ──
   const [mostrarAgregarCamion, setMostrarAgregarCamion] = useState(false);
   const [nuevaPlaca, setNuevaPlaca]     = useState('');
   const [nuevoChofer, setNuevoChofer]   = useState('');
 
-  // ── La flota, una sola vez al abrir ──
-  // A propósito NO se recarga en el refresco de 45 s: eso borraría los choferes
-  // capturados y volvería a prender los camiones que el despachador apagó.
-  useEffect(() => {
-    const controller = new AbortController();
-    getFlota({ signal: controller.signal })
-      .then((flota) => {
-        setTrucks(flota.map(aCamionDelPanel));
-        setOrdenFlota(flota.map((c) => c.placa));
-        setOrdenColores(flota.map((c) => c.color));
-        setFlotaCargada(true);
-      })
-      .catch((e) => { if (e.name !== 'AbortError') console.error('No se pudo cargar la flota:', e); });
-    return () => controller.abort();
-  }, []);
-
-  // ── Qué día abrir ──
-  // Se pregunta una sola vez, al entrar. Si el usuario cambia la fecha a mano
-  // después, no se le vuelve a mover.
-  useEffect(() => {
-    const controller = new AbortController();
-    getJornada({ signal: controller.signal })
-      .then((j) => {
-        setJornada(j);
-        setSelectedDate(j.fecha_carga);
-      })
-      .catch((e) => { if (e.name !== 'AbortError') console.error('No se pudo saber qué día cargar:', e); });
-    return () => controller.abort();
-  }, []);
-
-  // El selector de fecha muestra el día en que SALE la mercancía, que es como
-  // piensa cualquiera. Por dentro los pedidos están guardados con la fecha en
-  // que se CAPTURÓ el documento, que es el día anterior.
-  //
-  // Antes el selector mostraba la fecha del documento: al ponerle "30" para ver
-  // el reparto de mañana, el panel salía vacío porque esos pedidos están
-  // guardados bajo el "29". El backend traduce de una fecha a la otra.
-  const cambiarDiaDeReparto = async (fechaReparto) => {
-    try {
-      const j = await getJornada({ reparto: fechaReparto });
-      setJornada(j);
-      setSelectedDate(j.fecha_carga);
-    } catch {
-      avisar('No se pudo cambiar de día.', 'error');
-    }
-  };
-
-  // ── Datos del día + refresco periódico ──
-  useEffect(() => {
-    const controller = new AbortController();
-    fetchData(controller.signal);
-    const interval = setInterval(() => fetchData(controller.signal), REFRESH_INTERVAL_MS);
-    return () => { controller.abort(); clearInterval(interval); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDate]);
-
-  // Botón de actualizar: trae lo que almacén haya capturado desde la última vez,
-  // sin esperar los 45 s del refresco ni recargar la página.
-  const [actualizando, setActualizando] = useState(false);
-  const actualizarAhora = async () => {
-    setActualizando(true);
-    try {
-      await fetchData();
-    } finally {
-      setActualizando(false);
-    }
-  };
-
-  // Contador de corridas de `fetchData`. Cada llamada se queda con su número y
-  // solo escribe en pantalla si sigue siendo la más reciente al volver.
-  //
-  // Hay tres cosas que llaman a esto a la vez: el refresco de 45 s, el botón
-  // Actualizar, y el refetch después de cada acción (optimizar, dar salida,
-  // asignar). Sin candado se mezclaban:
-  //
-  //   - El despachador da "Salida" y enseguida cambia el día de reparto. El
-  //     refetch de la salida sigue vivo con la fecha VIEJA y sus respuestas
-  //     pisan los pedidos del día nuevo. El panel termina mostrando un día bajo
-  //     un encabezado que dice otro.
-  //   - Optimizar tarda ~30 s; a media corrida entra el tick de 45 s y escribe
-  //     los pedidos sin ruta. Durante un ciclo se ven camiones con 0 paradas.
-  //
-  // El AbortController no alcanzaba: solo cancela lo del efecto, no lo que
-  // dispararon los botones.
-  const corridaActual = useRef(0);
-
-  const fetchData = async (signal) => {
-    const fecha = selectedDate;
-    const corrida = ++corridaActual.current;
-    // ¿Esta corrida sigue siendo la buena? Si ya salió otra después, lo que
-    // traiga ésta es viejo y no debe tocar la pantalla.
-    const vigente = () => corridaActual.current === corrida;
-    try {
-      const syncData = await syncSAP(fecha, { signal });
-      if (!vigente()) return;
-      setSyncStatus(syncData.message);
-      setSyncStatusTipo(syncData.status === 'success' ? 'ok' : syncData.status === 'warning' ? 'warning' : 'error');
-
-      // `truck` ya viene como placa real del backend.
-      const remData = await getRemisiones(fecha, { signal });
-      if (!vigente()) return;
-      setOrders(remData.map((o) => ({ ...o, truck: o.truck || null })));
-
-      const rutData = await getRutas(fecha, { signal });
-      if (!vigente()) return;
-      setRutas(rutData);
-      // Con `else`: antes solo se prendía. Al cambiar del reparto de hoy (con
-      // rutas) al de mañana (sin rutas), la bandera se quedaba en true y el
-      // panel seguía pintando la leyenda "Rutas en el mapa" y camiones de 0
-      // paradas de un plan que no existe.
-      setRoutesGenerated(rutData.length > 0);
-
-      setAlertas(await getAlertas(fecha, { signal }));
-    } catch (e) {
-      if (e.name === 'AbortError') return;
-      console.error('Backend error:', e);
-      setSyncStatus('Sin conexión con el backend');
-      setSyncStatusTipo('error');
-    }
-
-  };
-
-  // ── Camiones en vivo (Samsara), en su propio ciclo ──
-  // Aparte del resto y más seguido: es lo ÚNICO que se mueve solo en el mapa, y
-  // antes viajaba junto con los pedidos cada 45 s, así que los camiones parecían
-  // congelados. También va aparte para que si Samsara falla no tumbe el panel.
-  useEffect(() => {
-    const controller = new AbortController();
-    const traerGPS = () => {
-      getCamionesGPS({ signal: controller.signal })
-        .then(setCamionesGPS)
-        .catch((e) => { if (e.name !== 'AbortError') console.error('Camiones GPS error:', e); });
-    };
-    traerGPS();
-    const interval = setInterval(traerGPS, GPS_INTERVAL_MS);
-    return () => { controller.abort(); clearInterval(interval); };
-  }, []);
-
-  // ── Rutas dibujadas por calle (OSRM), cacheadas por firma de puntos ──
-  useEffect(() => {
-    if (!routesGenerated) return;
-    const fetchRoutes = async () => {
-      const activos = trucks.filter((t) => t.active);
-      const results = await Promise.all(activos.map(async (t) => {
-        const pts = routePts(t.id);
-        if (!pts.length) return [t.id, null, null];
-        const signature = JSON.stringify(pts);
-        if (osrmCache[t.id]?.signature === signature) return [t.id, osrmCache[t.id].geometry, signature];
-
-        const coordsStr = [CEDIS, ...pts, CEDIS].map((p) => `${p[1]},${p[0]}`).join(';');
-        const baseUrl = `${OSRM_BASE}/route/v1/driving/${coordsStr}?overview=full&geometries=geojson`;
-        // Se intenta primero evitando autopistas; si el servidor no lo soporta
-        // (el público no), se reintenta sin excluir — mejor calles reales que nada.
-        for (const url of [`${baseUrl}&exclude=${OSRM_EXCLUDE}`, baseUrl]) {
-          try {
-            const data = await (await fetch(url)).json();
-            if (data.routes?.[0]) {
-              return [t.id, data.routes[0].geometry.coordinates.map((c) => [c[1], c[0]]), signature];
-            }
-          } catch { /* se intenta la siguiente variante */ }
-        }
-        return [t.id, null, null];
-      }));
-
-      const nuevas = {};
-      const cache = { ...osrmCache };
-      for (const [id, geometry, signature] of results) {
-        if (geometry) { nuevas[id] = geometry; cache[id] = { signature, geometry }; }
-      }
-      setOsrmRoutes(nuevas);
-      setOsrmCache(cache);
-    };
-    fetchRoutes();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orders, trucks, routesGenerated]);
-
   // ── Derivados ──
   const rankFlota = Object.fromEntries(ordenFlota.map((placa, i) => [placa, i]));
-  const camionesActivos = trucks.filter((t) => t.active);
 
   const visibleTrucks = trucks
     .filter((t) =>
@@ -327,15 +138,27 @@ export default function DispatcherPanel() {
   });
 
   const ordersOf = (id) => orders.filter((o) => o.truck === id).sort((a, b) => (a.secuencia_ruta ?? 0) - (b.secuencia_ruta ?? 0));
-  const routePts = (id) => ordersOf(id).filter((o) => o.lat && o.lng).map((o) => [o.lat, o.lng]);
-  const colorOf = (placa) => trucks.find((t) => t.id === placa)?.color || '#94a3b8';
   const rutaDe = (placa) => rutas.find((r) => r.camion === placa);
   const truckLabel = (placa) => ({ placa, chofer: trucks.find((t) => t.id === placa)?.driver || null });
-  const focus = (pos) => {
-    if (!pos?.[0] || !pos?.[1]) return;
-    setFocusedCoords(pos);
-    setFocusToken((n) => n + 1);
-  };
+
+  // El trazo de las rutas por calles reales, para el mapa. Es ACCESORIO: si
+  // OSRM no responde, las rutas se dibujan como líneas rectas — feas, pero
+  // correctas. Por eso puede fallar en silencio (ver hooks/useRutasOsrm.js).
+  const osrmRoutes = useRutasOsrm(camionesActivos, ordersOf, routesGenerated);
+
+  // ── Armar el plan y despacharlo ──
+  const {
+    isOptimizing, horasTurno, analisis, analizando, cambiandoEstado,
+    optimizar: optimize, ampliarTurnoYOptimizar, analizarEscenarios,
+    cambiarEstadoRuta: changeTruckState,
+  } = useOptimizacion({
+    fecha: selectedDate,
+    camionesActivos,
+    rutaDe,
+    refrescar: fetchData,
+    escalonesTurno: config.escalones_turno_horas,
+    avisar,
+  });
 
   // La hora del plan más reciente: si se re-optimizó, todas las rutas nuevas
   // traen la misma, y las congeladas conservan la de cuando se generaron.
@@ -350,198 +173,14 @@ export default function DispatcherPanel() {
   };
 
   // ── Acciones ──
-  // `turno` explícito para cuando se optimiza justo después de cambiarlo: el
-  // estado de React todavía no se actualizó en ese instante.
-  const optimize = async (turno) => {
-    // Se mandan las PLACAS activas, no un conteo: el backend saca de cada placa
-    // su capacidad y su tope de paradas.
-    const placasActivas = camionesActivos.map((t) => t.id);
-    if (!placasActivas.length) { avisar('Activa al menos un camión antes de optimizar.', 'error'); return; }
-    setIsOptimizing(true);
-    setRoutesGenerated(false);
-    try {
-      setAnalisis(null); // el plan cambió: lo que se había probado ya no aplica
-      const data = await generarRutas(selectedDate, placasActivas, turno ?? horasTurno);
-      if (data.status === 'success') await fetchData();
-      else avisar(data.message, 'error');
-    } catch { avisar('El optimizador no respondió. Intenta de nuevo.', 'error'); }
-    finally { setIsOptimizing(false); }
-  };
-
-  // Sube el turno al siguiente escalón y vuelve a optimizar de una vez: si el
-  // despachador aprieta "Turno a 6.5 h" es porque quiere ver si así caben, no
-  // para tener que apretar Optimizar aparte.
-  const ampliarTurnoYOptimizar = async (horas) => {
-    const siguiente = horas ?? [6, 6.5, 7, 7.5, 8].find((h) => h > horasTurno);
-    if (!siguiente) return;
-    setHorasTurno(siguiente);
-    await optimize(siguiente);
-  };
-
-  // Mete el pedido al camión que menos se desvía, aunque llegue fuera de la
-  // ventana del cliente. Es el mismo "Forzar" de siempre, pero sin obligar a
-  // abrir, leer las cinco opciones y confirmar: cuando el despachador ya
-  // decidió que ese pedido sale hoy, esos pasos solo estorban.
-  const mandarDeTodosModos = async (alerta) => {
-    setMandando(alerta.id);
-    try {
-      const sug = await getSugerencias(alerta.id);
-      const opcion = sug.opciones?.[0];
-      if (!opcion) {
-        avisar(sug.error || 'No hay ninguna ruta a la que mandarlo. Genera rutas primero.', 'error');
-        return;
-      }
-      const res = await asignarManual(alerta.id, {
-        rutaId: opcion.ruta_id, posicion: opcion.posicion_sugerida, forzar: true,
-      });
-      if (res.status === 'error') avisar(res.message, 'error');
-      else avisar(`Pedido #${alerta.doc_num} mandado en el ${opcion.camion}.`, 'exito');
-      await fetchData();
-    } catch (e) {
-      console.error('Error al mandar de todos modos:', e);
-      avisar('No se pudo mandar el pedido. Intenta de nuevo.', 'error');
-    } finally {
-      setMandando(null);
-    }
-  };
-
-  // Prueba qué pasaría si se cambiara una cosa a la vez. Tarda porque son
-  // varias corridas del optimizador; el resultado se queda en pantalla hasta
-  // que se vuelva a optimizar, para no rehacerlo en cada refresco.
-  const analizarEscenarios = async () => {
-    const placas = camionesActivos.map((t) => t.id);
-    if (!placas.length) return;
-    setAnalizando(true);
-    try {
-      const res = await evaluarEscenarios(selectedDate, placas, horasTurno);
-      if (res.status === 'success') setAnalisis(res);
-      else avisar(res.message, 'error');
-    } catch {
-      avisar('No se pudieron probar las opciones.', 'error');
-    } finally {
-      setAnalizando(false);
-    }
-  };
-
-  // Apagar un camión lo saca de la optimización Y esconde sus pedidos del
-  // panel. Si ese camión ya salió a la calle, sus entregas desaparecerían de la
-  // vista mientras el chofer las sigue haciendo: el despachador dejaría de ver
-  // pedidos que están ocurriendo. Por eso no se deja.
-  const ESTADOS_YA_DESPACHADOS = ['Cargando', 'Listo', 'En_Ruta'];
-
-  const toggleTruck = (id) => {
-    const camion = trucks.find((t) => t.id === id);
-    const ruta = rutaDe(id);
-    if (camion?.active && ruta && ESTADOS_YA_DESPACHADOS.includes(ruta.estado)) {
-      avisar(
-        `El ${id} ya está despachado (${ruta.estado.replace('_', ' ').toLowerCase()}). ` +
-        'No se puede apagar sin perder de vista sus entregas; primero cierra su ruta.',
-        'error',
-      );
-      return;
-    }
-    setTrucks((prev) => prev.map((t) => (t.id === id ? { ...t, active: !t.active } : t)));
-  };
-
-  const changeDriver = (id, d) =>
-    setTrucks((prev) => prev.map((t) => (t.id === id ? { ...t, driver: d } : t)));
-
-  const changeTruckState = async (placa, nuevoEstado) => {
-    const ruta = rutaDe(placa);
-    if (!ruta) { avisar('Este camión no tiene ruta todavía. Genera rutas primero.', 'error'); return; }
-    setCambiandoEstado(placa);
-    try {
-      const res = await updateRutaEstado(ruta.id, nuevoEstado);
-      if (res.status === 'error') avisar(res.message, 'error');
-      await fetchData();
-    } catch (e) {
-      avisar('No se pudo cambiar el estado: ' + e.message, 'error');
-    } finally {
-      setCambiandoEstado(null);
-    }
-  };
-
+  // La validación de placa repetida y la elección de color viven en useFlota;
+  // aquí solo queda limpiar el formulario si se dio de alta.
   const agregarCamion = () => {
-    if (!nuevaPlaca.trim()) return;
-    // Un color que NO esté ya en uso. Antes era `PALETA[trucks.length % 8]`
-    // contra una copia de la paleta que vivía en el frontend: esa copia se
-    // quedó en 8 colores mientras el backend creció a 11, y con 11 camiones
-    // `11 % 8 = 3` le daba al camión nuevo el MISMO color que al RJ97892. Dos
-    // camiones del mismo color, encimados en el mismo mapa.
-    //
-    // Los colores de referencia salen de la flota que ya mandó el backend, así
-    // que no hay ninguna copia que mantener sincronizada.
-    const color = colorLibre(trucks.map((t) => t.color), ordenColores);
-    setTrucks((prev) => [...prev, {
-      id: nuevaPlaca.trim().toUpperCase(),
-      driver: nuevoChofer.trim(),
-      color,
-      active: true,
-    }]);
-    setNuevaPlaca(''); setNuevoChofer(''); setMostrarAgregarCamion(false);
-  };
-
-
-  // Qué alerta se está consultando AHORA. Sin este candado, abrir una alerta
-  // lenta y enseguida otra dejaba que la respuesta de la primera llegara al
-  // final y pisara las sugerencias de la segunda: la tarjeta mostraba los
-  // camiones calculados para OTRO pedido, y al apretar "asignar" el pedido se
-  // iba a la ruta equivocada sin que nada se viera raro.
-  const alertaEnCurso = useRef(null);
-
-  const toggleAlerta = async (alerta) => {
-    if (alertaAbierta === alerta.id) {
-      alertaEnCurso.current = null;
-      setAlertaAbierta(null); setSugerencias(null);
-      return;
-    }
-    alertaEnCurso.current = alerta.id;
-    setAlertaAbierta(alerta.id);
-    setSugerencias(null);
-    setCargandoSugerencias(true);
-    try {
-      const res = await getSugerencias(alerta.id);
-      if (alertaEnCurso.current !== alerta.id) return;   // ya se abrió otra
-      setSugerencias(res);
-    } catch (e) {
-      console.error('Error al pedir sugerencias:', e);
-      if (alertaEnCurso.current === alerta.id) {
-        avisar('No se pudieron calcular las opciones para este pedido.', 'error');
-      }
-    } finally {
-      if (alertaEnCurso.current === alerta.id) setCargandoSugerencias(false);
+    if (altaCamion(nuevaPlaca, nuevoChofer)) {
+      setNuevaPlaca(''); setNuevoChofer(''); setMostrarAgregarCamion(false);
     }
   };
 
-  const handleAsignar = async (remisionId, opcion, forzar = false) => {
-    setAsignando(opcion.ruta_id);
-    try {
-      const res = await asignarManual(remisionId, {
-        rutaId: opcion.ruta_id, posicion: opcion.posicion_sugerida, forzar,
-      });
-      if (res.status === 'requiere_confirmacion') {
-        setConfirmacion({ remisionId, opcion, mensaje: res.message });
-        return;
-      }
-      // El backend manda los errores de negocio con HTTP 200 y `status:'error'`
-      // en el cuerpo, así que `fetch` no los ve. Sin esta rama se caía al
-      // camino feliz: se cerraba la tarjeta y se refrescaba como si el pedido
-      // hubiera quedado asignado. Pasa de verdad cuando otro despachador ya lo
-      // asignó desde otra pestaña.
-      if (res.status === 'error') {
-        avisar(res.message || 'No se pudo asignar el pedido.', 'error');
-        return;
-      }
-      alertaEnCurso.current = null;
-      setAlertaAbierta(null); setSugerencias(null);
-      await fetchData();
-    } catch (e) {
-      console.error('Error al asignar manualmente:', e);
-      avisar('No se pudo asignar el pedido. Intenta de nuevo.', 'error');
-    } finally {
-      setAsignando(null);
-    }
-  };
 
   const alternarCamion = (placa) =>
     setExpandedTrucks((prev) => {
@@ -773,7 +412,7 @@ export default function DispatcherPanel() {
                     )}
                   </span>
                   <div className="inline-flex items-center rounded-lg bg-gray-100 p-0.5 gap-0.5">
-                    {[6, 6.5, 7, 7.5, 8].map((h) => (
+                    {config.escalones_turno_horas.map((h) => (
                       <button
                         key={h}
                         onClick={() => setHorasTurno(h)}
@@ -841,6 +480,8 @@ export default function DispatcherPanel() {
                       onToggleActivo={() => toggleTruck(truck.id)}
                       onCambiarChofer={(d) => changeDriver(truck.id, d)}
                       onCambiarEstado={(estado) => changeTruckState(truck.id, estado)}
+                      horasTurno={horasTurno}
+                      transiciones={config.transiciones}
                       onEnfocar={focus}
                     />
                   ))}
@@ -865,6 +506,7 @@ export default function DispatcherPanel() {
                 onReoptimizar={() => optimize()}
                 onAmpliarTurno={ampliarTurnoYOptimizar}
                 horasTurno={horasTurno}
+                turnos={config.escalones_turno_horas}
                 optimizando={isOptimizing}
                 etiquetaCamion={truckLabel}
                 analisis={analisis}

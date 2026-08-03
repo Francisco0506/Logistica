@@ -106,7 +106,14 @@ export default function PreviewManifiesto({ camion, paradas, fecha, onCerrar }) 
               {ordenDeCarga.map((o, i) => (
                 <tr key={o.id} className="border-b border-gray-300 align-top">
                   <td className="py-2 pr-2 font-bold">{i + 1}</td>
-                  <td className="py-2 pr-2 font-bold">{paradas.length - i}</td>
+                  {/* El número de parada sale de `secuencia_ruta`, que es el que
+                      ve el chofer en su celular y el que ahora muestra el mapa.
+                      Era `paradas.length - i`, o sea la posición invertida en el
+                      arreglo: coincide solo mientras la secuencia sea densa y
+                      arranque en 1. Como `ordersOf` ordena con `secuencia_ruta ?? 0`,
+                      una remisión sin secuencia se cuela al principio y recorre
+                      TODA la columna de la hoja que el chofer trae en la mano. */}
+                  <td className="py-2 pr-2 font-bold">{o.secuencia_ruta ?? '—'}</td>
                   <td className="py-2 pr-2">
                     <div className="font-semibold">{o.card_name}</div>
                     <div className="text-[10px] text-gray-600">#{o.doc_num}{o.address ? ` · ${o.address}` : ''}</div>

@@ -9,6 +9,9 @@ import { useAviso } from '../../components/useAviso';
 import { getRutas, getRutaChofer, confirmarEntrega, getCamionesGPS, getFlota, subirFotoEntrega, subirFirmaEntrega } from '../../services/api';
 import HojaEntrega from './components/HojaEntrega';
 import MapaRuta from './components/MapaRuta';
+import { ESTILO_ENTREGA, esVisitada, huboEntrega, salioMal } from '../../config/estadosRuta';
+import { hoyLocal } from '../../lib/fecha';
+import { useConfig } from '../../config/useConfig';
 
 /**
  * La app del chofer.
@@ -22,19 +25,31 @@ import MapaRuta from './components/MapaRuta';
  * "Entregado" solo significa que alguien en la oficina cerró la ruta.
  */
 
-const hoy = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
-
 // Se refresca para que el chofer vea si el despachador le movió algo.
 const REFRESH_MS = 60_000;
 
-const ESTILO_ESTADO = {
-  Entregado:         { texto: 'Entregado',    clase: 'bg-emerald-50 text-emerald-700 border-emerald-200', icono: Check },
-  Entregado_Parcial: { texto: 'Incompleto',   clase: 'bg-amber-50 text-amber-700 border-amber-200',       icono: AlertTriangle },
-  No_Entregado:      { texto: 'No entregado', clase: 'bg-red-50 text-red-700 border-red-200',             icono: AlertTriangle },
-};
+// El vocabulario de los estados finales vive en config/estadosRuta.js: esta
+// pantalla lo tenía en una copia propia, y por eso una parada `No_Entregado`
+// llevaba aquí PALOMITA VERDE mientras el panel del despachador —que ya se
+// había arreglado— la marcaba en ámbar. Se usa el `corto` porque en un celular
+// la pastilla no da para "Entregado incompleto".
+const ESTILO_ESTADO = ESTILO_ENTREGA;
+
+/**
+ * Abrir la dirección en la aplicación de mapas del celular.
+ *
+ * Con coordenadas y no con el texto de la calle: las direcciones de SAP vienen
+ * como las capturó alguien —abreviaturas, sin código postal, a veces con el
+ * número de local— y un buscador de mapas las manda a otra colonia. La
+ * coordenada es la que el optimizador ya usó para armar la ruta, así que el
+ * chofer llega exactamente al punto que el sistema planeó.
+ *
+ * Waze se abre por su esquema propio (`waze://`) y Google Maps por su URL
+ * universal, que en un celular la abre la app y en una computadora el navegador.
+ */
+const enlaceWaze = (lat, lng) => `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`;
+const enlaceMaps = (lat, lng) =>
+  `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
 
 export default function DriverApp() {
   const navigate = useNavigate();
@@ -46,7 +61,17 @@ export default function DriverApp() {
   // Si no viene, la escoge de una lista. Cuando haya usuarios de chofer esto
   // saldrá de su sesión y la lista desaparece.
   const camion = params.get('camion') || '';
+  // El catálogo de motivos sale del backend, no de una copia en el celular.
+  const { config } = useConfig();
   const [rutasDelDia, setRutasDelDia] = useState([]);
+  // Evidencia que NO alcanzó a subir, por parada: { [remisionId]: {foto, firma} }.
+  // Vive en memoria a propósito y no en localStorage: un File/Blob no se puede
+  // serializar, y guardar la foto en el navegador para "después" daría una
+  // promesa que no se puede cumplir si el chofer cierra la pestaña. Lo honesto
+  // es ofrecer el reintento mientras la app siga abierta, que es el caso real
+  // (el chofer llega a la siguiente bodega y ahí sí hay señal).
+  const [evidenciaPendiente, setEvidenciaPendiente] = useState({});
+  const [subiendoEvidencia, setSubiendoEvidencia] = useState(null);
   // Distinguir "todavía no llega la respuesta" de "no hay rutas". Sin esto, con
   // la señal de la calle el chofer veía "Sin rutas todavía · Pregunta en el
   // CEDIS" durante segundos aunque sus rutas SÍ existieran — y ese chofer marca
@@ -60,7 +85,7 @@ export default function DriverApp() {
   const [gps, setGps] = useState([]);
   const [verMapa, setVerMapa] = useState(true);
   const [verHechas, setVerHechas] = useState(false);   // lo ya reportado no estorba
-  const fecha = hoy();
+  const fecha = hoyLocal();
 
   // Los camiones que SALEN hoy. Antes se listaba la flota completa, incluidos
   // los que están apagados y los que no tienen ruta: el chofer podía escoger un
@@ -118,28 +143,67 @@ export default function DriverApp() {
   const paradas = ruta?.paradas || [];
   // Paradas ya VISITADAS: el camión pasó por ahí, se haya podido entregar o no.
   // Es lo que mide el avance de la ruta.
-  const hechas = paradas.filter((p) => ESTILO_ESTADO[p.estado]).length;
+  const hechas = paradas.filter((p) => esVisitada(p.estado)).length;
   // Las que de verdad se entregaron (completas o a medias). Se cuentan aparte
   // porque la barra decía "8 de 10 entregas" incluyendo las que NO se
   // entregaron: el chofer terminaba su turno creyendo que le fue mejor de lo
   // que le fue, y el número no cuadraba con lo que veía ventas.
-  const entregadas = paradas.filter(
-    (p) => p.estado === 'Entregado' || p.estado === 'Entregado_Parcial',
-  ).length;
+  const entregadas = paradas.filter((p) => huboEntrega(p.estado)).length;
   const completas = paradas.filter((p) => p.estado === 'Entregado').length;
   // La primera que todavía no se reporta. Sin useMemo a propósito: son 20
   // elementos y `paradas` se recrea en cada render, así que memorizarlo no
   // ahorraría nada y solo escondería la dependencia.
-  const siguiente = paradas.find((p) => !ESTILO_ESTADO[p.estado]);
-  const pendientes = paradas.filter((p) => !ESTILO_ESTADO[p.estado]);
-  const reportadas = paradas.filter((p) => ESTILO_ESTADO[p.estado]);
-  const incompletas = paradas.filter((p) => p.estado === 'Entregado_Parcial' || p.estado === 'No_Entregado').length;
+  const siguiente = paradas.find((p) => !esVisitada(p.estado));
+  const porReportar = paradas.filter((p) => !esVisitada(p.estado));
+  // "La que sigue" ya se pinta en su propia sección, arriba y en grande. Sin
+  // quitarla de aquí, el mismo cliente aparecía DOS VECES seguidas en un
+  // celular —se lee como dos entregas al mismo lugar— y el encabezado decía
+  // "Por entregar (8)" cuando abajo del bloque grande quedaban 7.
+  const pendientes = porReportar.slice(1);
+  const reportadas = paradas.filter((p) => esVisitada(p.estado));
+  const incompletas = paradas.filter((p) => salioMal(p.estado)).length;
   const miPosicion = gps.find((c) => c.placa === camion) || null;
   // Solo se puede entregar si el camión YA SALIÓ del CEDIS. Mientras el
   // despachador no le dé Salida, la mercancía sigue en el almacén: dejar
   // reportar entregas antes convertiría el dato en algo que no ocurrió, que es
   // justo el problema que esta app viene a resolver.
   const puedeEntregar = ruta?.estado === 'En_Ruta';
+
+  /**
+   * Volver a intentar subir la evidencia de una parada ya confirmada.
+   *
+   * Solo reintenta lo que falta: si la foto sí subió y la firma no, no se
+   * vuelve a mandar la foto.
+   */
+  const reintentarEvidencia = async (remisionId) => {
+    const pend = evidenciaPendiente[remisionId];
+    if (!pend) return;
+    setSubiendoEvidencia(remisionId);
+    const sigueFallando = {};
+    if (pend.foto) {
+      try { await subirFotoEntrega(remisionId, pend.foto); }
+      catch { sigueFallando.foto = pend.foto; }
+    }
+    if (pend.firma) {
+      try { await subirFirmaEntrega(remisionId, pend.firma); }
+      catch { sigueFallando.firma = pend.firma; }
+    }
+    setSubiendoEvidencia(null);
+
+    setEvidenciaPendiente((prev) => {
+      const copia = { ...prev };
+      if (sigueFallando.foto || sigueFallando.firma) copia[remisionId] = sigueFallando;
+      else delete copia[remisionId];
+      return copia;
+    });
+
+    if (sigueFallando.foto || sigueFallando.firma) {
+      avisar('Sigue sin subir. Inténtalo donde agarre mejor la señal.', 'error');
+    } else {
+      avisar('Listo, ya subió.', 'exito');
+      try { setRuta(await getRutaChofer(fecha, camion)); } catch { /* el intervalo la trae */ }
+    }
+  };
 
   const confirmar = async (datos, foto, firma) => {
     setGuardando(true);
@@ -159,29 +223,54 @@ export default function DriverApp() {
       avisar(res.message, res.estado === 'Entregado' ? 'exito' : 'info');
 
       // La foto y la firma se suben DESPUÉS y aparte: si fallan por mala
-      // señal, la entrega ya quedó registrada, que es lo que importa. Solo se
-      // avisa del fallo.
+      // señal, la entrega ya quedó registrada, que es lo que importa.
+      //
+      // Lo que faltaba era el recurso. Antes solo se avisaba del fallo y la
+      // hoja se cerraba: la evidencia se perdía sin forma de recuperarla, y
+      // justo la evidencia es lo que no se puede volver a pedir a SAP ni a
+      // ningún lado. Ahora lo que no subió se GUARDA en memoria y la parada
+      // queda con un botón de "Subir foto/firma" para reintentar desde una
+      // bodega con mejor señal.
+      const pendiente = {};
       if (foto) {
-        try {
-          await subirFotoEntrega(abierta.id, foto);
-        } catch {
-          avisar('La entrega se guardó, pero la foto no se pudo subir. Revisa tu señal.', 'error');
-        }
+        try { await subirFotoEntrega(abierta.id, foto); }
+        catch { pendiente.foto = foto; }
       }
       if (firma) {
-        try {
-          await subirFirmaEntrega(abierta.id, firma);
-        } catch {
-          avisar('La entrega se guardó, pero la firma no se pudo subir. Revisa tu señal.', 'error');
-        }
+        try { await subirFirmaEntrega(abierta.id, firma); }
+        catch { pendiente.firma = firma; }
+      }
+      if (pendiente.foto || pendiente.firma) {
+        setEvidenciaPendiente((prev) => ({ ...prev, [abierta.id]: pendiente }));
+        const qué = pendiente.foto && pendiente.firma ? 'la foto y la firma'
+          : pendiente.foto ? 'la foto' : 'la firma';
+        avisar(`La entrega se guardó, pero ${qué} no subió. Queda un botón para reintentarlo.`, 'error');
       }
       setAbierta(null);
-      setRuta(await getRutaChofer(fecha, camion));
     } catch (e) {
       console.error('Confirmar entrega:', e);
       avisar('No se pudo guardar. Revisa tu señal e inténtalo otra vez.', 'error');
+      return;
     } finally {
       setGuardando(false);
+    }
+
+    // El refresco va FUERA del try de la confirmación, y a propósito.
+    //
+    // Estaba adentro, así que en una bodega con mala señal pasaba esto: el POST
+    // sí llegaba —el backend ya había guardado la entrega, con su foto y su
+    // firma— pero el GET siguiente tronaba y caía al catch. El chofer veía el
+    // toast rojo "No se pudo guardar, inténtalo otra vez" encima del verde que
+    // ya se había mostrado, y la parada seguía apareciendo pendiente. Iba a
+    // volver a reportar una entrega que ya estaba registrada.
+    //
+    // Que no se refresque la lista es una molestia: el intervalo la trae en un
+    // minuto. Decirle que no se guardó cuando sí se guardó es un dato falso, y
+    // eso es lo que esta app existe para evitar.
+    try {
+      setRuta(await getRutaChofer(fecha, camion));
+    } catch {
+      avisar('Tu entrega quedó guardada. La lista se actualiza en un momento.', 'info');
     }
   };
 
@@ -357,7 +446,11 @@ export default function DriverApp() {
                 columnas porque esto se ve en un celular ═══ */}
             <section className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
               {[
-                { etiqueta: 'Por entregar', valor: pendientes.length, clase: pendientes.length ? 'text-orange-600' : 'text-gray-300' },
+                // Cuenta TODO lo que falta, incluida "la que sigue". `pendientes`
+                // ya no sirve aquí: excluye la de arriba para no repetirla en la
+                // lista, y usarla dejaría al chofer con un "por entregar" uno
+                // menos de lo que de verdad le falta.
+                { etiqueta: 'Por entregar', valor: porReportar.length, clase: porReportar.length ? 'text-orange-600' : 'text-gray-300' },
                 // Solo las completas: este recuadro y "Con problema" tienen que
                 // sumar las paradas hechas sin encimarse, o los cuatro números
                 // no cuadran entre sí.
@@ -417,10 +510,14 @@ export default function DriverApp() {
             </section>
 
             {/* ═══ POR ENTREGAR ═══ */}
-            {pendientes.length > 1 && (
+            {pendientes.length > 0 && (
               <section>
+                {/* "Las demás" y no "Por entregar": el recuadro de arriba ya usa
+                    ese nombre para el total, y aquí van las que quedan DESPUÉS
+                    de la que sigue. Dos números distintos con la misma etiqueta
+                    en la misma pantalla se leen como un error del sistema. */}
                 <h2 className="text-[11px] font-bold text-gray-400 uppercase tracking-wide mb-2 px-1">
-                  Por entregar ({pendientes.length})
+                  Las demás ({pendientes.length})
                 </h2>
                 <div className="space-y-2">
                   {pendientes.map((p) => (
@@ -449,7 +546,15 @@ export default function DriverApp() {
                 {verHechas && (
                   <div className="p-3 pt-0 space-y-2">
                     {reportadas.map((p) => (
-                      <TarjetaParada key={p.id} parada={p} puedeEntregar={puedeEntregar} onAbrir={() => setAbierta(p)} />
+                      <TarjetaParada
+                        key={p.id}
+                        parada={p}
+                        puedeEntregar={puedeEntregar}
+                        onAbrir={() => setAbierta(p)}
+                        evidenciaPendiente={evidenciaPendiente[p.id]}
+                        subiendoEvidencia={subiendoEvidencia === p.id}
+                        onReintentarEvidencia={() => reintentarEvidencia(p.id)}
+                      />
                     ))}
                   </div>
                 )}
@@ -466,6 +571,7 @@ export default function DriverApp() {
           guardando={guardando}
           onCerrar={() => setAbierta(null)}
           onConfirmar={confirmar}
+          motivos={config.motivos_no_entrega}
         />
       )}
     </div>
@@ -476,7 +582,10 @@ export default function DriverApp() {
  * Una parada en la lista: todo lo que el chofer necesita antes de bajarse del
  * camión, y los atajos para llamar o abrir la navegación.
  */
-function TarjetaParada({ parada, destacada = false, puedeEntregar = true, onAbrir }) {
+function TarjetaParada({
+  parada, destacada = false, puedeEntregar = true, onAbrir,
+  evidenciaPendiente, subiendoEvidencia = false, onReintentarEvidencia,
+}) {
   const estado = ESTILO_ESTADO[parada.estado];
   const Icono = estado?.icono;
   const hecha = !!estado;
@@ -488,10 +597,15 @@ function TarjetaParada({ parada, destacada = false, puedeEntregar = true, onAbri
         : 'border-gray-200 bg-white'
     }`}>
       <button onClick={onAbrir} className="w-full text-left px-4 py-3.5 flex items-start gap-3">
-        <span className={`w-8 h-8 rounded-full flex items-center justify-center text-[13px] font-extrabold flex-shrink-0 ${
-          hecha ? 'bg-emerald-500 text-white' : destacada ? 'bg-orange-500 text-white' : 'bg-gray-200 text-gray-600'
-        }`}>
-          {hecha ? <Check className="w-4 h-4" strokeWidth={3} /> : parada.secuencia_ruta}
+        {/* La bolita NO puede ser una palomita verde para las tres finales.
+            Lo era: una parada "No entregado" llevaba palomita verde arriba y,
+            dos centímetros abajo, la pastilla roja "No entregado". El chofer
+            que revisa su día de un vistazo contaba como buenas las que no lo
+            fueron. Ahora el icono y el color salen del propio estado. */}
+        <span className={`w-8 h-8 rounded-full flex items-center justify-center text-[13px] font-extrabold flex-shrink-0 text-white ${
+          !hecha ? (destacada ? 'bg-orange-500' : 'bg-gray-200 text-gray-600') : ''
+        }`} style={hecha ? { backgroundColor: estado.color } : undefined}>
+          {hecha ? <Icono className="w-4 h-4" strokeWidth={3} /> : parada.secuencia_ruta}
         </span>
 
         <div className="flex-1 min-w-0">
@@ -514,7 +628,7 @@ function TarjetaParada({ parada, destacada = false, puedeEntregar = true, onAbri
 
           {estado && (
             <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border mt-2 ${estado.clase}`}>
-              <Icono className="w-3 h-3" /> {estado.texto}
+              <Icono className="w-3 h-3" /> {estado.corto}
               {parada.entregado_en && ` · ${parada.entregado_en}`}
             </span>
           )}
@@ -522,6 +636,28 @@ function TarjetaParada({ parada, destacada = false, puedeEntregar = true, onAbri
 
         <ChevronRight className="w-5 h-5 text-gray-300 flex-shrink-0 mt-1" />
       </button>
+
+      {/* La evidencia que no alcanzó a subir por señal.
+          La entrega YA quedó registrada —eso es lo que importa y por eso la foto
+          va en petición aparte— pero antes el aviso se iba con el toast y la
+          foto se perdía sin recurso. Y la evidencia es justo lo único del
+          sistema que no se puede volver a pedir a ningún lado. */}
+      {evidenciaPendiente && (
+        <div className="border-t border-amber-200 bg-amber-50 px-4 py-2.5 flex items-center gap-2.5">
+          <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+          <span className="text-[12px] font-semibold text-amber-900 leading-snug flex-1">
+            Falta subir {evidenciaPendiente.foto && evidenciaPendiente.firma ? 'la foto y la firma'
+              : evidenciaPendiente.foto ? 'la foto' : 'la firma'}
+          </span>
+          <button
+            onClick={onReintentarEvidencia}
+            disabled={subiendoEvidencia}
+            className="flex-shrink-0 bg-amber-500 active:bg-amber-600 disabled:opacity-50 text-white font-bold text-[12px] px-3 py-2 rounded-lg"
+          >
+            {subiendoEvidencia ? 'Subiendo…' : 'Reintentar'}
+          </button>
+        </div>
+      )}
 
       {/* Atajos: llamar y navegar. Van FUERA del botón principal para que un
           toque no abra la hoja de entrega sin querer. */}
@@ -535,15 +671,31 @@ function TarjetaParada({ parada, destacada = false, puedeEntregar = true, onAbri
               <Phone className="w-3.5 h-3.5" /> Llamar
             </a>
           )}
+          {/* Waze y Maps por separado, no un solo "Cómo llegar".
+              Cada chofer usa la que usa, y mandarlo a la que no es le cuesta
+              tres toques más de pie junto al camión. Los dos van con la
+              COORDENADA del plan y no con el texto de la calle: las direcciones
+              de SAP vienen como alguien las capturó y un buscador de mapas las
+              manda a otra colonia. */}
           {parada.lat && parada.lng && (
-            <a
-              href={`https://www.google.com/maps/dir/?api=1&destination=${parada.lat},${parada.lng}`}
-              target="_blank"
-              rel="noreferrer"
-              className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[12px] font-bold text-gray-600 active:bg-gray-50"
-            >
-              <Navigation className="w-3.5 h-3.5" /> Cómo llegar
-            </a>
+            <>
+              <a
+                href={enlaceWaze(parada.lat, parada.lng)}
+                target="_blank"
+                rel="noreferrer"
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[12px] font-bold text-gray-600 active:bg-gray-50"
+              >
+                <Navigation className="w-3.5 h-3.5" /> Waze
+              </a>
+              <a
+                href={enlaceMaps(parada.lat, parada.lng)}
+                target="_blank"
+                rel="noreferrer"
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[12px] font-bold text-gray-600 active:bg-gray-50"
+              >
+                <MapIcon className="w-3.5 h-3.5" /> Maps
+              </a>
+            </>
           )}
           <button
             onClick={onAbrir}

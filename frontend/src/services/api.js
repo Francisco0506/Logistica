@@ -7,6 +7,20 @@ const BASE = '/api/dispatcher';
 const BASE_VENTAS = '/api/ventas';
 
 /**
+ * Las reglas y el vocabulario del backend: estados, transiciones, motivos,
+ * escalones de turno, tiempo de descarga, CEDIS.
+ *
+ * Todo esto estaba TRANSCRITO a mano en el frontend, y ya causó tres bugs
+ * reales por desfase (la paleta duplicada, la lista de camiones de Samsara, y
+ * los estados finales copiados en cinco archivos). Ver backend/delivery/api/config.py.
+ */
+export async function getConfig({ signal } = {}) {
+  const res = await fetch('/api/config', { signal });
+  if (!res.ok) throw new Error(`Config failed: ${res.status}`);
+  return res.json();
+}
+
+/**
  * Vendedores que tienen pedidos ese día, para el selector del panel de ventas.
  * @param {string} fecha — Formato YYYY-MM-DD
  */

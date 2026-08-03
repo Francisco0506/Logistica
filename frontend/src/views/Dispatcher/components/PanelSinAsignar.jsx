@@ -10,8 +10,6 @@ import { Truck, AlertCircle, ChevronDown, ChevronUp, Clock, Loader, RefreshCw, S
  * de qué lado se pasa y por cuánto (llegar antes de que abran se arregla
  * esperando, llegar después de que cierren no se arregla).
  */
-const TURNOS = [6, 6.5, 7, 7.5, 8];
-
 export default function PanelSinAsignar({
   alertas,
   alertaAbierta,
@@ -31,7 +29,11 @@ export default function PanelSinAsignar({
   onAnalizar,
   onMandarDeTodosModos,
   mandando,
+  // Los escalones de turno los manda el backend (/api/config). Estaban
+  // escritos a mano aquí y en dos lugares más del panel.
+  turnos = [6, 6.5, 7, 7.5, 8],
 }) {
+  const TURNOS = turnos;
   const [abrirTurnos, setAbrirTurnos] = useState(false);
   // Dos problemas distintos con soluciones distintas: los que no cupieron en
   // ninguna ruta, y los que ni siquiera se pueden rutear por falta de
