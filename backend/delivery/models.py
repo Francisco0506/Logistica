@@ -29,6 +29,19 @@ class Ruta(models.Model):
 # camión.
 ESTADOS_RUTA_DESPACHADA = ['Cargando', 'Listo', 'En_Ruta', 'Finalizada']
 
+# Los estados finales de una ENTREGA: el camión ya pasó por esa puerta, se haya
+# podido dejar la mercancía o no. Son TRES, no uno.
+#
+# Misma historia que la constante de arriba, y por eso va junto a ella: la lista
+# estaba escrita a mano en api/ventas.py, api/dispatcher.py, y en tres archivos
+# del frontend, y el MISMO bug —"una parada cuenta como hecha aunque no se haya
+# podido entregar"— se arregló dos veces por separado sin que nadie notara que
+# faltaban las otras copias.
+#
+# Se define arriba de `Remision` porque `Remision.ESTADOS` la necesita para no
+# ser una cuarta transcripción de los mismos textos.
+ESTADOS_ENTREGA_FINAL = ('Entregado', 'Entregado_Parcial', 'No_Entregado')
+
 
 class Destino(models.Model):
     card_code = models.CharField(max_length=50)
@@ -171,7 +184,7 @@ class Remision(models.Model):
 
     @property
     def entrega_confirmada(self):
-        return self.estado in ('Entregado', 'Entregado_Parcial', 'No_Entregado')
+        return self.estado in ESTADOS_ENTREGA_FINAL
 
     def __str__(self):
         return f"Remision {self.doc_num} - {self.card_name}"

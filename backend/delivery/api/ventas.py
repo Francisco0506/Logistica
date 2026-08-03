@@ -11,7 +11,7 @@ from django.db.models import Count
 from django.utils import timezone
 from ninja import Router, Schema
 
-from ..models import Remision
+from ..models import ESTADOS_ENTREGA_FINAL, Remision
 from .comun import _rango_eta, _texto_ventana
 
 router = Router()
@@ -130,10 +130,10 @@ def get_pedidos_vendedor(request, fecha: date, slp_code: str):
             # una parada donde el cliente estaba cerrado —que el camión sí hizo
             # y ya dejó atrás— se le reportaba al siguiente cliente como
             # pendiente: "va en la 2 de 8" cuando el camión ya iba en la 3.
-            VISITADAS = ('Entregado', 'Entregado_Parcial', 'No_Entregado')
             entregadas = len({
                 c['secuencia_ruta'] for c in companeros
-                if c['secuencia_ruta'] in secuencias_antes and c['estado'] in VISITADAS
+                if c['secuencia_ruta'] in secuencias_antes
+                and c['estado'] in ESTADOS_ENTREGA_FINAL
             })
 
         # Qué renglones quedaron cortos, en palabras: "2 de 3 Queso manchego".

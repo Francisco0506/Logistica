@@ -10,7 +10,10 @@ from django.test import TestCase
 
 from delivery.models import Remision
 
-from .factories import CENTRO, crear_destino, crear_linea, crear_pedido, crear_ruta
+from .factories import (
+    CENTRO, crear_destino, crear_linea, crear_pedido, crear_pedido_despachado,
+    crear_ruta,
+)
 
 URL = "/api/chofer/paradas/{}/entregar"
 
@@ -32,7 +35,7 @@ class EstadoDeducidoDeLasCantidades(TestCase):
 
     def test_sin_detalle_es_entrega_completa(self):
         """El camino normal, el 90% de las paradas: un solo toque."""
-        pedido = crear_pedido(crear_destino(CENTRO))
+        pedido = crear_pedido_despachado(crear_destino(CENTRO))
         linea = crear_linea(pedido, cantidad=3)
 
         datos = self._confirmar(pedido, recibio="Sra. Martha")
@@ -45,7 +48,7 @@ class EstadoDeducidoDeLasCantidades(TestCase):
         self.assertEqual(float(linea.cantidad_entregada), 3.0)
 
     def test_dejar_de_menos_en_un_renglon_es_entrega_parcial(self):
-        pedido = crear_pedido(crear_destino(CENTRO))
+        pedido = crear_pedido_despachado(crear_destino(CENTRO))
         l1 = crear_linea(pedido, cantidad=3)
         crear_linea(pedido, cantidad=1)
 
@@ -58,7 +61,7 @@ class EstadoDeducidoDeLasCantidades(TestCase):
         self.assertEqual(datos["estado"], "Entregado_Parcial")
 
     def test_no_dejar_nada_es_no_entregado_aunque_se_manden_las_lineas(self):
-        pedido = crear_pedido(crear_destino(CENTRO))
+        pedido = crear_pedido_despachado(crear_destino(CENTRO))
         linea = crear_linea(pedido, cantidad=3)
 
         datos = self._confirmar(
@@ -71,7 +74,7 @@ class EstadoDeducidoDeLasCantidades(TestCase):
 
     def test_no_se_puede_entregar_mas_de_lo_que_traia(self):
         """Un dedazo del chofer no debe inventar mercancía que no iba."""
-        pedido = crear_pedido(crear_destino(CENTRO))
+        pedido = crear_pedido_despachado(crear_destino(CENTRO))
         linea = crear_linea(pedido, cantidad=2)
 
         self._confirmar(pedido, lineas=[{"linea_id": linea.id, "cantidad_entregada": 99}])
@@ -80,7 +83,7 @@ class EstadoDeducidoDeLasCantidades(TestCase):
         self.assertEqual(float(linea.cantidad_entregada), 2.0)
 
     def test_cantidad_negativa_se_acota_en_cero(self):
-        pedido = crear_pedido(crear_destino(CENTRO))
+        pedido = crear_pedido_despachado(crear_destino(CENTRO))
         linea = crear_linea(pedido, cantidad=2)
 
         self._confirmar(pedido, lineas=[{"linea_id": linea.id, "cantidad_entregada": -5}],
@@ -101,7 +104,7 @@ class PedidoSinRenglones(TestCase):
     """
 
     def _confirmar(self, motivo=None):
-        pedido = crear_pedido(crear_destino(CENTRO))
+        pedido = crear_pedido_despachado(crear_destino(CENTRO))
         payload = {"motivo": motivo} if motivo else {}
         r = self.client.post(URL.format(pedido.id), data=payload,
                              content_type="application/json")
@@ -139,6 +142,51 @@ class ErroresQueNoDebenPasarPorExito(TestCase):
         self.assertNotIn("estado", r.json())
 
 
+class NoSePuedeEntregarAntesDeSalirDelCEDIS(TestCase):
+    """
+    El candado existía SOLO en el navegador, o sea que no existía.
+
+    `Driver/index.jsx` calcula `puedeEntregar = ruta?.estado === 'En_Ruta'` y
+    con eso apaga el botón. Pero la API no pide autenticación: un POST directo
+    confirmaba la entrega de cualquier parada, de cualquier ruta, con la
+    mercancía todavía en el almacén. Y una entrega confirmada sobre una ruta en
+    Borrador queda expuesta a que la limpieza del sync se la lleve con su foto y
+    su firma.
+    """
+
+    def _intentar(self, estado_ruta):
+        ruta = crear_ruta(estado=estado_ruta)
+        pedido = crear_pedido(crear_destino(CENTRO), ruta=ruta, secuencia=1)
+        crear_linea(pedido, cantidad=2)
+        r = self.client.post(URL.format(pedido.id), data={},
+                             content_type="application/json")
+        pedido.refresh_from_db()
+        return r.json(), pedido
+
+    def test_una_ruta_en_borrador_no_deja_reportar(self):
+        datos, pedido = self._intentar('Borrador')
+        self.assertEqual(datos["status"], "error")
+        self.assertIn("CEDIS", datos["message"])
+        self.assertEqual(pedido.estado, "Pendiente")   # no se tocó nada
+
+    def test_un_camion_que_todavia_se_esta_cargando_tampoco(self):
+        datos, pedido = self._intentar('Cargando')
+        self.assertEqual(datos["status"], "error")
+        self.assertEqual(pedido.estado, "Pendiente")
+
+    def test_un_pedido_sin_ruta_tampoco(self):
+        pedido = crear_pedido(crear_destino(CENTRO))
+        r = self.client.post(URL.format(pedido.id), data={},
+                             content_type="application/json")
+        self.assertEqual(r.json()["status"], "error")
+
+    def test_con_el_camion_en_la_calle_si_deja(self):
+        """El caso bueno, para que el candado no se pase de estricto."""
+        datos, pedido = self._intentar('En_Ruta')
+        self.assertEqual(datos["estado"], "Entregado")
+        self.assertEqual(pedido.estado, "Entregado")
+
+
 class ReSincronizarNoBorraLoQueElChoferReporto(TestCase):
     def test_el_estado_y_las_cantidades_sobreviven(self):
         """
@@ -149,7 +197,7 @@ class ReSincronizarNoBorraLoQueElChoferReporto(TestCase):
         Se prueba el efecto (una escritura de sync no pisa el reporte) en vez de
         la implementación.
         """
-        pedido = crear_pedido(crear_destino(CENTRO))
+        pedido = crear_pedido_despachado(crear_destino(CENTRO))
         linea = crear_linea(pedido, cantidad=3)
         self.client.post(URL.format(pedido.id),
                          data={"lineas": [{"linea_id": linea.id, "cantidad_entregada": 1}],

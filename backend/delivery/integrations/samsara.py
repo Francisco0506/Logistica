@@ -55,10 +55,15 @@ def get_ubicaciones_isuzu():
             timeout=REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
-    except requests.RequestException:
+        # `resp.json()` va DENTRO del try. Estaba afuera, así que un cuerpo que
+        # no fuera JSON —el portal cautivo del WiFi de la oficina, un proxy
+        # corporativo, una página de error de Samsara— lanzaba ValueError y el
+        # endpoint del GPS devolvía 500. Samsara no puede tumbar nada: es lo
+        # accesorio del mapa, no el plan del día.
+        data = resp.json().get("data", [])
+    except (requests.RequestException, ValueError):
         return []
 
-    data = resp.json().get("data", [])
     resultado = []
     for v in data:
         nombre = v.get("name")

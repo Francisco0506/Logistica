@@ -70,6 +70,26 @@ def crear_ruta(camion="RA7475A", fecha=FECHA, estado='Borrador'):
     return Ruta.objects.create(fecha=fecha, camion=camion, chofer="", estado=estado)
 
 
+def crear_pedido_despachado(destino=None, fecha=FECHA, camion="RA7475A", **extra):
+    """
+    Un pedido arriba de un camión QUE YA SALIÓ. Es el único estado en el que el
+    chofer puede reportar una entrega.
+
+    Existe porque `confirmar_entrega` ahora exige que la ruta esté 'En_Ruta'.
+    Esa regla vivía solo en el navegador —y la API no pide autenticación, así
+    que no vivía en ningún lado—: se podían reportar entregas de un camión que
+    seguía en el almacén, y una entrega confirmada sobre una ruta en Borrador
+    quedaba expuesta a que la limpieza del sync se la llevara con su foto y su
+    firma.
+
+    Las pruebas de entrega usaban pedidos SIN ruta, o sea un escenario que en la
+    calle no ocurre: nadie entrega mercancía que no se ha subido al camión.
+    """
+    ruta = crear_ruta(camion=camion, fecha=fecha, estado='En_Ruta')
+    return crear_pedido(destino=destino, fecha=fecha, ruta=ruta,
+                        estado='En_Camino', secuencia=1, **extra)
+
+
 class MatrizFalsa:
     """
     Reemplaza a OSRM en las pruebas.

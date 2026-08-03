@@ -170,6 +170,24 @@ def confirmar_entrega(request, remision_id: int, payload: ConfirmarEntregaIn):
     except Remision.DoesNotExist:
         return {"status": "error", "message": "Ese pedido no existe."}
 
+    # El camión tiene que HABER SALIDO para poder reportar una entrega.
+    #
+    # Esta regla existía solo en el navegador (`Driver/index.jsx`:
+    # `puedeEntregar = ruta?.estado === 'En_Ruta'`), o sea que no existía: la API
+    # no pide autenticación, así que un POST directo confirmaba la entrega de
+    # cualquier parada, de cualquier ruta, con el camión todavía en el almacén.
+    #
+    # Importa más de lo que parece. Una entrega reportada sobre una ruta en
+    # Borrador queda con `ruta` en Borrador, y la limpieza de sobrantes del sync
+    # —que solo perdona las rutas ya despachadas— se la puede llevar junto con
+    # su foto y su firma. La integridad de la evidencia no puede depender de un
+    # `if` en el celular.
+    if not remision.ruta or remision.ruta.estado != 'En_Ruta':
+        return {
+            "status": "error",
+            "message": "Este camión todavía no sale del CEDIS. Pide que te den Salida en el almacén.",
+        }
+
     with transaction.atomic():
         lineas = {l.id: l for l in remision.lineas.all()}
 

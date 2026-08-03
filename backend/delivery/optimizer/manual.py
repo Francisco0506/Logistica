@@ -9,7 +9,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .. import fleet
-from ..models import Remision, Ruta
+from ..models import ESTADOS_RUTA_DESPACHADA, Remision, Ruta
 from ..integrations.osrm import build_distance_time_matrices
 from .reglas import (
     HORA_CERO,
@@ -64,6 +64,30 @@ def recalcular_etas_desde_salida(ruta, depot_coords, salida_dt=None):
     actualizadas = []
     for i, (_, rems, _) in enumerate(paradas):
         t += timedelta(minutes=time_matrix[i][i + 1])
+
+        # Si el camión llega ANTES de que el cliente abra, espera en la puerta.
+        #
+        # Aquí solo se sumaba manejo + descarga, y eso contradice al plan: el
+        # solver SÍ respeta la ventana (la espera queda como slack de la
+        # dimensión de tiempo), y es justamente por la ventana que manda a un
+        # cliente tardío al final de la ruta. Al recalcular se perdía esa espera
+        # y salía una hora que el camión no va a cumplir.
+        #
+        # El caso real que documenta este archivo más abajo: un cliente que
+        # recibe de 15:00 a 22:00 queda de última parada con ETA 15:10. Con
+        # salida a las 09:10 la ETA se reescribía en 12:40, y ventas le decía a
+        # la vendedora "llega entre 12:25 y 12:55". El camión llega a esa hora y
+        # se queda dos horas y media parado; la entrega ocurre a las 15:00.
+        #
+        # La espera se arrastra a las paradas siguientes a propósito: si el
+        # camión esperó, las que vienen detrás también se recorren.
+        destino = rems[0].destino
+        ini, _fin = _ventana_en_minutos(destino, hora_cero=salida_dt)
+        if ini is not None:
+            abre = salida_dt + timedelta(minutes=ini)
+            if t < abre:
+                t = abre
+
         for r in rems:
             r.eta = t.strftime("%H:%M")
             actualizadas.append(r)
@@ -93,7 +117,10 @@ def sugerir_camiones_para_remision(remision, depot_coords):
 
     rutas = list(
         Ruta.objects.filter(fecha=remision.doc_date)
-        .exclude(estado__in=['En_Ruta', 'Finalizada'])
+        # Misma corrección que en `asignar_manualmente`: sin 'Cargando' y
+        # 'Listo', las sugerencias ofrecían camiones que el almacén ya estaba
+        # cargando.
+        .exclude(estado__in=ESTADOS_RUTA_DESPACHADA)
         .prefetch_related('remisiones__destino')
     )
     if not rutas:
@@ -263,8 +290,40 @@ def asignar_manualmente(remision, ruta_id, posicion=None, forzar=False):
     except Ruta.DoesNotExist:
         return {"status": "error", "message": "Esa ruta ya no existe."}
 
-    if ruta.estado in ['En_Ruta', 'Finalizada']:
-        return {"status": "error", "message": "Ese camión ya salió a la calle o terminó su ruta, no se le puede agregar nada."}
+    # Cuarta copia de la lista, ahora sí desde `models.ESTADOS_RUTA_DESPACHADA`.
+    #
+    # Decía `['En_Ruta', 'Finalizada']`, o sea que le FALTABAN 'Cargando' y
+    # 'Listo': se podía meter un pedido a un camión que el almacén ya estaba
+    # cargando, o a uno ya cargado y con el manifiesto impreso. Y ahí quedaba
+    # atrapado, porque el replaneo excluye las rutas congeladas: la mercancía no
+    # iba en el camión, el sistema decía que sí, y no había forma de que
+    # volviera a salir en un plan.
+    #
+    # Es exactamente lo que advierte el comentario de `models.py:25-29`: agregar
+    # un estado y olvidar una copia significa reasignar un pedido que ya va en
+    # un camión.
+    if ruta.estado in ESTADOS_RUTA_DESPACHADA:
+        return {
+            "status": "error",
+            "message": "Ese camión ya se está cargando, ya salió o terminó su ruta; no se le puede agregar nada.",
+        }
+
+    # Un pedido sin coordenadas NO se puede meter sin confirmar.
+    #
+    # `sugerir_camiones_para_remision` devuelve `{"error": ...}` en ese caso, así
+    # que `opciones` sale vacío, `opcion` queda en None y el guardia de abajo
+    # —`if opcion and not opcion["factible"]`— no bloqueaba nada: se asignaba en
+    # silencio, sin advertencia y sin pedir `forzar`. El optimizador no lo puede
+    # colocar, así que a la siguiente corrida se caía del plan.
+    if not forzar and (remision.destino is None
+                       or remision.destino.latitude is None
+                       or remision.destino.longitude is None):
+        return {
+            "status": "requiere_confirmacion",
+            "message": ("Este pedido no tiene coordenadas en SAP: se puede poner en la lista, "
+                        "pero el optimizador no lo va a poder acomodar ni calcular su hora."),
+            "motivos_riesgo": ["Sin georreferencia en SAP B1"],
+        }
 
     if not forzar:
         # El CEDIS sale de fleet.py, que es su única fuente de verdad. Aquí
