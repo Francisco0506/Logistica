@@ -1,140 +1,47 @@
-import os
+"""
+Traer de SAP B1 las órdenes de entrega del día y volcarlas a la base local.
+
+Es de SOLO LECTURA: este sistema nunca escribe en SAP.
+
+Lo que depende de CÓMO está montado el SQL Server del cliente —driver,
+timeouts, qué UDF existen, validación de coordenadas— vive en
+`sap_conexion.py`. Aquí queda lo que se hace con los datos una vez traídos.
+"""
 from datetime import date
+
 from django.db import transaction
-from ..models import ESTADOS_RUTA_DESPACHADA, Destino, LineaRemision, Remision
-from dotenv import load_dotenv
 
-load_dotenv()
+from ..models import (
+    ESTADOS_ENTREGA_FINAL, ESTADOS_RUTA_DESPACHADA, Destino, LineaRemision, Remision,
+)
+from .sap_conexion import (
+    UDF_DIAS, CamposDisponibles, conectar, coordenada_creible, revisar_configuracion,
+)
 
-# Intentar importar pyodbc para SQL Server (SAP B1 estándar)
-try:
-    import pyodbc
-    HAS_PYODBC = True
-except ImportError:
-    HAS_PYODBC = False
-
-
-# México va de la longitud -118 (Baja California) a la -86 (Quintana Roo), y de
-# la latitud 14 (Chiapas) a la 33 (frontera norte). Cualquier cosa fuera de ahí
-# es un error de captura, no un cliente lejano.
-#
-# El caso que lo destapó (28-jul-2026): RANCHO DE LA CRUZ tenía la longitud
-# 100.376191 SIN el signo menos, así que caía en China. OSRM no podía llegar,
-# devolvía tramos nulos y tumbaba el optimizador entero con un error 500 —el
-# despachador solo veía "falló" sin saber por qué.
-#
-# El rango se deja a nivel país a propósito, no al área metropolitana: hay
-# clientes reales en Nuevo Laredo (a 200 km) y en Ciudad Victoria, y acotarlo a
-# Monterrey los estaría tirando por buenos.
-LAT_MEXICO = (14.0, 33.0)
-LNG_MEXICO = (-118.0, -86.0)
-
-
-def _coordenada_creible(lat, lng):
-    """¿Esta coordenada puede ser de un cliente en México?"""
-    try:
-        lat, lng = float(lat), float(lng)
-    except (TypeError, ValueError):
-        return False
-    if lat == 0 or lng == 0:
-        return False
-    return (LAT_MEXICO[0] <= lat <= LAT_MEXICO[1]
-            and LNG_MEXICO[0] <= lng <= LNG_MEXICO[1])
 
 @transaction.atomic
 def sync_from_sap(fecha: date):
     """
     Sincroniza pedidos pendientes de entregar desde la base de datos de SAP B1.
-    Si no está configurada o falla la conexión, usa datos de prueba.
+
+    Si no está configurada o falla la conexión, lo REPORTA. No inventa nada: la
+    vía de datos de prueba se eliminó junto con `test_data.py`, y tener dos
+    fuentes de verdad era justo lo que hacía que un sync borrara lo cargado por
+    el otro lado.
     """
-    db_host = os.getenv("SAP_DB_HOST")
-    db_name = os.getenv("SAP_DB_NAME")
-    db_user = os.getenv("SAP_DB_USER")
-    db_password = os.getenv("SAP_DB_PASSWORD")
-    db_port = os.getenv("SAP_DB_PORT", "1433")
-
-    # Si no están las credenciales configuradas, no inventar pedidos: reportarlo
-    # tal cual. Para probar el optimizador sin SAP, usar "Cargar pedidos de
-    # prueba" (cargar_pedidos_prueba en test_data.py), que usa destinos reales
-    # ya importados en vez de datos inventados.
-    if not HAS_PYODBC or not db_host or not db_password or "your_sap" in db_password:
-        return {"status": "warning", "message": "SAP B1 no está configurado. Usa 'Cargar pedidos de prueba' para probar sin SAP."}
-
-    # El driver varía por versión de SQL Server: SQL Server 2012 (la base de
-    # pruebas) no soporta "ODBC Driver 17", solo el Native Client 11.0 que
-    # instala junto con SSMS/SQL Server. Configurable porque producción puede
-    # correr una versión distinta.
-    odbc_driver = os.getenv("SAP_ODBC_DRIVER", "ODBC Driver 17 for SQL Server")
-    conn_str = f"DRIVER={{{odbc_driver}}};SERVER={db_host},{db_port};DATABASE={db_name};UID={db_user};PWD={db_password}"
-
-    # Nombres de los UDF (campos definidos por el usuario) en SAP B1 que guardan
-    # latitud/longitud y ventanas de horario del Ship-To. Se configuran por .env
-    # porque cada instalación de SAP los nombra distinto y aún no se han confirmado
-    # los nombres reales en la base de este cliente.
-    udf_lat = os.getenv("SAP_UDF_LATITUDE", "U_Latitud")
-    udf_lng = os.getenv("SAP_UDF_LONGITUDE", "U_Longitud")
-    udf_ini1 = os.getenv("SAP_UDF_HORA_INI1", "U_IniRecibo1")
-    udf_fin1 = os.getenv("SAP_UDF_HORA_FIN1", "U_FinRecibo1")
-    udf_ini2 = os.getenv("SAP_UDF_HORA_INI2", "U_IniRecibo2")
-    udf_fin2 = os.getenv("SAP_UDF_HORA_FIN2", "U_FinRecibo2")
-    udf_dias = {
-        "ent_lun": os.getenv("SAP_UDF_ENT_LUN", "U_EntLun"),
-        "ent_mar": os.getenv("SAP_UDF_ENT_MAR", "U_EntMar"),
-        "ent_mie": os.getenv("SAP_UDF_ENT_MIE", "U_EntMie"),
-        "ent_jue": os.getenv("SAP_UDF_ENT_JUE", "U_EntJue"),
-        "ent_vie": os.getenv("SAP_UDF_ENT_VIE", "U_EntVie"),
-        "ent_sab": os.getenv("SAP_UDF_ENT_SAB", "U_EntSab"),
-    }
-    # A diferencia de lat/long y ventanas de horario, estos UDF no existen (aún)
-    # en CRD1 de la base de pruebas — por eso el default es vacío en vez de un
-    # nombre adivinado, y solo se piden si se configuran explícitamente en .env.
-    udf_contacto = os.getenv("SAP_UDF_CONTACTO", "")
-    udf_telefono = os.getenv("SAP_UDF_TELEFONO", "")
-    udf_referencias = os.getenv("SAP_UDF_REFERENCIAS", "")
+    sin_configurar = revisar_configuracion()
+    if sin_configurar:
+        return {"status": "warning", "message": sin_configurar}
 
     try:
-        conn = pyodbc.connect(conn_str, timeout=5)
+        conn = conectar()
         cursor = conn.cursor()
 
-        # Qué UDF existen DE VERDAD en esta base, en vez de darlos por hecho.
-        #
-        # No todas las instalaciones tienen los mismos: la base de pruebas tiene
-        # las ventanas de recibo y los días de entrega (U_IniRecibo1, U_EntLun…)
-        # porque se crearon para este proyecto, pero LA PRODUCTIVA NO LOS TIENE
-        # — ahí solo están U_Latitud y U_Longitud. Pedir una columna que no
-        # existe tumba la consulta entera con "Invalid column name" y el
-        # despachador se queda sin pedidos, sin saber por qué.
-        #
-        # Preguntando primero, la misma consulta sirve en las dos bases: donde
-        # el campo existe se usa, y donde no, el destino queda sin ventana y el
-        # optimizador lo trata como disponible todo el turno.
-        cursor.execute(
-            "SELECT name FROM sys.columns WHERE object_id = OBJECT_ID('CRD1')"
-        )
-        columnas_crd1 = {r[0].lower() for r in cursor.fetchall()}
-
-        def existe(udf):
-            return bool(udf) and udf.lower() in columnas_crd1
-
-        has_geo_udf = existe(udf_lat) and existe(udf_lng)
-        has_window_udf = existe(udf_ini1) and existe(udf_fin1)
-
-        extra_cols = ""
-        if has_geo_udf:
-            extra_cols += f", A.{udf_lat} AS UdfLat, A.{udf_lng} AS UdfLng"
-        if has_window_udf:
-            extra_cols += f", A.{udf_ini1} AS UdfIni1, A.{udf_fin1} AS UdfFin1"
-        if existe(udf_ini2) and existe(udf_fin2):
-            extra_cols += f", A.{udf_ini2} AS UdfIni2, A.{udf_fin2} AS UdfFin2"
-        for campo, udf in udf_dias.items():
-            if existe(udf):
-                extra_cols += f", A.{udf} AS Udf_{campo}"
-        if existe(udf_contacto):
-            extra_cols += f", A.{udf_contacto} AS UdfContacto"
-        if existe(udf_telefono):
-            extra_cols += f", A.{udf_telefono} AS UdfTelefono"
-        if existe(udf_referencias):
-            extra_cols += f", A.{udf_referencias} AS UdfReferencias"
+        campos = CamposDisponibles(cursor)
+        has_geo_udf = campos.hay_geo
+        has_window_udf = campos.hay_ventana
+        extra_cols = campos.columnas_extra()
+        udf_dias = UDF_DIAS
 
         # Se rutean las ÓRDENES DE ENTREGA (ODLN), SIEMPRE.
         #
@@ -394,7 +301,7 @@ def sync_from_sap(fecha: date):
             _si_vino("referencias", "UdfReferencias")
 
             if has_geo_udf and getattr(row, "UdfLat", None) and getattr(row, "UdfLng", None):
-                if _coordenada_creible(row.UdfLat, row.UdfLng):
+                if coordenada_creible(row.UdfLat, row.UdfLng):
                     destino.latitude = row.UdfLat
                     destino.longitude = row.UdfLng
                 else:
@@ -485,11 +392,24 @@ def sync_from_sap(fecha: date):
         # NO se toca lo que ya salió: si una ruta está Cargando, Listo, En_Ruta o
         # Finalizada, sus pedidos se quedan aunque SAP ya no los mande. Borrar un
         # pedido que va en un camión sería peor que dejar uno de más.
+        #
+        # Y TAMPOCO lo que ya se entregó, que es un candado aparte y hace falta.
+        # El de arriba mira el estado de la RUTA, y con eso no basta por dos
+        # razones: una remisión puede quedar con `ruta = NULL` (al re-optimizar
+        # se borran las rutas Borrador y el `SET_NULL` las suelta), y con la ruta
+        # en NULL el `exclude` de arriba no la excluye — el join no encuentra
+        # nada y pasa derecho al delete. Lo que se perdía era la foto, la firma,
+        # la hora y las cantidades por renglón: la ÚNICA prueba de que la
+        # mercancía se entregó, y no se puede volver a pedir a SAP.
+        #
+        # Un pedido de más en el panel se ve y se corrige. Una entrega borrada
+        # no deja rastro: el mensaje solo diría "se quitó 1 que ya no está".
         sobrantes = (
             Remision.objects
             .filter(doc_date=fecha)
             .exclude(doc_entry__in=doc_entries_sap)
             .exclude(ruta__estado__in=ESTADOS_RUTA_DESPACHADA)
+            .exclude(estado__in=ESTADOS_ENTREGA_FINAL)
         )
         borradas = sobrantes.count()
         sobrantes.delete()

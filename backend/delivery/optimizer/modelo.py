@@ -3,7 +3,7 @@
 Aquí se traducen los pedidos reales a lo que el solver entiende: matriz de
 tiempos y distancias, demandas, ventanas y capacidades.
 """
-from ..api.comun import fecha_reparto_de
+from ..calendario import fecha_reparto_de
 from ..models import Remision
 from ..integrations.osrm import build_distance_time_matrices
 from .reglas import (

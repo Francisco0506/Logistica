@@ -12,6 +12,7 @@ from django.utils import timezone
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
 from .. import fleet
+from ..calendario import nombre_dia
 from ..models import Remision, Ruta
 from .modelo import _SoloSimulacion, build_data_model
 from .reglas import (
@@ -113,10 +114,9 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
         if sin_geo:
             partes.append(f"{len(sin_geo)} sin coordenadas en SAP")
         if cerrados:
-            DIAS = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo']
             partes.append(
                 f"{len(cerrados)} de clientes que no reciben en "
-                f"{DIAS[data['dia_reparto'].weekday()]}"
+                f"{nombre_dia(data['dia_reparto'])}"
             )
         return {
             "status": "error",
@@ -371,6 +371,26 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
         if dia_cerrado:
             Remision.objects.bulk_update(dia_cerrado, ['estado', 'ruta', 'secuencia_ruta', 'eta'])
 
+        # Y los que no tienen coordenada, que era el TERCER grupo y el único que
+        # se quedaba sin limpiar: solo se leía para armar el mensaje.
+        #
+        # Se llega ahí porque `asignar_manualmente` no bloquea un pedido sin
+        # coordenadas —`sugerir` devuelve un error, las opciones salen vacías y
+        # el guardia `if opcion and not opcion["factible"]` no dispara— así que
+        # el despachador lo mete a mano y queda 'Asignado'. Al re-optimizar, su
+        # ruta Borrador se borra, el SET_NULL lo deja sin ruta, y conservaba
+        # 'Asignado' con su secuencia y su ETA viejas: no salía en ningún camión,
+        # no salía en Alertas (que filtran estado='Pendiente') y ninguna corrida
+        # futura lo levantaba. Existía en la base y era invisible.
+        sin_geo = data.get('remisiones_sin_geo', [])
+        for remision in sin_geo:
+            remision.estado = 'Pendiente'
+            remision.ruta = None
+            remision.secuencia_ruta = None
+            remision.eta = None
+        if sin_geo:
+            Remision.objects.bulk_update(sin_geo, ['estado', 'ruta', 'secuencia_ruta', 'eta'])
+
         pedidos_no_asignados = [r.doc_num for r in remisiones_no_asignadas]
         pedidos_sin_geo = [r.doc_num for r in data['remisiones_sin_geo']]
         pedidos_dia_cerrado = [r.doc_num for r in dia_cerrado]
@@ -399,11 +419,9 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
         if pedidos_sin_geo:
             message += f" {len(pedidos_sin_geo)} pedido(s) sin coordenadas, no considerados: {pedidos_sin_geo}."
         if pedidos_dia_cerrado:
-            dia = data['dia_reparto']
-            DIAS = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo']
             message += (
                 f" {len(pedidos_dia_cerrado)} pedido(s) NO se planearon porque el cliente "
-                f"no recibe en {DIAS[dia.weekday()]}: {pedidos_dia_cerrado}. "
+                f"no recibe en {nombre_dia(data['dia_reparto'])}: {pedidos_dia_cerrado}. "
                 f"Hay que moverlos a otro día o corregir el horario en SAP."
             )
 

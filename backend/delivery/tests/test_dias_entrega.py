@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 from django.test import TestCase
 
-from delivery.api.comun import fecha_reparto_de
+from delivery.calendario import fecha_reparto_de
 from delivery.models import Remision
 from delivery.optimizer import solve_vrp
 from delivery.optimizer.modelo import build_data_model

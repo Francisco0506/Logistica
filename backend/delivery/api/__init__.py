@@ -12,6 +12,7 @@ Cada rol vive ahora en su módulo y aquí solo se montan:
 from ninja import NinjaAPI
 
 from .chofer import router as chofer_router
+from .config import router as config_router
 from .dispatcher import router as dispatcher_router
 from .ventas import router as ventas_router
 
@@ -20,3 +21,5 @@ api = NinjaAPI(title="Laben Routing API", version="1.0.0")
 api.add_router("/dispatcher", dispatcher_router)
 api.add_router("/ventas", ventas_router)
 api.add_router("/chofer", chofer_router)
+# Sin prefijo: /api/config lo usan las tres pantallas, no es de ningún rol.
+api.add_router("", config_router)

@@ -10,18 +10,18 @@ from django.utils import timezone
 from ninja import Router, Schema
 
 from .. import fleet
-from ..models import ESTADOS_RUTA_DESPACHADA, Remision, Ruta
+from ..models import ESTADOS_ENTREGA_FINAL, ESTADOS_RUTA_DESPACHADA, Remision, Ruta
 from ..optimizer import (
-    SEGUNDOS_SOLVER, solve_vrp, sugerir_camiones_para_remision,
+    solve_vrp, sugerir_camiones_para_remision,
     asignar_manualmente, recalcular_etas_desde_salida,
 )
+from ..optimizer import escenarios
 from ..integrations.samsara import get_ubicaciones_isuzu
 from ..integrations.sap import sync_from_sap
 from ..optimizer.reglas import recibe_ese_dia
-from .comun import (
-    DEPOT_COORDS, TRANSICIONES_VALIDAS, _rango_eta, _texto_ventana,
-    fecha_reparto_de,
-)
+from .. import calendario
+from ..calendario import fecha_reparto_de, nombre_dia
+from .comun import DEPOT_COORDS, TRANSICIONES_VALIDAS, _rango_eta, _texto_ventana
 
 router = Router()
 
@@ -135,117 +135,18 @@ def get_jornada(request, reparto: date = None):
     """
     Qué día de entregas hay que planear AHORITA.
 
-    Con `reparto` contesta otra pregunta: "quiero ver el reparto de ESTE día,
-    ¿qué documentos le tocan?". Es lo que usa el selector de fecha del panel,
-    que muestra el día en que SALE la mercancía —que es como piensa cualquiera—
-    y no el día en que se capturó el documento, que es como está guardada.
+    Endpoint delgado a propósito: la regla de negocio —cuándo sale lo que se
+    captura, la hora de corte, el salto del domingo— vive en
+    `delivery/calendario.py`, que no depende de HTTP ni de la base de datos y se
+    puede probar con un reloj y un contador de mentiras.
 
-    La regla de fondo: **la entrega capturada un día sale al siguiente**. Se
-    surte y se captura de 6 am a 7 pm —el 99.9% antes de las 20:00, con picos a
-    las 11-12 y a las 15-16— y el camión sale a la mañana siguiente entre las 7
-    y las 10. Medido contra la base productiva; ver docs/flujo-documentos-sap.md.
-
-    De ahí salen dos momentos distintos del día, y el panel tiene que abrir en
-    el correcto o se ve vacío:
-
-      ANTES de las 11  ->  el reparto de HOY todavía no sale o va saliendo.
-                           Se planea con las entregas de AYER, que ya están
-                           completas desde anoche.
-
-      DESPUÉS de las 11 -> el reparto de hoy ya está en la calle. Lo que toca
-                           preparar es MAÑANA, con las entregas que se están
-                           capturando HOY.
-
-    Antes esto siempre devolvía "ayer", y por la tarde eso ya no sirve: el
-    despachador quiere adelantar el día siguiente y el panel le mostraba lo que
-    ya se fue.
-
-    El día se busca hacia atrás en vez de restar uno, porque el lunes hay que
-    cargar el sábado y no el domingo.
+    Aquí solo se le pasa el reloj real y la forma de contar entregas reales.
     """
-    ahora = timezone.localtime()
-    hoy = ahora.date()
-
-    if reparto is not None:
-        # De qué día son los documentos de ESE reparto: el día hábil anterior.
-        #
-        # Antes esto buscaba hacia atrás "el último día que tuviera entregas", y
-        # estaba mal: al pedir el reparto del 1-ago —que todavía no tiene nada
-        # capturado— se iba hasta el 29-jul y mostraba los pedidos de ese día
-        # como si fueran los del 1. Datos viejos presentados como si fueran del
-        # día que se pidió, que es peor que no mostrar nada.
-        #
-        # Ahora es el día anterior y punto; si cae domingo se toma el sábado,
-        # que es el único día sin captura. Si ese día no tiene entregas, se
-        # devuelve 0 y se dice, en vez de rellenar con otra fecha.
-        fecha_carga = reparto - timedelta(days=1)
-        if fecha_carga.weekday() == 6:      # domingo
-            fecha_carga -= timedelta(days=1)
-        entregas = Remision.objects.reales().filter(doc_date=fecha_carga).count()
-        return {
-            "fecha_carga": fecha_carga.isoformat(),
-            "fecha_reparto": reparto.isoformat(),
-            "entregas": entregas,
-            "para": "hoy" if reparto == hoy else ("mañana" if reparto == hoy + timedelta(days=1) else "otro"),
-            "explicacion": (
-                f"Reparto del {reparto:%d-%b} — son las entregas capturadas el "
-                f"{fecha_carga:%d-%b}."
-                if entregas else
-                f"Todavía no hay entregas capturadas el {fecha_carga:%d-%b}, que "
-                f"son las que saldrían el {reparto:%d-%b}."
-            ),
-        }
-
-    preparando_mañana = ahora.hour >= HORA_CORTE_JORNADA
-
-    if preparando_mañana:
-        # Lo que se captura hoy sale mañana.
-        fecha_carga = hoy
-        fecha_reparto = hoy + timedelta(days=1)
-        entregas = Remision.objects.reales().filter(doc_date=fecha_carga).count()
-        explicacion = (
-            f"Preparando MAÑANA {fecha_reparto:%d-%b}: son las entregas que se "
-            f"están capturando hoy. Siguen llegando hasta las 7 de la noche."
-        )
-        return {
-            "fecha_carga": fecha_carga.isoformat(),
-            "fecha_reparto": fecha_reparto.isoformat(),
-            "entregas": entregas,
-            "para": "mañana",
-            "explicacion": explicacion,
-        }
-
-    fecha_carga = None
-    entregas = 0
-    for dias in range(1, 8):
-        candidata = hoy - timedelta(days=dias)
-        n = Remision.objects.reales().filter(doc_date=candidata).count()
-        if n:
-            fecha_carga, entregas = candidata, n
-            break
-
-    if fecha_carga is None:
-        # Nunca se ha sincronizado nada hacia atrás: que el panel abra en ayer
-        # y el usuario sincronice. Mejor eso que abrir en hoy, que a esa hora
-        # está vacío y hace pensar que el sistema falla.
-        fecha_carga = hoy - timedelta(days=1)
-        explicacion = (
-            f"No hay entregas cargadas de los últimos 7 días. "
-            f"Sincroniza {fecha_carga:%d-%b} para ver lo que sale hoy."
-        )
-    else:
-        explicacion = (
-            f"Entregas capturadas el {fecha_carga:%d-%b} — son las que salen "
-            f"hoy {hoy:%d-%b}. Lo que se capture hoy sale mañana."
-        )
-
-    return {
-        "fecha_carga": fecha_carga.isoformat(),
-        "fecha_reparto": hoy.isoformat(),
-        "entregas": entregas,
-        "para": "hoy",
-        "explicacion": explicacion,
-    }
+    return calendario.jornada_de(
+        ahora=timezone.localtime(),
+        contar_entregas=lambda f: Remision.objects.reales().filter(doc_date=f).count(),
+        reparto=reparto,
+    )
 
 # 2b. Los pedidos de prueba YA NO SE EXPONEN POR LA API.
 #
@@ -351,121 +252,23 @@ class EscenariosIn(Schema):
     hora_salida: str = "09:00"
 
 
-# Segundos de solver por escenario. Corto porque se corren varios seguidos y lo
-# que interesa es comparar cuántos pedidos caben, no exprimir cada ruta.
-# Se acota al límite general del solver: si alguien lo baja (pruebas, máquina
-# lenta), no tiene sentido que un escenario tarde más que una corrida completa.
-SEGUNDOS_POR_ESCENARIO = min(6, SEGUNDOS_SOLVER)
-
-
 @router.post("/rutas/escenarios")
 def evaluar_escenarios(request, payload: EscenariosIn):
-    if not payload.camiones:
-        return {"status": "error", "message": "Activa al menos un camión."}
+    """
+    Endpoint delgado a propósito: solo valida y delega.
 
-    payload.camiones = list(dict.fromkeys(payload.camiones))
-
-    # Solo lo que este análisis puede mover: los pedidos que NO van ya en un
-    # camión despachado. Antes se contaban TODAS las remisiones del día contra
-    # un `base` que sí excluye las rutas congeladas, así que dos camiones en la
-    # calle con 40 pedidos salían reportados como "40 sin asignar, hay que
-    # acomodarlos a mano" cuando se estaban entregando en ese momento.
-    total_pedidos = (
-        Remision.objects.reales()
-        .filter(doc_date=payload.fecha)
-        .exclude(ruta__estado__in=ESTADOS_RUTA_DESPACHADA)
-        .count()
+    Las 128 líneas que decidían qué escenarios probar y cómo compararlos vivían
+    aquí dentro, en un handler HTTP, aunque son puramente lógica de
+    optimización. Ahora están en `optimizer/escenarios.py`, donde se pueden
+    probar sin levantar un cliente de Django.
+    """
+    return escenarios.evaluar_escenarios(
+        fecha=payload.fecha,
+        camiones=payload.camiones,
+        horas_turno=payload.horas_turno,
+        hora_salida=payload.hora_salida,
+        depot_coords=DEPOT_COORDS,
     )
-
-    def _cuantos_caben(camiones, horas, salida):
-        res = solve_vrp(
-            fecha=payload.fecha, placas=camiones, depot_coords=DEPOT_COORDS,
-            horas_turno=horas, hora_salida=salida,
-            simular=True, segundos_solver=SEGUNDOS_POR_ESCENARIO,
-        )
-        if res.get("status") != "success":
-            return None
-        return sum(r["pedidos"] for r in res.get("rutas", []))
-
-    base = _cuantos_caben(payload.camiones, payload.horas_turno, payload.hora_salida)
-    if base is None:
-        return {"status": "error", "message": "No se pudo evaluar el plan actual."}
-
-    opciones = []
-
-    # 1. Salir más temprano. Es la palanca más fuerte medida (ver docs/flota.md)
-    #    porque las ventanas de los clientes son horas de reloj fijas.
-    hora_actual = datetime.strptime(payload.hora_salida, "%H:%M")
-    if hora_actual.hour > 6:
-        una_hora_antes = (hora_actual - timedelta(hours=1)).strftime("%H:%M")
-        caben = _cuantos_caben(payload.camiones, payload.horas_turno, una_hora_antes)
-        if caben is not None:
-            opciones.append({
-                "accion": "salir_antes",
-                "titulo": f"Salir a las {una_hora_antes} en vez de {payload.hora_salida}",
-                "detalle": "Cargar más rápido en el CEDIS para que el primer camión salga una hora antes.",
-                "pedidos": caben,
-                "dificultad": "Depende del almacén, no del sistema",
-            })
-
-    # 2. Más turno: el máximo posible. Si ni con el máximo mejora, tampoco
-    #    mejoraría con un escalón intermedio, así que con una corrida basta.
-    if payload.horas_turno < 8:
-        caben = _cuantos_caben(payload.camiones, 8.0, payload.hora_salida)
-        if caben is not None:
-            opciones.append({
-                "accion": "mas_turno",
-                "valor": 8.0,
-                "titulo": "Ampliar el turno a 8 horas",
-                "detalle": f"Los choferes trabajarían {8 - payload.horas_turno:g} h más que hoy.",
-                "pedidos": caben,
-                "dificultad": "Hay que confirmarlo con los choferes",
-            })
-
-    # 3. Activar un camión más. Se prueba el de MAYOR capacidad de los apagados:
-    #    si ese no ayuda, ninguno de los más chicos va a ayudar. Probar los tres
-    #    triplicaba el tiempo de espera para dar casi la misma respuesta.
-    apagados = [c for c in fleet.CAMIONES if c["placa"] not in payload.camiones]
-    if apagados:
-        mejor_apagado = max(apagados, key=lambda c: (c["capacidad_kg"], c["max_paradas"]))
-        placa = mejor_apagado["placa"]
-        caben = _cuantos_caben(payload.camiones + [placa], payload.horas_turno, payload.hora_salida)
-        if caben is not None:
-            otros = len(apagados) - 1
-            opciones.append({
-                "accion": "activar_camion",
-                "valor": placa,
-                "titulo": f"Activar el {placa}",
-                "detalle": (
-                    f"{mejor_apagado['modelo']}, {mejor_apagado['capacidad_kg']:,} kg, "
-                    f"hasta {mejor_apagado['max_paradas']} paradas."
-                    + (f" Hay {otros} camión(es) apagado(s) más." if otros else "")
-                ),
-                "pedidos": caben,
-                "dificultad": "Requiere unidad y chofer disponibles",
-            })
-
-    # El "gana" es contra el plan actual. Se ordena por lo que más mete, y las
-    # que no mejoran nada se marcan pero NO se esconden: saber que ampliar el
-    # turno no sirve es tan útil como saber qué sí sirve.
-    for o in opciones:
-        o["gana"] = o["pedidos"] - base
-    opciones.sort(key=lambda o: -o["gana"])
-
-    mejor = opciones[0] if opciones and opciones[0]["gana"] > 0 else None
-    sin_asignar = total_pedidos - base
-
-    return {
-        "status": "success",
-        "total_pedidos": total_pedidos,
-        "asignados_ahora": base,
-        "sin_asignar": sin_asignar,
-        "opciones": opciones,
-        "recomendacion": (
-            f"{mejor['titulo']}: mete {mejor['gana']} pedido(s) más." if mejor
-            else "Ninguna de estas opciones mete más pedidos. Los que faltan hay que asignarlos a mano o moverlos a otro día."
-        ),
-    }
 
 
 # 4a. La flota de reparto. El frontend la pide al abrir el panel en vez de
@@ -548,9 +351,7 @@ def update_ruta_estado(request, ruta_id: int, payload: RutaEstadoIn):
         # Ahora solo toca las que el chofer no alcanzo a reportar, y las deja
         # como 'No_Entregado' con su motivo: si nadie confirmo la entrega, no
         # hay razon para suponer que ocurrio.
-        sin_reportar = ruta.remisiones.exclude(
-            estado__in=['Entregado', 'Entregado_Parcial', 'No_Entregado']
-        )
+        sin_reportar = ruta.remisiones.exclude(estado__in=ESTADOS_ENTREGA_FINAL)
         n = sin_reportar.count()
         if n:
             sin_reportar.update(estado='No_Entregado', motivo='otro',
@@ -578,7 +379,6 @@ def get_alertas(request, fecha: date):
     # optimizador descartó por el día aparecía como "pendiente de asignar" y el
     # despachador lo intentaba meter a mano una y otra vez.
     dia = fecha_reparto_de(fecha)
-    DIAS = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo']
 
     alertas = []
     for r in remisiones:
@@ -586,7 +386,7 @@ def get_alertas(request, fecha: date):
         if sin_geo:
             motivo = "Sin georreferencia en SAP B1"
         elif not recibe_ese_dia(r.destino, dia):
-            motivo = f"El cliente no recibe en {DIAS[dia.weekday()]}"
+            motivo = f"El cliente no recibe en {nombre_dia(dia)}"
         else:
             motivo = "Pendiente de asignar a una ruta"
         alertas.append({

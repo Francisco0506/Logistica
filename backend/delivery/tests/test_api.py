@@ -11,10 +11,11 @@ medio segundo.
 Por eso aquí se llama a TODOS los endpoints, incluidos los caminos de error,
 que es justo donde estaban escondidos.
 """
-from datetime import time
+from datetime import datetime, time
 from unittest.mock import patch
 
 from django.test import TestCase
+from django.utils import timezone
 
 from delivery.models import Remision, Ruta
 
@@ -88,7 +89,48 @@ class PanelDelDespachador(BaseAPI):
     def test_jornada_por_defecto(self):
         r = self.client.get("/api/dispatcher/jornada")
         self.assertEqual(r.status_code, 200)
-        self.assertIn(r.json()["para"], ("hoy", "mañana"))
+        self.assertIn(r.json()["para"], ("hoy", "mañana", "otro"))
+
+    def _jornada_en(self, momento):
+        """
+        /jornada sin parámetros, con el reloj puesto en `momento`.
+
+        Hace falta parchear la hora porque esta rama del endpoint decide con
+        `timezone.localtime()`: sin fijarla, la prueba pasa o falla según el día
+        en que se corra, que fue exactamente cómo se escapó el bug del domingo.
+        """
+        with patch("delivery.api.dispatcher.timezone.localtime", return_value=momento):
+            return self.client.get("/api/dispatcher/jornada").json()
+
+    def test_el_sabado_por_la_tarde_se_prepara_el_lunes_no_el_domingo(self):
+        """
+        El sábado después de la hora de corte, el panel prepara lo que sale el
+        LUNES. Sumaba un día a mano en vez de usar `fecha_reparto_de`, así que
+        abría prometiendo un reparto en DOMINGO, que es el único día en que no
+        sale ningún camión.
+        """
+        sabado = datetime(2026, 8, 1, 15, 0, tzinfo=timezone.get_current_timezone())
+        datos = self._jornada_en(sabado)
+        self.assertEqual(datos["fecha_carga"], "2026-08-01")    # sábado
+        self.assertEqual(datos["fecha_reparto"], "2026-08-03")  # LUNES
+        self.assertNotEqual(datos["para"], "mañana")            # no es mañana: es pasado
+
+    def test_el_viernes_por_la_tarde_si_se_prepara_manana(self):
+        """El salto es SOLO por el domingo: el resto de la semana es mañana."""
+        viernes = datetime(2026, 7, 31, 15, 0, tzinfo=timezone.get_current_timezone())
+        datos = self._jornada_en(viernes)
+        self.assertEqual(datos["fecha_reparto"], "2026-08-01")  # sábado
+        self.assertEqual(datos["para"], "mañana")
+
+    def test_en_domingo_el_panel_no_promete_un_reparto_en_domingo(self):
+        """
+        Antes de la hora de corte el reparto es "hoy"… salvo en domingo, que no
+        sale ningún camión. Ahí lo que se prepara es el lunes.
+        """
+        domingo = datetime(2026, 8, 2, 8, 0, tzinfo=timezone.get_current_timezone())
+        datos = self._jornada_en(domingo)
+        self.assertEqual(datos["fecha_reparto"], "2026-08-03")  # lunes
+        self.assertNotEqual(datos["para"], "hoy")
 
     def test_jornada_de_un_reparto_toma_el_dia_habil_anterior(self):
         """

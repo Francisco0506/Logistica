@@ -16,7 +16,8 @@ from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
 
-from delivery.integrations import sap
+from delivery.integrations import sap, sap_conexion
+from delivery.integrations.sap_conexion import coordenada_creible
 from delivery.models import Destino, Remision
 
 from .factories import CENTRO, FECHA, crear_destino, crear_pedido, crear_ruta
@@ -55,9 +56,14 @@ class SyncFalso:
         conexion = MagicMock()
         conexion.cursor.return_value = cursor
 
+        # Se parchea `sap_conexion`, que es donde vive todo lo que depende del
+        # SQL Server real: el driver, los timeouts y qué UDF tiene esta base.
         self._parches = [
-            patch.object(sap, "HAS_PYODBC", True),
-            patch.object(sap, "pyodbc", MagicMock(connect=MagicMock(return_value=conexion)), create=True),
+            # HAS_PYODBC lo lee `revisar_configuracion`, que vive en sap_conexion.
+            patch.object(sap_conexion, "HAS_PYODBC", True),
+            # `conectar` sí se parchea en `sap`: ahí está la referencia que se
+            # llama, porque el import la trajo al espacio de nombres del módulo.
+            patch.object(sap, "conectar", MagicMock(return_value=conexion)),
             patch.dict("os.environ", {
                 "SAP_DB_HOST": "servidor", "SAP_DB_NAME": "base",
                 "SAP_DB_USER": "u", "SAP_DB_PASSWORD": "secreto",
@@ -161,10 +167,22 @@ class CoordenadasImposibles(TestCase):
         self.assertAlmostEqual(Destino.objects.get(card_code="C1192").longitude, -100.3762)
 
     def test_las_coordenadas_en_cero_no_cuentan_como_ubicacion(self):
-        self.assertFalse(sap._coordenada_creible(0, 0))
-        self.assertFalse(sap._coordenada_creible(None, None))
-        self.assertFalse(sap._coordenada_creible("", ""))
-        self.assertTrue(sap._coordenada_creible(25.67, -100.37))
+        self.assertFalse(coordenada_creible(0, 0))
+        self.assertFalse(coordenada_creible(None, None))
+        self.assertFalse(coordenada_creible("", ""))
+        self.assertTrue(coordenada_creible(25.67, -100.37))
+
+    def test_una_coordenada_fuera_de_mexico_se_rechaza(self):
+        # RANCHO DE LA CRUZ tenía la longitud 100.376191 SIN el signo menos, o
+        # sea en China: OSRM devolvía tramos nulos y tumbaba el optimizador
+        # entero con un 500, sin decir por qué.
+        self.assertFalse(coordenada_creible(25.67, 100.376191))
+
+    def test_un_cliente_lejano_pero_real_SI_pasa(self):
+        # El rango es a nivel país a propósito: hay clientes en Nuevo Laredo (a
+        # 200 km) y en Ciudad Victoria. Acotarlo a Monterrey los tiraría.
+        self.assertTrue(coordenada_creible(27.48, -99.51))    # Nuevo Laredo
+        self.assertTrue(coordenada_creible(23.74, -99.14))    # Cd. Victoria
 
 
 class LimpiezaDeSobrantes(TestCase):
@@ -208,6 +226,32 @@ class LimpiezaDeSobrantes(TestCase):
             sap.sync_from_sap(FECHA)
 
         self.assertFalse(Remision.objects.filter(id=pedido.id).exists())
+
+    def test_lo_que_YA_SE_ENTREGO_no_se_borra_aunque_la_ruta_este_en_borrador(self):
+        """
+        El candado de arriba mira el estado de la RUTA, y con eso no basta.
+
+        Una remisión puede quedar con `ruta = NULL` —al re-optimizar se borran
+        las rutas Borrador y el SET_NULL las suelta— y con la ruta en NULL el
+        `exclude(ruta__estado__in=...)` no la excluye: el join no encuentra nada
+        y pasa derecho al delete.
+
+        Lo que se pierde es la foto, la firma, la hora y las cantidades por
+        renglón: la ÚNICA prueba de que la mercancía se entregó, y no se puede
+        volver a pedir a SAP. El mensaje solo diría "se quitó 1 que ya no está".
+        """
+        for estado in ['Entregado', 'Entregado_Parcial', 'No_Entregado']:
+            for ruta in [None, crear_ruta(camion=f"B-{estado}", estado='Borrador')]:
+                with self.subTest(estado=estado, ruta=ruta and ruta.estado or 'sin ruta'):
+                    pedido = crear_pedido(crear_destino(CENTRO), ruta=ruta, estado=estado)
+
+                    with SyncFalso([renglon(1, 250001)]):
+                        sap.sync_from_sap(FECHA)
+
+                    self.assertTrue(
+                        Remision.objects.filter(id=pedido.id).exists(),
+                        f"el sync borró una entrega ya confirmada ({estado})",
+                    )
 
     def test_no_se_tocan_los_pedidos_de_OTRO_dia(self):
         otro_dia = crear_pedido(crear_destino(CENTRO), fecha=date(2026, 7, 20))

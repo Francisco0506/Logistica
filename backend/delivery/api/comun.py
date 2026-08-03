@@ -36,26 +36,6 @@ TRANSICIONES_VALIDAS = {
 MARGEN_ETA_MINUTOS = 15
 
 
-def fecha_reparto_de(fecha_carga: date) -> date:
-    """
-    En qué día SALE a la calle lo que se capturó el `fecha_carga`.
-
-    La regla de la operación: **la entrega capturada un día sale al siguiente**.
-    Almacén hace el pickeo, captura las órdenes de entrega durante el día, y a
-    la mañana siguiente los camiones salen con eso. Ver docs/flujo-documentos-sap.md.
-
-    El domingo no se reparte, así que lo capturado el sábado sale el lunes.
-
-    Vive aquí y no dentro del endpoint /jornada porque el OPTIMIZADOR también
-    lo necesita: los días en que un cliente recibe se miden contra el día en que
-    el camión llega, no contra el día en que se capturó el documento. Tenerlo en
-    dos lados sería tener dos calendarios.
-    """
-    reparto = fecha_carga + timedelta(days=1)
-    if reparto.weekday() == 6:      # domingo: se recorre al lunes
-        reparto += timedelta(days=1)
-    return reparto
-
 
 def _texto_ventana(destino):
     """
