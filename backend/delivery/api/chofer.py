@@ -224,6 +224,27 @@ def confirmar_entrega(request, remision_id: int, payload: ConfirmarEntregaIn):
             pedido_completo = not payload.motivo
             nada_entregado = payload.motivo in Remision.MOTIVOS_SIN_ENTREGA
 
+        # EL MOTIVO MANDA SOBRE LAS CANTIDADES, tenga renglones o no.
+        #
+        # "Estaba cerrado" y "no había quién recibiera" significan que el camión
+        # no bajó nada, y eso no se discute con los números: si el cliente no
+        # abrió, da igual lo que dijeran las cantidades.
+        #
+        # Sin esto el bug era de un solo toque y silencioso. El chofer llega, el
+        # cliente está cerrado, marca "Estaba cerrado" y confirma SIN bajar las
+        # cantidades —que es lo natural: no tocó la mercancía, no tiene por qué
+        # moverle a los renglones, y además bajarlos a mano son 120 toques de
+        # pie en la calle—. Como los renglones seguían completos, `all(l.completa)`
+        # daba True y la entrega se guardaba como **'Entregado'**: ventas y
+        # facturación veían entregada una mercancía que sigue arriba del camión.
+        #
+        # La regla ya existía y estaba bien escrita, pero solo se aplicaba en la
+        # rama de los pedidos SIN renglones —que son los menos—. Aquí se saca de
+        # las dos ramas para que valga siempre.
+        if payload.motivo in Remision.MOTIVOS_SIN_ENTREGA:
+            nada_entregado = True
+            pedido_completo = False
+
         if nada_entregado:
             remision.estado = 'No_Entregado'
         elif pedido_completo:

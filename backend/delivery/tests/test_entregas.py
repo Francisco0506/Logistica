@@ -135,6 +135,67 @@ class PedidoSinRenglones(TestCase):
         self.assertTrue(set(Remision.MOTIVOS_SIN_ENTREGA) <= catalogo)
 
 
+class MotivoSinEntregaConRenglones(TestCase):
+    """
+    Un cliente CERRADO no puede quedar guardado como entrega completa, aunque
+    los renglones vayan intactos.
+
+    Es el mismo criterio que `PedidoSinRenglones` ya probaba, pero por la otra
+    rama —la de los pedidos que SÍ traen líneas, que son la mayoría— donde el
+    motivo se estaba ignorando por completo.
+
+    El bug era de un solo toque y silencioso: el chofer llega, el cliente está
+    cerrado, marca "Estaba cerrado" y confirma sin bajar las cantidades —que es
+    lo natural, no tocó la mercancía— y como los renglones seguían completos se
+    guardaba 'Entregado'. Ventas y facturación daban por entregada una mercancía
+    que seguía arriba del camión.
+    """
+
+    # Cada llamada arma su propio pedido, y por lo tanto su propia RUTA. El
+    # camión va como parámetro porque una ruta es única por (fecha, camión):
+    # dos pedidos despachados del mismo camión el mismo día chocan contra esa
+    # restricción, que es justo la que evita que un camión salga con dos rutas.
+    def _confirmar(self, motivo, cantidad_entregada=None, camion="RA7475A"):
+        pedido = crear_pedido_despachado(crear_destino(CENTRO), camion=camion)
+        linea = crear_linea(pedido, cantidad=3)
+        payload = {"motivo": motivo}
+        if cantidad_entregada is not None:
+            payload["lineas"] = [
+                {"linea_id": linea.id, "cantidad_entregada": cantidad_entregada}
+            ]
+        r = self.client.post(URL.format(pedido.id), data=payload,
+                             content_type="application/json")
+        self.assertEqual(r.status_code, 200)
+        return r.json()["estado"]
+
+    def test_cliente_cerrado_con_renglones_intactos_es_no_entregado(self):
+        """El caso exacto que se escapaba: sin tocar las cantidades."""
+        self.assertEqual(self._confirmar("cerrado"), "No_Entregado")
+
+    def test_cliente_cerrado_aunque_se_manden_las_cantidades_completas(self):
+        """Que es lo que manda la hoja cuando el chofer no le mueve a nada."""
+        self.assertEqual(self._confirmar("cerrado", cantidad_entregada=3), "No_Entregado")
+
+    def test_sin_quien_reciba_con_renglones_es_no_entregado(self):
+        self.assertEqual(self._confirmar("sin_quien_reciba"), "No_Entregado")
+
+    def test_sin_espacio_con_renglones_es_no_entregado(self):
+        self.assertEqual(self._confirmar("sin_espacio"), "No_Entregado")
+
+    def test_un_motivo_que_SI_implica_entrega_no_se_toca(self):
+        """
+        La otra mitad de la regla, y la que evita pasarse de listo: en un rechazo
+        parcial sí se bajó mercancía, así que el estado lo siguen mandando las
+        cantidades y no el motivo.
+        """
+        self.assertEqual(
+            self._confirmar("cliente_rechazo", cantidad_entregada=1, camion="RA7475A"),
+            "Entregado_Parcial")
+        self.assertEqual(
+            self._confirmar("cliente_rechazo", cantidad_entregada=3, camion="PP4873A"),
+            "Entregado")
+
+
 class ErroresQueNoDebenPasarPorExito(TestCase):
     def test_un_pedido_que_no_existe_no_dice_que_se_entrego(self):
         r = self.client.post(URL.format(999999), data={}, content_type="application/json")

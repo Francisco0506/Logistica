@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { X, Check, Minus, Plus, AlertTriangle, Camera, Trash2, PenLine } from 'lucide-react';
 import PanelFirma from './PanelFirma';
 
@@ -57,14 +57,35 @@ export default function HojaEntrega({
   const [vistaFirma, setVistaFirma] = useState(null);
   const [firmando, setFirmando] = useState(false);
 
-  // Los object URL de la foto y de la firma se sueltan al cerrar la hoja.
+  // Los object URL de la foto y de la firma se sueltan al CERRAR la hoja.
   // Antes solo se liberaba la foto, y solo si el chofer apretaba el bote de
   // basura: en un turno de 20 entregas con evidencia, el celular se quedaba
   // con 20 imágenes retenidas en memoria.
+  //
+  // Las dependencias van VACÍAS a propósito. Con `[vistaPrevia, vistaFirma]`,
+  // React corre la limpieza en cada cambio de cualquiera de las dos, así que
+  // capturar la firma revocaba la URL de LA FOTO (y al revés). La miniatura ya
+  // pintada aguanta, pero en cuanto algo vuelve a montar el `<img>` —rotar el
+  // teléfono, el re-render de `guardando`, regresar de la app de cámara— queda
+  // como imagen rota y el chofer cree que la evidencia se perdió y la vuelve a
+  // tomar. El archivo sí se sube bien; lo que se rompe es la confianza.
+  //
+  // Reemplazar una foto o una firma NO se queda sin liberar: `tomarFoto`,
+  // `quitarFoto`, `guardarFirma` y `quitarFirma` revocan la anterior antes de
+  // poner la nueva.
+  //
+  // Las URL vivas se siguen por `ref` y no por dependencia: con las
+  // dependencias vacías, la función de limpieza se queda con los valores del
+  // primer render —los dos en `null`— y entonces no liberaría NADA al cerrar,
+  // que es el otro extremo del mismo error.
+  const urlFoto = useRef(null);
+  const urlFirma = useRef(null);
+  useEffect(() => { urlFoto.current = vistaPrevia; }, [vistaPrevia]);
+  useEffect(() => { urlFirma.current = vistaFirma; }, [vistaFirma]);
   useEffect(() => () => {
-    if (vistaPrevia) URL.revokeObjectURL(vistaPrevia);
-    if (vistaFirma) URL.revokeObjectURL(vistaFirma);
-  }, [vistaPrevia, vistaFirma]);
+    if (urlFoto.current) URL.revokeObjectURL(urlFoto.current);
+    if (urlFirma.current) URL.revokeObjectURL(urlFirma.current);
+  }, []);
 
   const ajustar = (linea, delta) => {
     setCantidades((prev) => {
@@ -82,6 +103,10 @@ export default function HojaEntrega({
   const tomarFoto = (e) => {
     const archivo = e.target.files?.[0];
     if (!archivo) return;
+    // Suelta la anterior: retomar la foto sin pasar por el bote de basura es lo
+    // más normal del mundo (salió movida, salió oscura) y cada intento dejaba
+    // un object URL retenido en la memoria del celular.
+    if (vistaPrevia) URL.revokeObjectURL(vistaPrevia);
     setFoto(archivo);
     setVistaPrevia(URL.createObjectURL(archivo));
   };

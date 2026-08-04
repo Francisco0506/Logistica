@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Truck, MapPin, Clock, Phone, Navigation, Check, AlertTriangle,
@@ -8,6 +8,7 @@ import LabenLogo from '../../components/LabenLogo';
 import { useAviso } from '../../components/useAviso';
 import { getRutas, getRutaChofer, confirmarEntrega, getCamionesGPS, getFlota, subirFotoEntrega, subirFirmaEntrega } from '../../services/api';
 import HojaEntrega from './components/HojaEntrega';
+import ResumenReportado from './components/ResumenReportado';
 import MapaRuta from './components/MapaRuta';
 import { ESTILO_ENTREGA, esVisitada, huboEntrega, salioMal } from '../../config/estadosRuta';
 import { hoyLocal } from '../../lib/fecha';
@@ -81,11 +82,29 @@ export default function DriverApp() {
   const [ruta, setRuta] = useState(null);
   const [cargando, setCargando] = useState(false);
   const [abierta, setAbierta] = useState(null);   // parada con la hoja de entrega abierta
+  // Parada YA reportada que el chofer está nada más revisando (solo lectura).
+  // Se guarda el id y no el objeto para que, si el refresco de 60 s trae datos
+  // nuevos de esa parada, lo que está viendo se actualice en vez de quedarse
+  // congelado en la foto de hace un minuto.
+  const [revisandoId, setRevisandoId] = useState(null);
   const [guardando, setGuardando] = useState(false);
   const [gps, setGps] = useState([]);
   const [verMapa, setVerMapa] = useState(true);
   const [verHechas, setVerHechas] = useState(false);   // lo ya reportado no estorba
   const fecha = hoyLocal();
+
+  // Token de corrida para las respuestas de /chofer/ruta. Mismo patrón que
+  // `corrida` en Dispatcher/hooks/useJornada.js, y aquí hacía más falta que allá.
+  //
+  // Hay TRES fuentes que escriben `ruta`: el intervalo de 60 s, el refetch
+  // después de confirmar una entrega y el de después de reintentar la
+  // evidencia. En la calle las respuestas no llegan en el orden en que
+  // salieron: el GET del intervalo salía ANTES del POST de la entrega y llegaba
+  // DESPUÉS, así que pisaba el estado bueno con uno viejo. La parada que el
+  // chofer acababa de reportar reaparecía en "La que sigue" —con su botón verde
+  // y todo— y la reportaba dos veces. Con el contador, una respuesta que ya no
+  // es la última se tira sin tocar la pantalla.
+  const corrida = useRef(0);
 
   // Los camiones que SALEN hoy. Antes se listaba la flota completa, incluidos
   // los que están apagados y los que no tienen ruta: el chofer podía escoger un
@@ -129,10 +148,11 @@ export default function DriverApp() {
     if (!camion) { setRuta(null); return; }
     const c = new AbortController();
     const traer = () => {
+      const mia = ++corrida.current;
       getRutaChofer(fecha, camion, { signal: c.signal })
-        .then(setRuta)
+        .then((r) => { if (mia === corrida.current) setRuta(r); })
         .catch((e) => { if (e.name !== 'AbortError') console.error('Ruta chofer:', e); })
-        .finally(() => setCargando(false));
+        .finally(() => { if (mia === corrida.current) setCargando(false); });
     };
     setCargando(true);
     traer();
@@ -168,6 +188,38 @@ export default function DriverApp() {
   // reportar entregas antes convertiría el dato en algo que no ocurrió, que es
   // justo el problema que esta app viene a resolver.
   const puedeEntregar = ruta?.estado === 'En_Ruta';
+  // Cuántas paradas tienen foto o firma que no alcanzó a subir.
+  const conEvidenciaPendiente = Object.keys(evidenciaPendiente).length;
+  const revisandoParada = revisandoId ? paradas.find((p) => p.id === revisandoId) : null;
+
+  // Si hay evidencia sin subir, se ABRE sola la sección de "Ya reportadas".
+  //
+  // El reintento existía y funcionaba, pero vivía dentro de un bloque que
+  // arranca colapsado. Lo único que le avisaba al chofer era un toast rojo que
+  // se va en segundos: después de eso, la pantalla se veía idéntica a un día
+  // sin problemas. Y la evidencia vive solo en memoria —un File no se puede
+  // guardar en localStorage— así que si el navegador descarta la pestaña, cosa
+  // que pasa justo al abrir la cámara, la foto se pierde en silencio y no hay
+  // de dónde volver a sacarla: es lo único del sistema que no se le puede pedir
+  // a SAP ni a nadie.
+  //
+  // Solo abre; no vuelve a cerrar. Si el chofer la cierra a propósito para ver
+  // el mapa, la pantalla no se le pelea.
+  useEffect(() => {
+    if (conEvidenciaPendiente > 0) setVerHechas(true);
+  }, [conEvidenciaPendiente]);
+
+  /**
+   * Pedir la ruta y escribirla SOLO si sigue siendo la respuesta más nueva.
+   *
+   * Tira el error hacia arriba a propósito: quien la llama ya sabe qué decirle
+   * al chofer si no se pudo refrescar.
+   */
+  const refrescarRuta = async () => {
+    const mia = ++corrida.current;
+    const r = await getRutaChofer(fecha, camion);
+    if (mia === corrida.current) setRuta(r);
+  };
 
   /**
    * Volver a intentar subir la evidencia de una parada ya confirmada.
@@ -201,7 +253,7 @@ export default function DriverApp() {
       avisar('Sigue sin subir. Inténtalo donde agarre mejor la señal.', 'error');
     } else {
       avisar('Listo, ya subió.', 'exito');
-      try { setRuta(await getRutaChofer(fecha, camion)); } catch { /* el intervalo la trae */ }
+      try { await refrescarRuta(); } catch { /* el intervalo la trae */ }
     }
   };
 
@@ -249,7 +301,17 @@ export default function DriverApp() {
       setAbierta(null);
     } catch (e) {
       console.error('Confirmar entrega:', e);
-      avisar('No se pudo guardar. Revisa tu señal e inténtalo otra vez.', 'error');
+      // Se distingue "se acabó el tiempo" de "tronó la petición" porque no
+      // significan lo mismo para el chofer: cuando la llamada se corta por
+      // tiempo, el POST pudo haber llegado igual y la entrega pudo quedar
+      // guardada. Decirle "inténtalo otra vez" a secas lo manda a reportar dos
+      // veces la misma parada.
+      avisar(
+        e.name === 'TimeoutError'
+          ? 'Tardó demasiado y se canceló. Revisa la lista: puede que sí se haya guardado.'
+          : 'No se pudo guardar. Revisa tu señal e inténtalo otra vez.',
+        'error',
+      );
       return;
     } finally {
       setGuardando(false);
@@ -268,10 +330,25 @@ export default function DriverApp() {
     // minuto. Decirle que no se guardó cuando sí se guardó es un dato falso, y
     // eso es lo que esta app existe para evitar.
     try {
-      setRuta(await getRutaChofer(fecha, camion));
+      await refrescarRuta();
     } catch {
       avisar('Tu entrega quedó guardada. La lista se actualiza en un momento.', 'info');
     }
+  };
+
+  /**
+   * Cerrar la hoja de entrega.
+   *
+   * Además de cerrarla, suelta `guardando`. Es el cinturón de seguridad del
+   * mismo problema que los timeouts de api.js: si por lo que sea una llamada se
+   * queda en vuelo, el chofer cierra la hoja (la X nunca se deshabilita) y abre
+   * la siguiente parada. Sin este reset, `guardando` seguía en true y "Entregué
+   * todo" y "Confirmar entrega" salían apagados en TODAS las paradas que le
+   * quedaban del día; la única salida era recargar el navegador.
+   */
+  const cerrarHoja = () => {
+    setAbierta(null);
+    setGuardando(false);
   };
 
   // ── Escoger camión ──
@@ -422,6 +499,30 @@ export default function DriverApp() {
             </div>
           </div>
         )}
+
+        {/* La alarma de evidencia sin subir va PEGADA ARRIBA, junto al avance.
+            Antes el único aviso era un toast rojo de tres segundos y el botón
+            de reintentar, escondido dentro de una sección plegada. El chofer
+            terminaba su día convencido de que había subido todo. Aquí no se
+            puede no verla: se queda hasta que la foto suba de verdad. */}
+        {conEvidenciaPendiente > 0 && (
+          <button
+            onClick={() => setVerHechas(true)}
+            className="w-full flex items-center gap-2.5 bg-amber-100 border-t border-amber-200 px-4 py-2.5 text-left active:bg-amber-200"
+          >
+            <AlertTriangle className="w-4 h-4 text-amber-700 flex-shrink-0" />
+            <span className="text-[12px] font-bold text-amber-900 leading-snug flex-1">
+              {conEvidenciaPendiente === 1
+                ? 'Falta subir la evidencia de 1 entrega'
+                : `Falta subir la evidencia de ${conEvidenciaPendiente} entregas`}
+              {' · '}
+              <span className="font-semibold">se pierde si cierras la app</span>
+            </span>
+            <span className="flex-shrink-0 bg-amber-600 text-white text-[11px] font-extrabold px-2 py-0.5 rounded-full tabular-nums">
+              {conEvidenciaPendiente}
+            </span>
+          </button>
+        )}
       </header>
 
       <main className="px-4 py-4 space-y-4 max-w-2xl mx-auto">
@@ -527,7 +628,8 @@ export default function DriverApp() {
               </section>
             )}
 
-            {/* ═══ YA REPORTADAS — cerrado: ya no hay nada que hacer con ellas ═══ */}
+            {/* ═══ YA REPORTADAS — cerrado, salvo que quede evidencia sin subir:
+                eso sí es algo que hacer, y ahí la sección se abre sola ═══ */}
             {!!reportadas.length && (
               <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                 <button
@@ -539,6 +641,14 @@ export default function DriverApp() {
                   <span className="text-[10px] font-bold text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
                     {reportadas.length}
                   </span>
+                  {/* El contador de lo que falta subir, también aquí: quien
+                      cierre la sección desde la alarma de arriba tiene que
+                      seguir viendo que hay algo pendiente adentro. */}
+                  {conEvidenciaPendiente > 0 && (
+                    <span className="text-[10px] font-extrabold text-white bg-amber-600 px-2 py-0.5 rounded-full">
+                      {conEvidenciaPendiente} sin subir
+                    </span>
+                  )}
                   <span className="ml-auto text-gray-400">
                     {verHechas ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                   </span>
@@ -550,7 +660,11 @@ export default function DriverApp() {
                         key={p.id}
                         parada={p}
                         puedeEntregar={puedeEntregar}
-                        onAbrir={() => setAbierta(p)}
+                        // Una parada ya reportada abre en SOLO LECTURA. Abría
+                        // la hoja editable y en blanco, y un toque de más la
+                        // convertía en "entregado completo" borrando lo que el
+                        // chofer había reportado horas antes.
+                        onAbrir={() => setRevisandoId(p.id)}
                         evidenciaPendiente={evidenciaPendiente[p.id]}
                         subiendoEvidencia={subiendoEvidencia === p.id}
                         onReintentarEvidencia={() => reintentarEvidencia(p.id)}
@@ -564,12 +678,26 @@ export default function DriverApp() {
         )}
       </main>
 
+      {/* Se lee de `paradas` y no de un objeto guardado en el estado: si el
+          refresco trae la parada actualizada mientras el chofer la está
+          mirando, lo que ve se actualiza solo. Y si la parada desaparece de la
+          ruta (el despachador se la movió a otro camión), la hoja se cierra en
+          vez de quedarse enseñando datos de una parada que ya no es suya. */}
+      {revisandoParada && (
+        <ResumenReportado
+          parada={revisandoParada}
+          motivos={config.motivos_no_entrega}
+          onCerrar={() => setRevisandoId(null)}
+          onCorregir={puedeEntregar ? () => { setRevisandoId(null); setAbierta(revisandoParada); } : undefined}
+        />
+      )}
+
       {abierta && (
         <HojaEntrega
           parada={abierta}
           puedeEntregar={puedeEntregar}
           guardando={guardando}
-          onCerrar={() => setAbierta(null)}
+          onCerrar={cerrarHoja}
           onConfirmar={confirmar}
           motivos={config.motivos_no_entrega}
         />

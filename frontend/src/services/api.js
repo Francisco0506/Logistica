@@ -7,6 +7,56 @@ const BASE = '/api/dispatcher';
 const BASE_VENTAS = '/api/ventas';
 
 /**
+ * Cuánto se espera una llamada DEL CHOFER antes de darla por perdida.
+ *
+ * 30 s es de sobra para una foto por 4G malo, y bastante menos que "para
+ * siempre", que es lo que tardaba antes.
+ */
+const LIMITE_CHOFER_MS = 30_000;
+
+/**
+ * Una señal que se cancela sola a los N segundos, sin perder la del que llamó.
+ *
+ * El chofer trabaja en la calle: portal cautivo del wifi del cliente, antena
+ * saturada en el andén, TCP que se muere sin que nadie cierre el socket. En
+ * todos esos casos `fetch` NO rechaza NI resuelve: se queda colgado para
+ * siempre. Y como los botones de la hoja de entrega se apagan mientras hay una
+ * llamada en vuelo, un solo fetch zombi dejaba al chofer sin poder reportar
+ * NADA el resto del día — "Entregué todo" y "Confirmar" salían deshabilitados
+ * en todas las paradas siguientes, y la única salida era recargar el navegador,
+ * que un chofer no tiene por qué saber hacer.
+ *
+ * Se combina a mano con la señal que ya venía (la del `AbortController` del
+ * componente, que cancela al desmontar) porque `AbortSignal.any` todavía no
+ * está en todos los celulares que trae la flota.
+ */
+function conLimite(signal, ms = LIMITE_CHOFER_MS) {
+  const propio = new AbortController();
+  const reloj = setTimeout(
+    () => propio.abort(new DOMException('Se acabó el tiempo de espera', 'TimeoutError')),
+    ms,
+  );
+  let contagiar = null;
+  if (signal) {
+    if (signal.aborted) propio.abort(signal.reason);
+    else {
+      contagiar = () => propio.abort(signal.reason);
+      signal.addEventListener('abort', contagiar, { once: true });
+    }
+  }
+  // `listo()` también suelta el listener: la señal del componente vive todo el
+  // turno y estas llamadas van en intervalos, así que sin quitarlo se le
+  // acumularían cientos de suscriptores a lo largo del día.
+  return {
+    señal: propio.signal,
+    listo: () => {
+      clearTimeout(reloj);
+      if (contagiar) signal.removeEventListener('abort', contagiar);
+    },
+  };
+}
+
+/**
  * Las reglas y el vocabulario del backend: estados, transiciones, motivos,
  * escalones de turno, tiempo de descarga, CEDIS.
  *
@@ -100,10 +150,17 @@ export async function getRutas(fecha, { signal } = {}) {
  * sesión del chofer.
  */
 export async function getRutaChofer(fecha, camion, { signal } = {}) {
-  const res = await fetch(`/api/chofer/ruta?fecha=${fecha}&camion=${encodeURIComponent(camion)}`, { signal });
-  if (res.status === 404) return null;   // ese camión no tiene ruta hoy
-  if (!res.ok) throw new Error(`Ruta chofer failed: ${res.status}`);
-  return res.json();
+  // Con límite: esta va en un intervalo de 60 s y una colgada dejaba
+  // `cargando` prendido y la pantalla en "Cargando tus entregas…" para siempre.
+  const { señal, listo } = conLimite(signal);
+  try {
+    const res = await fetch(`/api/chofer/ruta?fecha=${fecha}&camion=${encodeURIComponent(camion)}`, { signal: señal });
+    if (res.status === 404) return null;   // ese camión no tiene ruta hoy
+    if (!res.ok) throw new Error(`Ruta chofer failed: ${res.status}`);
+    return res.json();
+  } finally {
+    listo();
+  }
 }
 
 /**
@@ -117,14 +174,19 @@ export async function getRutaChofer(fecha, camion, { signal } = {}) {
  * pueda quedar un pedido "completo" con renglones a medias.
  */
 export async function confirmarEntrega(remisionId, { lineas = [], motivo, observaciones, recibio } = {}, { signal } = {}) {
-  const res = await fetch(`/api/chofer/paradas/${remisionId}/entregar`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ lineas, motivo, observaciones, recibio }),
-    signal,
-  });
-  if (!res.ok) throw new Error(`Confirmar entrega failed: ${res.status}`);
-  return res.json();
+  const { señal, listo } = conLimite(signal);
+  try {
+    const res = await fetch(`/api/chofer/paradas/${remisionId}/entregar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lineas, motivo, observaciones, recibio }),
+      signal: señal,
+    });
+    if (!res.ok) throw new Error(`Confirmar entrega failed: ${res.status}`);
+    return res.json();
+  } finally {
+    listo();
+  }
 }
 
 /**
@@ -137,11 +199,16 @@ export async function confirmarEntrega(remisionId, { lineas = [], motivo, observ
 export async function subirFotoEntrega(remisionId, archivo, { signal } = {}) {
   const datos = new FormData();
   datos.append('foto', archivo);
-  const res = await fetch(`/api/chofer/paradas/${remisionId}/foto`, {
-    method: 'POST', body: datos, signal,
-  });
-  if (!res.ok) throw new Error(`Subir foto failed: ${res.status}`);
-  return res.json();
+  const { señal, listo } = conLimite(signal);
+  try {
+    const res = await fetch(`/api/chofer/paradas/${remisionId}/foto`, {
+      method: 'POST', body: datos, signal: señal,
+    });
+    if (!res.ok) throw new Error(`Subir foto failed: ${res.status}`);
+    return res.json();
+  } finally {
+    listo();
+  }
 }
 
 /**
@@ -156,11 +223,16 @@ export async function subirFirmaEntrega(remisionId, imagen, { signal } = {}) {
   // El nombre del archivo importa: Django decide la extensión con él, y sin
   // ella la firma se guarda sin `.png` y el navegador no sabe cómo mostrarla.
   datos.append('firma', imagen, `firma-${remisionId}.png`);
-  const res = await fetch(`/api/chofer/paradas/${remisionId}/firma`, {
-    method: 'POST', body: datos, signal,
-  });
-  if (!res.ok) throw new Error(`Subir firma failed: ${res.status}`);
-  return res.json();
+  const { señal, listo } = conLimite(signal);
+  try {
+    const res = await fetch(`/api/chofer/paradas/${remisionId}/firma`, {
+      method: 'POST', body: datos, signal: señal,
+    });
+    if (!res.ok) throw new Error(`Subir firma failed: ${res.status}`);
+    return res.json();
+  } finally {
+    listo();
+  }
 }
 
 /**
