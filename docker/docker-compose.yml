@@ -50,7 +50,24 @@ services:
     # Tag FIJO, no `latest`. Con `latest`, un `docker compose pull` cualquier
     # día cambia el motor de ruteo por debajo y las rutas dejan de coincidir con
     # las de ayer sin que nadie haya tocado nada.
-    image: osrm/osrm-backend:v5.27.1
+    #
+    # TIENE QUE SER LA MISMA que usan docker/osrm/prepare.sh y prepare.ps1: OSRM
+    # cambia el formato de sus archivos entre versiones, así que un mapa
+    # procesado con una versión y servido con otra no arranca.
+    #
+    # Y TIENE QUE EXISTIR EN DOCKER HUB. Aquí decía `v5.27.1`, que es una
+    # release de GitHub pero NO un tag publicado en Docker Hub (ahí el más nuevo
+    # es v5.25.0). En esta máquina no se notó porque el contenedor ya venía
+    # corriendo con la imagen vieja, pero en una máquina limpia —la Mac del
+    # cliente— `docker compose up` truena con "manifest unknown" y se queda sin
+    # servidor de rutas el primer día.
+    #
+    # Se fija por DIGEST y no por tag: un tag lo pueden re-publicar apuntando a
+    # otra imagen, un digest no cambia nunca. Este es OSRM 5.26.0, que es la
+    # versión con la que está procesado el mapa de docker/osrm/data. Comprobado
+    # que bajar a v5.25.0 NO sirve: "File is incompatible with this version of
+    # OSRM: prepared with OSRM 5.26.0 but this is v5.25.0".
+    image: osrm/osrm-backend@sha256:af5d4a83fb90086a43b1ae2ca22872e6768766ad5fcbb07a29ff90ec644ee409
     container_name: logistica-osrm
     command: osrm-routed --algorithm mld --max-table-size 10000 /data/mexico-latest.osrm
     volumes:
@@ -58,11 +75,23 @@ services:
     ports:
       - "5001:5000"
     restart: unless-stopped
-    # Sin healthcheck, Docker solo reinicia si el PROCESO se muere. Un OSRM que
-    # se cuelga sigue "arriba" y el optimizador se cae a línea recta sin que
-    # nadie sepa por qué. Con esto, un OSRM colgado se reinicia solo.
+    # Comprueba que osrm-routed siga ESCUCHANDO en su puerto.
+    #
+    # OJO CON LO QUE NO HACE: no distingue un OSRM colgado de uno sano, porque
+    # para eso habría que pedirle una ruta de verdad y ESTA IMAGEN NO TRAE NINGÚN
+    # CLIENTE HTTP — no hay curl, wget, nc ni python adentro (comprobado). Meter
+    # uno significaría construir una imagen propia, y eso es más maquinaria de la
+    # que conviene el día del arranque.
+    #
+    # Antes aquí había un `wget ...` que NUNCA funcionó, por dos razones a la vez:
+    # wget no existe en la imagen, y el `;` de la URL de OSRM lo parte `sh` como
+    # separador de comandos. O sea que el contenedor salía "unhealthy" siempre,
+    # que es peor que no tener healthcheck: quien mira `docker ps` o se asusta de
+    # balde, o aprende a ignorar la única señal que debería importarle.
+    #
+    # 1388 es 5000 en hexadecimal y 0A es el estado LISTEN de /proc/net/tcp.
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:5000/route/v1/driving/-100.48,25.69;-100.31,25.67 || exit 1"]
+      test: ["CMD-SHELL", "grep -q ':1388 .* 0A ' /proc/net/tcp || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
