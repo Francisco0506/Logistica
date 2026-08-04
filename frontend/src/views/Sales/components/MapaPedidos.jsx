@@ -2,7 +2,6 @@ import React, { useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { textoSobre } from '../../../lib/color';
 import { MapPin, Minimize2, ZoomIn, ZoomOut, Compass, Truck, X } from 'lucide-react';
 import { CEDIS } from '../../../config/fleet';
 
@@ -22,7 +21,7 @@ const GRIS = '#94a3b8';
 const iconoParada = (color, numero, entregado) =>
   L.divIcon({
     className: 'custom-div-icon',
-    html: `<div style="background:${color};width:22px;height:22px;border-radius:50%;border:2.5px solid #fff;display:flex;align-items:center;justify-content:center;color:${textoSobre(color)};font-size:10px;font-weight:800;box-shadow:0 2px 5px rgba(0,0,0,.3);opacity:${entregado ? 0.35 : 1}">${numero ?? ''}</div>`,
+    html: `<div style="background:${color};width:22px;height:22px;border-radius:50%;border:2.5px solid #fff;display:flex;align-items:center;justify-content:center;color:#ffffff;font-size:10px;font-weight:800;box-shadow:0 2px 5px rgba(0,0,0,.3);opacity:${entregado ? 0.35 : 1}">${numero ?? ''}</div>`,
     iconSize: [22, 22],
     iconAnchor: [11, 11],
   });

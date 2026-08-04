@@ -138,6 +138,29 @@ def jornada_de(ahora, contar_entregas, reparto: date = None) -> dict:
         # en dos lados es justo lo que este módulo vino a evitar. Sumando a
         # mano, el sábado por la tarde el panel abría preparando un DOMINGO.
         salida = fecha_reparto_de(hoy)
+
+        # EN DOMINGO NO SE CAPTURA NADA, así que no hay un "se está capturando
+        # hoy" que contar. Lo que sale el lunes es lo del SÁBADO.
+        #
+        # Sin esta rama, el domingo por la tarde el panel abría diciendo
+        # "Preparando 03-ago: son las entregas que se están capturando hoy" con
+        # el contador en 0 — y el despachador se encontraba un lunes vacío sin
+        # forma de saber que sus pedidos sí existen, solo que bajo otra fecha.
+        # `fecha_carga_de` ya sabe saltarse el domingo hacia atrás; aquí solo
+        # había que preguntarle en vez de dar por hecho que la carga es "hoy".
+        if es_domingo(hoy):
+            carga = fecha_carga_de(salida)
+            return {
+                "fecha_carga": carga.isoformat(),
+                "fecha_reparto": salida.isoformat(),
+                "entregas": contar_entregas(carga),
+                "para": _para(salida, hoy),
+                "explicacion": (
+                    f"Preparando {salida:%d-%b} con lo capturado el {carga:%d-%b}: "
+                    f"en domingo no se captura ni se reparte."
+                ),
+            }
+
         return {
             "fecha_carga": hoy.isoformat(),
             "fecha_reparto": salida.isoformat(),

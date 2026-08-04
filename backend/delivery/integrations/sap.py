@@ -161,6 +161,23 @@ def sync_from_sap(fecha: date):
                     SELECT SUM(
                         ISNULL(L.InvQty, L.Quantity)
                         * CASE
+                            -- IWeight1 es el peso por UNIDAD DE INVENTARIO (la
+                            -- pieza), capturado directo — sin derivarlo de la
+                            -- unidad de venta ni depender de NumInSale. Cuando
+                            -- está capturado es la fuente más confiable, así
+                            -- que gana sobre SWeight1. Medido con el queso
+                            -- mozzarella (2113081): SWeight1/NumInSale con su
+                            -- conversión de libras da 2.358 kg; IWeight1 (ya en
+                            -- kilos) da 2.27 kg, que es el que trae el propio
+                            -- nombre del artículo ("1 / 2.27 KG").
+                            WHEN ISNULL(I.IWeight1, 0) > 0 THEN
+                                 I.IWeight1
+                                 * CASE ISNULL(I.IWght1Unit, 3)
+                                       WHEN 1 THEN 0.000001    -- miligramo
+                                       WHEN 2 THEN 0.001       -- gramo
+                                       WHEN 4 THEN 0.0283495   -- onza
+                                       WHEN 5 THEN 0.453592    -- libra
+                                       ELSE 1 END              -- kilogramo
                             WHEN ISNULL(I.SWeight1, 0) > 0 THEN
                                  (I.SWeight1 / NULLIF(ISNULL(I.NumInSale, 1), 0))
                                  * CASE ISNULL(I.SWght1Unit, 3)
@@ -218,9 +235,19 @@ def sync_from_sap(fecha: date):
                 SELECT L.DocEntry, L.LineNum, L.ItemCode, L.Dscription,
                        L.Quantity, L.unitMsr,
                        -- peso de UNA unidad de este renglón, no de la caja:
-                       -- misma cuenta que el total de arriba, con su conversión
+                       -- misma cuenta que el total de arriba (IWeight1 primero,
+                       -- por ser el peso de la unidad de inventario capturado
+                       -- directo, sin depender de NumInSale), con su conversión
                        -- a kilos y su respaldo por datos de compras.
                        ISNULL(L.NumPerMsr, 1) * CASE
+                           WHEN ISNULL(I.IWeight1, 0) > 0 THEN
+                                I.IWeight1
+                                * CASE ISNULL(I.IWght1Unit, 3)
+                                      WHEN 1 THEN 0.000001
+                                      WHEN 2 THEN 0.001
+                                      WHEN 4 THEN 0.0283495
+                                      WHEN 5 THEN 0.453592
+                                      ELSE 1 END
                            WHEN ISNULL(I.SWeight1, 0) > 0 THEN
                                 (I.SWeight1 / NULLIF(ISNULL(I.NumInSale, 1), 0))
                                 * CASE ISNULL(I.SWght1Unit, 3)

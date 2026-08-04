@@ -2,7 +2,6 @@ import React, { useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { textoSobre } from '../../../lib/color';
 import { Compass, X, ZoomIn, ZoomOut, Maximize2, Minimize2 } from 'lucide-react';
 import { CEDIS } from '../../../config/fleet';
 import { ESTILO_ENTREGA, esVisitada, salioMal } from '../../../config/estadosRuta';
@@ -36,7 +35,7 @@ const iconoGPS = (enMovimiento) =>
 const iconoParada = (color, numero, entregada) =>
   L.divIcon({
     className: 'custom-div-icon',
-    html: `<div style="background:${color};width:24px;height:24px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;color:${textoSobre(color)};font-size:11px;font-weight:900;box-shadow:0 2px 6px rgba(0,0,0,0.35);opacity:${entregada ? 0.35 : 1}">${numero}</div>`,
+    html: `<div style="background:${color};width:24px;height:24px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;color:#ffffff;font-size:11px;font-weight:900;box-shadow:0 2px 6px rgba(0,0,0,0.35);opacity:${entregada ? 0.35 : 1}">${numero}</div>`,
     iconSize: [24, 24],
     iconAnchor: [12, 12],
   });

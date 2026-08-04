@@ -59,23 +59,42 @@ export default function TarjetaCamion({
   const pctCarga = hayPesos ? Math.min(100, (pesoABordo / camion.capacidadKg) * 100) : 0;
   const sobrecargado = hayPesos && pesoSalida > camion.capacidadKg;
 
-  // ── Cuánto dura la ruta ──
-  // De la primera ETA a la última. Son las horas que ya calculó el optimizador,
-  // así que no cuesta nada de más y dice de un vistazo si la ruta cabe en el
-  // turno o se está pasando.
+  // ── Cuánto dura la JORNADA del camión ──
+  // De la salida del CEDIS al regreso, que es lo que ocupa al chofer y lo que
+  // hay que comparar contra el turno.
+  //
+  // Antes se medía de la primera ETA a la última, y eso deja fuera el viaje de
+  // ida y el de vuelta. En una ruta a Saltillo son 74-94 min POR TRAMO: la
+  // tarjeta anunciaba "1 h" un día que el camión estaba fuera más de cuatro, y
+  // el aviso ámbar de "no cabe en el turno" no se prendía nunca porque comparaba
+  // ese número corto contra el turno completo.
+  const aMinutos = (h) => {
+    const [hh, mm] = h.split(':');
+    return Number(hh) * 60 + Number(mm);
+  };
+  const deMinutos = (m) => {
+    const t = ((m % 1440) + 1440) % 1440;
+    return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+  };
   const horas = paradas
     .map((o) => o.eta)
     .filter((e) => e && /^\d{1,2}:\d{2}$/.test(e))
     .sort();
-  const inicioRuta = horas[0];
-  const finRuta = horas.at(-1);
+  // Los tiempos del plan son la fuente buena. Las ETAs solo sirven de respaldo
+  // para rutas viejas, guardadas antes de que el backend mandara la jornada.
+  const inicioRuta = ruta?.salida_plan ?? horas[0];
+  const finRuta = ruta?.regreso_plan ?? horas.at(-1);
   const duracionMin = inicioRuta && finRuta
-    ? (Number(finRuta.slice(0, 2)) * 60 + Number(finRuta.slice(3))) -
-      (Number(inicioRuta.slice(0, 2)) * 60 + Number(inicioRuta.slice(3)))
+    ? aMinutos(finRuta) - aMinutos(inicioRuta)
     : null;
   const duracionTexto = duracionMin != null && duracionMin > 0
     ? `${Math.floor(duracionMin / 60)} h ${String(duracionMin % 60).padStart(2, '0')} min`
     : null;
+  // Ya despachado, la jornada se corre a la hora REAL en que salió: el plan
+  // suponía otra, y dejar la del plan mostraría un horario que ya no es.
+  const desdeReal = ruta?.hora_salida && duracionMin != null;
+  const inicioMostrado = desdeReal ? ruta.hora_salida : inicioRuta;
+  const finMostrado = desdeReal ? deMinutos(aMinutos(ruta.hora_salida) + duracionMin) : finRuta;
 
   return (
     // Abierto = es el que se está viendo en el mapa. El anillo lo conecta con
@@ -231,7 +250,7 @@ export default function TarjetaCamion({
                   {duracionTexto}
                 </span>
                 <span className="block text-[10px] text-gray-400 tabular-nums mt-0.5">
-                  {!ruta?.hora_salida && '~'}{inicioRuta}–{finRuta}
+                  {!ruta?.hora_salida && '~'}{inicioMostrado}–{finMostrado}
                 </span>
               </span>
             )}

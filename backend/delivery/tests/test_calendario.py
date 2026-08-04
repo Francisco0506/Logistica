@@ -85,6 +85,22 @@ class ElPanelNuncaPrometeUnRepartoEnDomingo(SimpleTestCase):
         self.assertEqual(datos['fecha_reparto'], '2026-08-03')   # lunes
         self.assertNotEqual(datos['para'], 'hoy')
 
+    def test_el_domingo_por_la_TARDE_carga_lo_del_sabado(self):
+        """
+        El otro lado del mismo hueco: la prueba de arriba cubre el domingo por
+        la MAÑANA, y pasada la hora de corte se entraba por otra rama.
+
+        Ahí el panel daba por hecho que "la carga es hoy" y abría diciendo
+        "Preparando 03-ago: son las entregas que se están capturando hoy" con el
+        contador en 0 — en domingo no se captura nada. El despachador se
+        encontraba un lunes vacío sin manera de saber que sus pedidos sí
+        existen, nada más que guardados bajo la fecha del sábado.
+        """
+        datos = jornada_de(a_las(DOMINGO, 15), CON_ENTREGAS)
+        self.assertEqual(datos['fecha_reparto'], '2026-08-03')   # lunes
+        self.assertEqual(datos['fecha_carga'], '2026-08-01')     # sábado, no el domingo
+        self.assertNotIn('capturando hoy', datos['explicacion'])
+
     def test_ningun_dia_ni_hora_produce_un_reparto_en_domingo(self):
         """El barrido completo: 14 días × las 24 horas."""
         for dias in range(14):

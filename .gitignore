@@ -34,3 +34,10 @@ media/
 # ya no existe: el Excel semilla se eliminó y SAP es la única fuente. Se deja a
 # nivel de patrón para que ningún reporte nuevo se suba por descuido.
 *.xlsx
+
+# Reportes de operación. Traen nombres de clientes, sucursales y montos
+# facturados: exactamente el tipo de dato que ya está en el historial de git por
+# el Excel de direcciones, y que si el repo se hiciera público habría que
+# limpiar con `git filter-repo`. Mejor que no entren desde el principio.
+reporte-*.html
+reporte-*.pdf
