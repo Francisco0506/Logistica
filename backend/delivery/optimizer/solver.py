@@ -7,7 +7,7 @@ borrador.
 import os
 from datetime import datetime, timedelta
 
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
@@ -20,6 +20,7 @@ from .reglas import (
     HORA_CERO,
     MINUTOS_TURNO_MAXIMO,
     TIEMPO_DESCARGA_MINUTOS,
+    es_zona_saltillo,
 )
 
 # Segundos que el solver se toma para exprimir una corrida normal.
@@ -125,126 +126,210 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
             "pedidos_dia_cerrado": [r.doc_num for r in cerrados],
         }
 
-    manager = pywrapcp.RoutingIndexManager(len(data['time_matrix']), data['num_vehicles'], data['depot'])
-    routing = pywrapcp.RoutingModel(manager)
+    # Zona Saltillo (+ Ramos Arizpe + Arteaga): a ~85 km del CEDIS, lejos de
+    # todo lo demás. Por default el solver reparte sus paradas entre varios
+    # camiones si eso le ahorra unos minutos en la ruta de cada uno, aunque
+    # quepan perfecto en uno solo — cada camión de más que sale para allá es un
+    # viaje de ~3 h de ida y vuelta que no hacía falta.
+    nodos_zona_saltillo = [
+        node for node in range(1, len(data['remisiones_validas']) + 1)
+        if es_zona_saltillo(data['remisiones_validas'][node - 1][0].destino.city)
+    ]
 
-    def time_callback(from_index, to_index):
-        from_node = manager.IndexToNode(from_index)
-        to_node = manager.IndexToNode(to_index)
-        return data['time_matrix'][from_node][to_node]
-
-    transit_callback_index = routing.RegisterTransitCallback(time_callback)
-    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
-
-    # Tope global de la dimensión: el camión que sale más tarde también necesita
-    # su turno completo de MINUTOS_TURNO_MAXIMO a partir de su propia salida.
-    ultimo_inicio = max(data['vehicle_starts']) if data['vehicle_starts'] else 0
-    tope_global_dimension = ultimo_inicio + minutos_turno
-
-    time_dimension_name = 'Time'
-    routing.AddDimension(
-        transit_callback_index,
-        30,  # espera máxima si llega temprano
-        tope_global_dimension,
-        False,
-        time_dimension_name)
-
-    time_dimension = routing.GetDimensionOrDie(time_dimension_name)
-
-    # Coeficiente de span global: penaliza que una ruta termine mucho más tarde
-    # que las demás. Sin esto el solver solo minimiza el tiempo TOTAL sumado, y
-    # tiende a cargar unos camiones de más y dejar otros cortos, con rutas
-    # dispersas. Con un valor bajo (10) equilibra la jornada entre camiones y
-    # las rutas quedan más compactas/parejas, sin sacrificar cobertura — medido
-    # en banco de pruebas: +1 pedido cubierto y ~13 min menos de desbalance
-    # entre el camión más cargado y el más ligero, con los mismos kilómetros.
-    time_dimension.SetGlobalSpanCostCoefficient(10)
-
-    # La ventana de recibo se mide contra la hora en que el camión LLEGA, pero
-    # el acumulado de la dimensión Time trae ya sumada la descarga de esta misma
-    # parada (el callback de tránsito la lleva dentro, ver build_data_model):
-    # o sea, CumulVar(nodo) es la hora de SALIDA de esa parada.
+    # A QUÉ camión se le da la zona. Se escoge UNO solo y se le restringen esas
+    # paradas: es más firme que pedirle al solver "que vayan todas juntas" —esa
+    # forma la esquivaba tirando la zona ENTERA, que es lo peor de los dos
+    # mundos— y además deja claro en el plan cuál es el camión de Saltillo.
     #
-    # Sin corregirlo, la ventana quedaba corrida 12 minutos hacia atrás: a un
-    # cliente que recibe hasta las 13:00 se le rechazaba una llegada a las 12:55
-    # (salida 13:07), y a uno que abre a las 15:00 se le aceptaba una llegada a
-    # las 14:48. El propio código ya reconocía este desfase al restar la
-    # descarga para calcular la ETA (más abajo), pero no aquí — así que el plan
-    # tiraba pedidos que sí cabían y prometía otros a puerta cerrada.
+    # Se prefiere el de mayor capacidad entre los que aguantan el peso y el
+    # número de paradas de la zona, para que le quede margen de llevar también
+    # lo que le quede de paso.
+    vehiculo_saltillo = None
+    if len(nodos_zona_saltillo) > 1:
+        demanda_zona = sum(data['demands'][n] for n in nodos_zona_saltillo)
+        paradas_zona = len(nodos_zona_saltillo)
+        candidatos = [
+            v for v in range(data['num_vehicles'])
+            if vehicle_capacities[v] >= demanda_zona and max_paradas[v] >= paradas_zona
+        ]
+        if candidatos:
+            vehiculo_saltillo = max(candidatos, key=lambda v: vehicle_capacities[v])
+
+    def _construir_y_resolver(forzar_zona_saltillo):
+        """Arma el modelo de OR-Tools completo y lo resuelve. Se puede llamar
+        dos veces: una intentando forzar la zona Saltillo a un solo camión, y
+        —solo si esa primera pasada terminó tirando la zona entera en vez de
+        acomodarla— otra vez sin la restricción, para que al menos se reparta
+        entre varios en vez de perderse."""
+        manager = pywrapcp.RoutingIndexManager(len(data['time_matrix']), data['num_vehicles'], data['depot'])
+        routing = pywrapcp.RoutingModel(manager)
+
+        def time_callback(from_index, to_index):
+            from_node = manager.IndexToNode(from_index)
+            to_node = manager.IndexToNode(to_index)
+            return data['time_matrix'][from_node][to_node]
+
+        transit_callback_index = routing.RegisterTransitCallback(time_callback)
+        routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+
+        # Tope global de la dimensión: el camión que sale más tarde también necesita
+        # su turno completo de MINUTOS_TURNO_MAXIMO a partir de su propia salida.
+        ultimo_inicio = max(data['vehicle_starts']) if data['vehicle_starts'] else 0
+        tope_global_dimension = ultimo_inicio + minutos_turno
+
+        time_dimension_name = 'Time'
+        routing.AddDimension(
+            transit_callback_index,
+            30,  # espera máxima si llega temprano
+            tope_global_dimension,
+            False,
+            time_dimension_name)
+
+        time_dimension = routing.GetDimensionOrDie(time_dimension_name)
+
+        # Coeficiente de span global: penaliza que una ruta termine mucho más tarde
+        # que las demás. Sin esto el solver solo minimiza el tiempo TOTAL sumado, y
+        # tiende a cargar unos camiones de más y dejar otros cortos, con rutas
+        # dispersas. Con un valor bajo (10) equilibra la jornada entre camiones y
+        # las rutas quedan más compactas/parejas, sin sacrificar cobertura — medido
+        # en banco de pruebas: +1 pedido cubierto y ~13 min menos de desbalance
+        # entre el camión más cargado y el más ligero, con los mismos kilómetros.
+        time_dimension.SetGlobalSpanCostCoefficient(10)
+
+        # La ventana de recibo se mide contra la hora en que el camión LLEGA, pero
+        # el acumulado de la dimensión Time trae ya sumada la descarga de esta misma
+        # parada (el callback de tránsito la lleva dentro, ver build_data_model):
+        # o sea, CumulVar(nodo) es la hora de SALIDA de esa parada.
+        #
+        # Sin corregirlo, la ventana quedaba corrida 12 minutos hacia atrás: a un
+        # cliente que recibe hasta las 13:00 se le rechazaba una llegada a las 12:55
+        # (salida 13:07), y a uno que abre a las 15:00 se le aceptaba una llegada a
+        # las 14:48. El propio código ya reconocía este desfase al restar la
+        # descarga para calcular la ETA (más abajo), pero no aquí — así que el plan
+        # tiraba pedidos que sí cabían y prometía otros a puerta cerrada.
+        #
+        # Se desplaza la ventana en vez de quitar la descarga del callback porque
+        # ahí sí tiene que estar: es tiempo que consume el turno del chofer.
+        for location_idx, time_window in enumerate(data['time_windows']):
+            if location_idx == data['depot']:
+                continue
+            index = manager.NodeToIndex(location_idx)
+            # El tope sigue siendo el turno: salir de una parada después de que se
+            # acabó la jornada no es una opción, aunque el cliente siga abierto.
+            ini = min(time_window[0] + TIEMPO_DESCARGA_MINUTOS, minutos_turno)
+            fin = min(time_window[1] + TIEMPO_DESCARGA_MINUTOS, minutos_turno)
+            time_dimension.CumulVar(index).SetRange(ini, max(ini, fin))
+
+        for vehicle_id in range(data['num_vehicles']):
+            start_index = routing.Start(vehicle_id)
+            end_index = routing.End(vehicle_id)
+            start_min = data['vehicle_starts'][vehicle_id]
+            time_dimension.CumulVar(start_index).SetRange(start_min, start_min)
+            # Cada camión debe regresar antes de que se le acabe SU turno,
+            # sin importar a qué hora haya salido.
+            time_dimension.CumulVar(end_index).SetMax(start_min + minutos_turno)
+
+        def demand_callback(from_index):
+            from_node = manager.IndexToNode(from_index)
+            return data['demands'][from_node]
+
+        demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
+        routing.AddDimensionWithVehicleCapacity(
+            demand_callback_index,
+            0,
+            data['vehicle_capacities'],
+            True,
+            "Capacity"
+        )
+
+        # Tope de paradas por camión. Mientras SAP no mande el peso real de cada
+        # pedido, la restricción de kilos corre con un peso estimado y no es
+        # confiable; el número de paradas que cada camión hace en un día sí está
+        # medido con GPS, así que sirve de tope práctico para que el plan no le
+        # cargue a un camión más entregas de las que ha hecho jamás.
+        def paradas_callback(from_index):
+            return 0 if manager.IndexToNode(from_index) == data['depot'] else 1
+
+        paradas_callback_index = routing.RegisterUnaryTransitCallback(paradas_callback)
+        routing.AddDimensionWithVehicleCapacity(
+            paradas_callback_index,
+            0,
+            max_paradas,
+            True,
+            "Paradas"
+        )
+
+        # Permitir que un nodo quede sin visitar (con penalización alta) en vez de que
+        # el solver falle por completo si la capacidad/tiempo no alcanza para todos:
+        # así garantizamos que SIEMPRE haya una solución, y los que queden fuera se
+        # reportan explícitamente para resolverlos (más camiones, otra fecha, etc.)
+        PENALIZACION_NODO_SIN_VISITAR = 10_000_000
+        for node in range(1, len(data['time_matrix'])):
+            index = manager.NodeToIndex(node)
+            routing.AddDisjunction([index], PENALIZACION_NODO_SIN_VISITAR)
+
+        if forzar_zona_saltillo and vehiculo_saltillo is not None:
+            # -1 es "sin visitar": se deja como opción a propósito. Sin él, el
+            # nodo dejaría de ser descartable y un día en que la zona no cupiera
+            # volvería INFACTIBLE el plan entero, no solo la zona.
+            for node in nodos_zona_saltillo:
+                routing.VehicleVar(manager.NodeToIndex(node)).SetValues([-1, vehiculo_saltillo])
+
+        search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+        search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+        # 20s (antes 5s): con 5s el guided local search a veces se quedaba corto
+        # para exprimir mejoras de 2-opt en rutas largas (~1-3% de tiempo de
+        # manejo) en días con muchos pedidos. Optimizar Rutas tarda más en
+        # responder a cambio de rutas más ajustadas.
+        # Al simular escenarios se corren varios seguidos, así que ahí se usa un
+        # límite más corto: interesa comparar cuántos pedidos caben en cada opción,
+        # no exprimir el último minuto de manejo de cada una.
+        search_parameters.time_limit.FromSeconds(segundos_solver or SEGUNDOS_SOLVER)
+
+        solution = routing.SolveWithParameters(search_parameters)
+        return manager, routing, time_dimension, solution
+
+    # Primer intento: si la zona cabe por capacidad/paradas en al menos un
+    # camión, se fuerza a que vaya en uno solo. Si el solver de todos modos
+    # termina dejando pedidos de la zona sin camión (el intento "todos juntos"
+    # no encajó en el turno/ventanas de ningún camión disponible), se vuelve a
+    # resolver SIN la restricción: mejor repartida entre varios que perdida.
     #
-    # Se desplaza la ventana en vez de quitar la descarga del callback porque
-    # ahí sí tiene que estar: es tiempo que consume el turno del chofer.
-    for location_idx, time_window in enumerate(data['time_windows']):
-        if location_idx == data['depot']:
-            continue
-        index = manager.NodeToIndex(location_idx)
-        # El tope sigue siendo el turno: salir de una parada después de que se
-        # acabó la jornada no es una opción, aunque el cliente siga abierto.
-        ini = min(time_window[0] + TIEMPO_DESCARGA_MINUTOS, minutos_turno)
-        fin = min(time_window[1] + TIEMPO_DESCARGA_MINUTOS, minutos_turno)
-        time_dimension.CumulVar(index).SetRange(ini, max(ini, fin))
-
-    for vehicle_id in range(data['num_vehicles']):
-        start_index = routing.Start(vehicle_id)
-        end_index = routing.End(vehicle_id)
-        start_min = data['vehicle_starts'][vehicle_id]
-        time_dimension.CumulVar(start_index).SetRange(start_min, start_min)
-        # Cada camión debe regresar antes de que se le acabe SU turno,
-        # sin importar a qué hora haya salido.
-        time_dimension.CumulVar(end_index).SetMax(start_min + minutos_turno)
-
-    def demand_callback(from_index):
-        from_node = manager.IndexToNode(from_index)
-        return data['demands'][from_node]
-
-    demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
-    routing.AddDimensionWithVehicleCapacity(
-        demand_callback_index,
-        0,
-        data['vehicle_capacities'],
-        True,
-        "Capacity"
-    )
-
-    # Tope de paradas por camión. Mientras SAP no mande el peso real de cada
-    # pedido, la restricción de kilos corre con un peso estimado y no es
-    # confiable; el número de paradas que cada camión hace en un día sí está
-    # medido con GPS, así que sirve de tope práctico para que el plan no le
-    # cargue a un camión más entregas de las que ha hecho jamás.
-    def paradas_callback(from_index):
-        return 0 if manager.IndexToNode(from_index) == data['depot'] else 1
-
-    paradas_callback_index = routing.RegisterUnaryTransitCallback(paradas_callback)
-    routing.AddDimensionWithVehicleCapacity(
-        paradas_callback_index,
-        0,
-        max_paradas,
-        True,
-        "Paradas"
-    )
-
-    # Permitir que un nodo quede sin visitar (con penalización alta) en vez de que
-    # el solver falle por completo si la capacidad/tiempo no alcanza para todos:
-    # así garantizamos que SIEMPRE haya una solución, y los que queden fuera se
-    # reportan explícitamente para resolverlos (más camiones, otra fecha, etc.)
-    PENALIZACION_NODO_SIN_VISITAR = 10_000_000
-    for node in range(1, len(data['time_matrix'])):
-        index = manager.NodeToIndex(node)
-        routing.AddDisjunction([index], PENALIZACION_NODO_SIN_VISITAR)
-
-    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    # 20s (antes 5s): con 5s el guided local search a veces se quedaba corto
-    # para exprimir mejoras de 2-opt en rutas largas (~1-3% de tiempo de
-    # manejo) en días con muchos pedidos. Optimizar Rutas tarda más en
-    # responder a cambio de rutas más ajustadas.
-    # Al simular escenarios se corren varios seguidos, así que ahí se usa un
-    # límite más corto: interesa comparar cuántos pedidos caben en cada opción,
-    # no exprimir el último minuto de manejo de cada una.
-    search_parameters.time_limit.FromSeconds(segundos_solver or SEGUNDOS_SOLVER)
-
-    solution = routing.SolveWithParameters(search_parameters)
+    # POR QUÉ la zona terminó pudiendo o no ir en un solo camión. Son dos
+    # historias distintas y antes las dos salían con el MISMO texto ("no caben
+    # en un solo camión"), que además solo una de las dos veces era cierto:
+    #
+    #   'no_cupo_en_uno'  — sí hay un camión con capacidad y paradas de sobra,
+    #                       pero metiéndole la zona completa no le alcanza el
+    #                       turno o no le cuadran las ventanas de recibo. Se
+    #                       arregla ampliando el turno o adelantando la salida.
+    #   'sin_camion_grande' — ningún camión ACTIVO aguanta el peso o el número
+    #                       de paradas de la zona. Se arregla prendiendo otro
+    #                       camión, y ampliar el turno no sirve de nada.
+    #
+    # Decirle "no caben en un solo camión" al despachador cuando el problema es
+    # que traía prendidas dos camionetas de 1 t lo manda a mover la palanca
+    # equivocada.
+    causa_zona_saltillo = None
+    if vehiculo_saltillo is not None:
+        manager, routing, time_dimension, solution = _construir_y_resolver(forzar_zona_saltillo=True)
+        # Solo se acepta si el candado NO costó pedidos: si el camión único no
+        # alcanza a hacer todas las paradas de la zona dentro de su turno y sus
+        # ventanas, el solver las deja fuera. Perder entregas es peor que mandar
+        # un segundo camión, así que en ese caso se repite sin el candado y se
+        # avisa en el mensaje del panel.
+        zona_completa = solution is not None and all(
+            solution.Value(routing.ActiveVar(manager.NodeToIndex(n))) == 1
+            for n in nodos_zona_saltillo
+        )
+        if not zona_completa:
+            manager, routing, time_dimension, solution = _construir_y_resolver(forzar_zona_saltillo=False)
+            causa_zona_saltillo = 'no_cupo_en_uno'
+    else:
+        manager, routing, time_dimension, solution = _construir_y_resolver(forzar_zona_saltillo=False)
+        if len(nodos_zona_saltillo) > 1:
+            causa_zona_saltillo = 'sin_camion_grande'
 
     if not solution:
         return {"status": "error", "message": "El algoritmo no encontró ninguna solución. Revisa capacidades y ventanas de horario."}
@@ -253,10 +338,54 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
     # 4. EXTRACCIÓN Y GUARDADO EN DB
     # ==========================================
     with transaction.atomic():
+        # ── Revalidación: ¿siguen libres los camiones con los que se planeó? ──
+        #
+        # `camiones_congelados` se leyó ANTES de salir a OSRM y de los 20 s del
+        # solver. Entre esa lectura y esta línea pasa casi medio minuto, y el
+        # almacén no se detiene mientras tanto.
+        #
+        # Lo que pasó el 4-ago-2026: 09:05 el despachador aprieta "Optimizar
+        # rutas"; 09:05:08 el almacén pone el PP4873A en 'Cargando'. El camión
+        # entró a la corrida como disponible, así que abajo se le crea una ruta
+        # NUEVA; y su ruta vieja ya no es 'Borrador', así que el delete de aquí
+        # no se la lleva. El camión terminó con dos rutas del mismo día, y los
+        # pedidos que los de almacén ya estaban subiendo se los quedó otro
+        # camión — sin que nada avisara.
+        #
+        # Volver a preguntar aquí adentro, con la transacción ya abierta, es lo
+        # que cierra la ventana: si algo cambió, esta corrida no vale y se
+        # aborta ENTERA (todavía no se ha borrado ni escrito nada), en vez de
+        # guardar un plan que contradice lo que hay en el patio. El despachador
+        # vuelve a apretar el botón y la siguiente corrida ya sale con el camión
+        # descontado.
+        rutas_congeladas = Ruta.objects.filter(
+            fecha=fecha, estado__in=ESTADOS_RUTA_CONGELADOS
+        )
+        if connection.features.has_select_for_update:
+            # El candado deja esperando a cualquier otra transacción que quiera
+            # despachar uno de estos camiones mientras se escriben las rutas.
+            # Va detrás del `if` porque SQLite —la base de las pruebas— no lo
+            # soporta y Django revienta con NotSupportedError en vez de
+            # ignorarlo; ahí no hace falta, no hay concurrencia que proteger.
+            rutas_congeladas = rutas_congeladas.select_for_update()
+        congelados_ahora = set(rutas_congeladas.values_list('camion', flat=True))
+
+        despachados_a_media_corrida = sorted(
+            set(placas_disponibles) & congelados_ahora
+        )
+        if despachados_a_media_corrida:
+            return {
+                "status": "error",
+                "message": (
+                    "El plan se descartó sin guardar nada: mientras se calculaba, "
+                    f"el almacén empezó a despachar {', '.join(despachados_a_media_corrida)}. "
+                    "Vuelve a optimizar para que las rutas salgan con ese camión ya descontado."
+                ),
+                "camiones_despachados_durante_la_corrida": despachados_a_media_corrida,
+            }
+
         # Solo se destruyen rutas 'Borrador' del día (aún no despachadas). Las
         # congeladas (Cargando/Listo/En_Ruta/Finalizada) quedan intactas.
-        # (camiones_congelados ya se calculó arriba, antes de armar el modelo,
-        # para descontarlos del num_vehicles disponible.)
         Ruta.objects.filter(fecha=fecha, estado='Borrador').delete()
 
         # remisiones_validas[i] es una LISTA de documentos que comparten parada
@@ -264,6 +393,13 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
         remisiones_validas = data['remisiones_validas']
         nodos_visitados = set()
         rutas_generadas = []
+        # Con qué camiones acabó repartida la zona Saltillo DE VERDAD. El aviso
+        # de "se repartieron entre varios" se armaba con la intención (si se
+        # había podido forzar o no), no con el resultado: con un solo camión
+        # activo el plan avisaba que la zona se había repartido entre varios
+        # camiones que no existían. Aquí se cuenta lo que quedó escrito.
+        vehiculos_zona_saltillo = set()
+        nodos_zona = set(nodos_zona_saltillo)
         for vehicle_id in range(data['num_vehicles']):
             index = routing.Start(vehicle_id)
             route_sequence = []  # lista de paradas; cada parada es una lista de remisiones
@@ -275,6 +411,8 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
                 node_index = manager.IndexToNode(index)
                 if node_index != 0:
                     nodos_visitados.add(node_index)
+                    if node_index in nodos_zona:
+                        vehiculos_zona_saltillo.add(vehicle_id)
                     remisiones_parada = remisiones_validas[node_index - 1]
                     # La ETA que se le promete al cliente es la hora de LLEGADA.
                     # El acumulado de la dimensión Time trae ya la descarga de
@@ -296,6 +434,15 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
 
                 index = solution.Value(routing.NextVar(index))
 
+            # Aquí `index` ya es el nodo final: el regreso al CEDIS. Su acumulado
+            # es la hora a la que el camión cierra su jornada, y es el número que
+            # de verdad hay que comparar contra el turno. La columna del depósito
+            # NO lleva sumada descarga (ver build_data_model), así que esto es el
+            # regreso limpio.
+            minutos_regreso = solution.Min(time_dimension.CumulVar(index))
+            salida_plan = (hora_cero + timedelta(minutes=data['vehicle_starts'][vehicle_id])).strftime("%H:%M")
+            regreso_plan = (hora_cero + timedelta(minutes=minutos_regreso)).strftime("%H:%M")
+
             if route_sequence:
                 # La ruta se guarda con la PLACA del camión que la lleva. El
                 # vehículo `vehicle_id` del solver es exactamente el camión
@@ -308,7 +455,9 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
                     fecha=fecha,
                     camion=placas_disponibles[vehicle_id],
                     chofer='',
-                    estado='Borrador'
+                    estado='Borrador',
+                    salida_plan=salida_plan,
+                    regreso_plan=regreso_plan,
                 )
 
                 remisiones_to_update = []
@@ -424,6 +573,28 @@ def solve_vrp(fecha, placas, depot_coords, horas_turno=None, hora_salida=None,
                 f"no recibe en {nombre_dia(data['dia_reparto'])}: {pedidos_dia_cerrado}. "
                 f"Hay que moverlos a otro día o corregir el horario en SAP."
             )
+        # El aviso solo sale si la zona DE VERDAD quedó partida entre dos o más
+        # camiones. Que no se haya podido forzar no significa que se haya
+        # repartido: el solver puede acabar juntándola solo, o puede no haber
+        # más que un camión al que mandarla.
+        if causa_zona_saltillo and len(vehiculos_zona_saltillo) > 1:
+            placas_zona = ", ".join(
+                sorted(placas_disponibles[v] for v in vehiculos_zona_saltillo)
+            )
+            if causa_zona_saltillo == 'sin_camion_grande':
+                message += (
+                    f" Zona Saltillo/Ramos Arizpe/Arteaga: ningún camión activo aguanta solo "
+                    f"el peso y las {len(nodos_zona_saltillo)} paradas de la zona, así que se "
+                    f"repartió entre {len(vehiculos_zona_saltillo)} ({placas_zona}). "
+                    f"Prende un camión más grande si quieres que vaya en uno solo."
+                )
+            else:
+                message += (
+                    f" Zona Saltillo/Ramos Arizpe/Arteaga: las {len(nodos_zona_saltillo)} paradas "
+                    f"no cupieron en un solo camión dentro del turno y sus ventanas de recibo, "
+                    f"así que se repartió entre {len(vehiculos_zona_saltillo)} ({placas_zona}). "
+                    f"Con más horas de turno o saliendo más temprano puede caber en uno."
+                )
 
         return {
             "status": "success",

@@ -65,6 +65,12 @@ class RutaOut(Schema):
     estado: str
     pedidos_count: int
     hora_salida: Optional[str] = None
+    # La jornada planeada del camión: cuándo sale del CEDIS y cuándo vuelve.
+    # El panel medía la duración "de la primera a la última parada", que deja
+    # fuera el viaje de ida y el de vuelta — en una ruta a Saltillo eso son casi
+    # tres horas que no se contaban.
+    salida_plan: Optional[str] = None
+    regreso_plan: Optional[str] = None
     # Cuándo se generó esta ruta. Sirve para saber si el plan que se está
     # viendo ya se quedó viejo: si llegaron pedidos de SAP después de esta
     # hora, no están considerados y hay que volver a optimizar.
@@ -232,6 +238,8 @@ def get_rutas(request, fecha: date):
             # Hora real en que el despachador dio "Salida" (botón En_Ruta), no
             # una hora teórica: null hasta que el camión de verdad se despache.
             "hora_salida": r.hora_salida.strftime("%H:%M") if r.hora_salida else None,
+            "salida_plan": r.salida_plan,
+            "regreso_plan": r.regreso_plan,
             "generada": timezone.localtime(r.creado_en).strftime("%H:%M") if r.creado_en else None,
         })
     return result
@@ -340,11 +348,32 @@ def update_ruta_estado(request, ruta_id: int, payload: RutaEstadoIn):
         # de salida teórica. Al dar "Salida" se recalculan TODAS las ETAs de la
         # ruta desde la hora real de este momento, para que lo prometido a los
         # clientes/vendedoras corresponda a la realidad.
-        n = recalcular_etas_desde_salida(ruta, DEPOT_COORDS)
-        return {
-            "status": "success",
-            "message": f"Camión en ruta. ETAs recalculadas desde la hora real de salida ({n} pedidos).",
-        }
+        n, fuente, fuera_ventana = recalcular_etas_desde_salida(ruta, DEPOT_COORDS)
+        mensaje = f"Camión en ruta. ETAs recalculadas desde la hora real de salida ({n} pedidos)."
+        # Salir tarde empuja la ruta entera contra las horas de cierre, que no
+        # se mueven. Se avisa con nombre y apellido: sin esto, ventas le promete
+        # al cliente una hora a la que ya no va a haber quien reciba, y el
+        # despachador —que es el único que todavía puede reordenar o llamar—
+        # no se entera de nada.
+        if fuera_ventana:
+            folios = ", ".join(f"#{r.doc_num}" for r in fuera_ventana[:5])
+            mensaje += (
+                f" OJO: {len(fuera_ventana)} parada(s) van a llegar DESPUÉS de que"
+                f" el cliente cierre ({folios}"
+                f"{'…' if len(fuera_ventana) > 5 else ''})."
+                f" Conviene reordenar la ruta o avisarles."
+            )
+        # Si OSRM no contestó, estas horas salieron EN LÍNEA RECTA y hay que
+        # decirlo. Son las que ventas le promete al cliente por teléfono: sin
+        # este aviso, el día que se cae el router se prometen horas que el
+        # camión no puede cumplir y nadie tiene cómo enterarse.
+        if fuente and fuente.startswith("haversine"):
+            mensaje += (
+                " ATENCIÓN: el servidor de rutas no respondió, así que estas horas"
+                " se calcularon EN LÍNEA RECTA y van a quedar cortas."
+                " No se las prometas al cliente hasta revisarlas."
+            )
+        return {"status": "success", "message": mensaje}
     elif payload.estado == 'Finalizada':
         # Antes esto marcaba TODAS las remisiones como 'Entregado' de golpe, lo
         # que convertia el dato en "alguien cerro la ruta" y no en "se entrego".

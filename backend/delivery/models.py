@@ -13,7 +13,37 @@ class Ruta(models.Model):
     chofer = models.CharField(max_length=100)
     estado = models.CharField(max_length=20, choices=ESTADOS, default='Borrador')
     hora_salida = models.TimeField(null=True, blank=True)
+    # La jornada que el optimizador planeó para este camión: a qué hora sale del
+    # CEDIS y a qué hora vuelve. Se guardan porque el panel las estaba
+    # ADIVINANDO como "de la primera a la última parada", y así el viaje de ida
+    # y el de vuelta no contaban: una ruta a Saltillo (74-94 min por tramo) se
+    # anunciaba como "1 h" cuando el camión está fuera más de cuatro, y el aviso
+    # de "no cabe en el turno" nunca se prendía porque comparaba ese número
+    # corto contra el turno completo.
+    salida_plan = models.CharField(max_length=5, null=True, blank=True)
+    regreso_plan = models.CharField(max_length=5, null=True, blank=True)
     creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        # Un camión hace UNA ruta por día. Parece obvio, y justo por eso nadie lo
+        # había escrito en la base: se daba por hecho que el optimizador no
+        # generaría dos.
+        #
+        # Sí las generaba. El 4-ago-2026: 09:05 el despachador aprieta "Optimizar
+        # rutas"; la corrida lee qué camiones están despachados, se va 20 s a
+        # OSRM y al solver. A las 09:05:08 el almacén pone el PP4873A en
+        # 'Cargando'. Cuando la corrida vuelve y borra las rutas 'Borrador' para
+        # escribir las nuevas, la vieja del PP4873A ya NO es 'Borrador', así que
+        # el delete no la toca — y encima le crea otra. El camión quedó con dos
+        # rutas del mismo día, y los pedidos que el almacén ya estaba subiendo se
+        # reasignaron a otro camión.
+        #
+        # El solver revalida los camiones dentro de su transacción para no llegar
+        # hasta aquí (ver optimizer/solver.py), pero eso solo cubre al solver.
+        # Esta restricción la cubre la base: cualquier camino que intente meter
+        # la segunda ruta —una asignación manual, un script, dos peticiones
+        # simultáneas— truena en vez de dejar el día partido en dos.
+        unique_together = ('fecha', 'camion')
 
     def __str__(self):
         return f"{self.camion} - {self.fecha}"

@@ -9,7 +9,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .. import fleet
-from ..models import ESTADOS_RUTA_DESPACHADA, Remision, Ruta
+from ..models import ESTADOS_ENTREGA_FINAL, ESTADOS_RUTA_DESPACHADA, Remision, Ruta
 from ..integrations.osrm import build_distance_time_matrices
 from .reglas import (
     HORA_CERO,
@@ -32,7 +32,18 @@ def recalcular_etas_desde_salida(ruta, depot_coords, salida_dt=None):
     adelantadas respecto a la realidad. Se recorre la secuencia real de la
     ruta (CEDIS → paradas en orden) con tiempos de OSRM + descarga.
 
-    Regresa cuántos pedidos se actualizaron.
+    Regresa `(cuántos pedidos se actualizaron, fuente_de_las_distancias)`.
+
+    La FUENTE se regresa y no se descarta porque `build_distance_time_matrices`
+    nunca truena: si OSRM no contesta, se cae a Haversine (línea recta) y
+    devuelve horas optimistas —medido: -15% al centro, -38% a Escobedo— con la
+    misma cara de siempre. El plan se armó con calles reales; apretar "Salida"
+    lo sobreescribiría con línea recta y el panel seguiría diciendo "ETAs
+    recalculadas desde la hora real de salida" como si nada.
+    Duele justo el día que se cae el router —escenario que ya está contemplado
+    para el UPS— y sin este dato nadie se entera de que cada hora prometida a
+    los clientes es ficción. `solve_vrp` ya propaga su fuente hasta el mensaje
+    del despachador; aquí faltaba el mismo cuidado.
     """
     remisiones = [
         r for r in ruta.remisiones.filter(destino__isnull=False)
@@ -40,7 +51,7 @@ def recalcular_etas_desde_salida(ruta, depot_coords, salida_dt=None):
         if r.destino.latitude is not None and r.destino.longitude is not None
     ]
     if not remisiones:
-        return 0
+        return 0, None, []
     # localtime() y no datetime.now(): con USE_TZ=True, `now()` da la hora del
     # SERVIDOR. En la compu de desarrollo coincide con Monterrey, pero en
     # cualquier hosting va en UTC y todas las ETAs saldrían 6 h adelantadas.
@@ -58,10 +69,11 @@ def recalcular_etas_desde_salida(ruta, depot_coords, salida_dt=None):
             paradas.append((clave, [r], (r.destino.latitude, r.destino.longitude)))
 
     locations = [depot_coords] + [p[2] for p in paradas]
-    _, time_matrix, _ = build_distance_time_matrices(locations, VELOCIDAD_PROMEDIO_KMH)
+    _, time_matrix, fuente = build_distance_time_matrices(locations, VELOCIDAD_PROMEDIO_KMH)
 
     t = salida_dt
     actualizadas = []
+    fuera_de_ventana = []
     for i, (_, rems, _) in enumerate(paradas):
         t += timedelta(minutes=time_matrix[i][i + 1])
 
@@ -82,18 +94,41 @@ def recalcular_etas_desde_salida(ruta, depot_coords, salida_dt=None):
         # La espera se arrastra a las paradas siguientes a propósito: si el
         # camión esperó, las que vienen detrás también se recorren.
         destino = rems[0].destino
-        ini, _fin = _ventana_en_minutos(destino, hora_cero=salida_dt)
+        ini, fin = _ventana_en_minutos(destino, hora_cero=salida_dt)
         if ini is not None:
             abre = salida_dt + timedelta(minutes=ini)
             if t < abre:
                 t = abre
+
+        # ¿Y esta parada todavía alcanza a llegar antes de que el cliente cierre?
+        #
+        # Recalcular NO vuelve a planear: conserva el orden que armó el
+        # optimizador y solo lo recorre en el tiempo. Así que cada hora que el
+        # camión se retrasa en salir empuja la ruta completa contra las horas de
+        # cierre, que son fijas de reloj y no se mueven.
+        #
+        # Medido con un día real de 37 paradas planeadas para salir 09:00:
+        #     sale 10:00 ->  3 paradas ya llegan después de que cierran
+        #     sale 11:00 -> 15
+        #     sale 12:00 -> 23
+        #     sale 13:00 -> 27 de 37
+        #
+        # Y esto ocurría EN SILENCIO: se reescribía la hora, el panel decía
+        # "ETAs recalculadas" y ventas le prometía al cliente una hora a la que
+        # ya no va a haber quien reciba. Que el dato exista no sirve de nada si
+        # nadie lo puede ver: por eso se cuenta y se regresa, para que el
+        # despachador decida si reordena, si vuelve a optimizar o si avisa.
+        if destino.ini_recibo_1 and destino.fin_recibo_1 and fin is not None:
+            cierra = salida_dt + timedelta(minutes=fin)
+            if t > cierra:
+                fuera_de_ventana.extend(rems)
 
         for r in rems:
             r.eta = t.strftime("%H:%M")
             actualizadas.append(r)
         t += timedelta(minutes=TIEMPO_DESCARGA_MINUTOS)
     Remision.objects.bulk_update(actualizadas, ['eta'])
-    return len(actualizadas)
+    return len(actualizadas), fuente, fuera_de_ventana
 
 
 # ==========================================
@@ -130,8 +165,15 @@ def sugerir_camiones_para_remision(remision, depot_coords):
 
     opciones = []
     for ruta in rutas:
+        # Se revisan LAS DOS coordenadas, no solo la latitud. Con solo la
+        # latitud, un destino al que le falte la longitud pasa el filtro y dos
+        # líneas más abajo `_clave_lugar` hace `round(None, 4)` -> TypeError, o
+        # sea un 500 sin mensaje justo cuando el despachador está tratando de
+        # acomodar a mano un pedido que no cupo. Las otras tres validaciones de
+        # coordenadas del proyecto ya revisan ambas.
         remisiones_ruta = sorted(
-            [r for r in ruta.remisiones.all() if r.destino and r.destino.latitude is not None],
+            [r for r in ruta.remisiones.all()
+             if r.destino and r.destino.latitude is not None and r.destino.longitude is not None],
             key=lambda r: r.secuencia_ruta or 0,
         )
 
@@ -308,6 +350,37 @@ def asignar_manualmente(remision, ruta_id, posicion=None, forzar=False):
             "message": "Ese camión ya se está cargando, ya salió o terminó su ruta; no se le puede agregar nada.",
         }
 
+    # La ruta tiene que ser DEL MISMO DÍA que el pedido.
+    #
+    # `ruta_id` llega del navegador, así que basta con tener abierto el panel de
+    # ayer en otra pestaña —cosa normal cuando se está revisando qué pasó— para
+    # meter un pedido de hoy a una ruta de ayer. Y ahí se queda: la corrida de
+    # hoy borra las rutas Borrador de HOY, no las de ayer, así que ese pedido no
+    # vuelve a entrar a ningún plan y no aparece en las alertas.
+    if ruta.fecha != remision.doc_date:
+        return {
+            "status": "error",
+            "message": (
+                f"Ese camión es del reparto del {ruta.fecha:%d-%b} y el pedido es del "
+                f"{remision.doc_date:%d-%b}. Recarga el panel para ver las rutas del día correcto."
+            ),
+        }
+
+    # Y el pedido no puede estar ya reportado por el chofer.
+    #
+    # Sin esto, asignar una remisión ya 'Entregado' la regresa a 'Asignado' más
+    # abajo y borra el hecho de la entrega: la foto y la firma siguen en disco,
+    # pero el pedido vuelve a aparecer como pendiente de entregar. Es el mismo
+    # cuidado que ya tiene el sync al no tocar lo que está en un estado final.
+    if remision.estado in ESTADOS_ENTREGA_FINAL:
+        return {
+            "status": "error",
+            "message": (
+                f"El pedido #{remision.doc_num} ya lo reportó el chofer; no se puede "
+                f"volver a asignar sin borrar lo que se reportó."
+            ),
+        }
+
     # Un pedido sin coordenadas NO se puede meter sin confirmar.
     #
     # `sugerir_camiones_para_remision` devuelve `{"error": ...}` en ese caso, así
@@ -359,5 +432,41 @@ def asignar_manualmente(remision, ruta_id, posicion=None, forzar=False):
     remision.estado = 'Asignado'
     remision.save()
 
-    return {"status": "success", "message": f"Pedido #{remision.doc_num} asignado a {ruta.camion} en la posición {posicion}."}
+    # Y SE RECALCULAN LAS ETAS DE TODA LA RUTA.
+    #
+    # Meter una parada en medio empuja a todas las que vienen detrás: insertar
+    # en la posición 4 de una ruta de 12 les mueve 25-30 min a las ocho
+    # siguientes. Sin esto, el panel de ventas seguía enseñando las horas
+    # viejas y la vendedora le prometía al cliente una hora que ya no existía.
+    #
+    # Y el pedido recién metido se quedaba SIN hora: el solver le borra la ETA
+    # al dejarlo fuera del plan, así que aparecía en el camión con la columna
+    # de llegada vacía hasta que alguien diera "Salida".
+    #
+    # La función ya existía en este mismo archivo y simplemente no se llamaba.
+    # Se usa la salida planeada de la ruta cuando el optimizador la guardó, y
+    # solo si no hay se cae a la hora de ahora — que es lo que de verdad
+    # aplica cuando el camión todavía no sale.
+    salida_dt = None
+    if ruta.salida_plan:
+        try:
+            hora = datetime.strptime(ruta.salida_plan, "%H:%M").time()
+            salida_dt = timezone.localtime().replace(
+                hour=hora.hour, minute=hora.minute, second=0, microsecond=0,
+            )
+        except ValueError:
+            salida_dt = None
+    # `fleet.CEDIS` y no un parámetro nuevo: es la misma constante que la capa
+    # HTTP pasa como DEPOT_COORDS, y tomarla de `fleet` evita que el optimizador
+    # tenga que importar nada de `api/` — la dependencia invertida que ya se
+    # rompió a propósito una vez.
+    _, fuente, _fuera = recalcular_etas_desde_salida(ruta, fleet.CEDIS, salida_dt=salida_dt)
+
+    mensaje = f"Pedido #{remision.doc_num} asignado a {ruta.camion} en la posición {posicion}."
+    if fuente and fuente.startswith("haversine"):
+        mensaje += (
+            " OJO: el servidor de rutas no respondió, así que las horas de esta"
+            " ruta quedaron calculadas en línea recta."
+        )
+    return {"status": "success", "message": mensaje}
 

@@ -165,6 +165,24 @@ def recibe_ese_dia(destino, dia):
     return bool(getattr(destino, campo, True))
 
 
+# Ciudades del corredor de Saltillo (Saltillo + Ramos Arizpe + Arteaga): están
+# a ~85 km del CEDIS, lejos de todo lo demás, y por default el solver reparte
+# sus paradas entre varios camiones aunque quepan en uno solo — cada camión de
+# más que sale para allá es un viaje de ~3 h de ida y vuelta que no hacía falta.
+# Pedido de Francisco (3-ago-2026): si caben en un camión, que sea SIEMPRE uno
+# solo; si no caben, se reparte entre los que hagan falta avisando en el mensaje.
+CIUDADES_ZONA_SALTILLO = ("saltillo", "ramos arizpe", "arteaga")
+
+
+def es_zona_saltillo(city):
+    """¿Esta ciudad (tal como la trae SAP, con mayúsculas/acentos que varían)
+    pertenece al corredor de Saltillo?"""
+    if not city:
+        return False
+    ciudad = city.strip().lower()
+    return any(nombre in ciudad for nombre in CIUDADES_ZONA_SALTILLO)
+
+
 def _clave_lugar(destino):
     """
     Identifica el LUGAR FÍSICO de un destino, no el registro de SAP.

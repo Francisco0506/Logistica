@@ -28,10 +28,16 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords, minu
     ya a una ruta despachada (congelada) — esas se dejan intactas y jamás se
     tocan aquí, para no reasignar pedidos que ya salieron físicamente.
     """
+    # El `order_by` NO es cosmético: sin él Postgres devuelve las filas en el
+    # orden que se le da la gana, y ese orden decide cosas. Más abajo, cuando
+    # dos clientes comparten domicilio con horarios que no se cruzan, se cae a
+    # "la ventana del primero" — así que dos corridas sobre LOS MISMOS datos
+    # podían dar planes distintos, que es de lo más caro de depurar en caliente.
     remisiones = list(
         Remision.objects.reales().filter(doc_date=fecha, estado__in=['Pendiente', 'Asignado'])
         .exclude(ruta__estado__in=ESTADOS_RUTA_CONGELADOS)
         .select_related('destino', 'ruta')
+        .order_by('doc_entry')
     )
     if not remisiones:
         return None
@@ -88,7 +94,26 @@ def build_data_model(fecha, num_vehicles, vehicle_capacities, depot_coords, minu
         ini_comun = max(v[0] for v in ventanas)
         fin_comun = min(v[1] for v in ventanas)
         if ini_comun >= fin_comun:
-            ini_comun, fin_comun = ventanas[0]
+            # No se cruzan: en el mismo domicilio hay quien recibe de mañana y
+            # quien recibe de tarde. Se toma la ventana MÁS AMPLIA que las
+            # cubre a todas, no la del primero de la lista.
+            #
+            # Antes era `ventanas[0]`, y eso tenía dos problemas. El chico: el
+            # "primero" dependía del orden en que Postgres devolvía las filas
+            # (ya corregido con el order_by de arriba). El grave: si al primero
+            # le tocaba una ventana estrecha —un cliente que recibe 15:00-22:00
+            # con turno de 6 h— quedaba recortada a un solo minuto al final del
+            # turno, o sea infactible, y se caían del plan LOS CUATRO pedidos
+            # del domicilio. Es el caso de PROVEO PARQUE MARTEL, que tiene
+            # cuatro razones sociales en la misma puerta.
+            #
+            # Ensanchar es el mismo criterio que ya usa `_ventana_en_minutos`
+            # con los dos turnos de un cliente: más vale sobrestimar cuándo
+            # recibe —el camión llega y alguno estará abierto— que perder la
+            # parada completa por un horario que ni siquiera se puede
+            # representar con una sola ventana.
+            ini_comun = min(v[0] for v in ventanas)
+            fin_comun = max(v[1] for v in ventanas)
         time_windows.append(_ventana_recortada_a_turno(ini_comun, fin_comun, minutos_turno))
         remisiones_validas.append(remisiones_del_lugar)
 
