@@ -157,7 +157,14 @@ export default function HojaEntrega({
         </button>
         <div className="min-w-0">
           <div className="text-[11px] font-bold text-gray-400">Parada {parada.secuencia_ruta} · #{parada.doc_num}</div>
-          <h2 className="text-base font-extrabold text-gray-900 truncate">{parada.card_name}</h2>
+          {/* La sucursal (lo pintado en el local), no la razón social que
+              factura — ver la misma nota en TarjetaParada.jsx. */}
+          <h2 className="text-base font-extrabold text-gray-900 truncate">
+            {parada.ship_to_code || parada.card_name}
+          </h2>
+          {parada.ship_to_code && (
+            <div className="text-[11px] text-gray-500 truncate">{parada.card_name}</div>
+          )}
         </div>
       </header>
 

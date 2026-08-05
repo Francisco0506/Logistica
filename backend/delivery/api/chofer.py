@@ -31,6 +31,15 @@ class ParadaChoferOut(Schema):
     id: int
     doc_num: int
     card_name: str
+    # El nombre de la SUCURSAL (Ship-To de SAP), ej. "Pollo Loco Eloy Cavazos".
+    # `card_name` es la razón social que factura ("Pollos Expo Guadalupe, S.A.
+    # De C.V."), que casi nunca es el nombre pintado en el local — y es
+    # justo lo que el chofer necesita para reconocer la puerta correcta
+    # cuando el mismo cliente tiene varias sucursales en la ruta (pasa seguido:
+    # Pollo Loco, Pizza Legacy y varios más reparten en más de un punto el
+    # mismo día). Sin esto, dos paradas seguidas se veían con el MISMO título
+    # ("Pollos Expo Guadalupe, S.A. De C.V.") y solo la calle las distinguía.
+    ship_to_code: Optional[str] = None
     estado: str
     secuencia_ruta: Optional[int] = None
     address: str = ""
@@ -73,10 +82,13 @@ def get_ruta_chofer(request, fecha: date, camion: str):
     (ver docs/pendientes.md §1). Cuando haya usuarios de chofer, la placa saldrá
     de su sesión.
     """
-    # `.filter().first()` y no `.get()`: no hay unicidad (fecha, camion) en la
-    # base, así que dos rutas del mismo camión el mismo día —que pasa si el
-    # panel manda la misma placa dos veces al optimizar— hacían que la app del
-    # chofer devolviera un 500 de MultipleObjectsReturned, sin mensaje.
+    # `.filter().first()` y no `.get()`: aunque desde el 4-ago `Ruta` ya tiene
+    # `unique_together('fecha', 'camion')`, esa restricción no existía cuando
+    # esto se escribió y ya se guardaron duplicados en producción, además de
+    # que sigue habiendo una ventana entre que el solver arma el plan y guarda
+    # la primera ruta. `.get()` ahí tronaba con un 500 de MultipleObjectsReturned
+    # sin mensaje, en el peor momento: el chofer parado en la calle sin poder
+    # ver su ruta.
     ruta = Ruta.objects.filter(fecha=fecha, camion=camion).order_by('id').first()
     if ruta is None:
         # HttpError y no `api.create_response`: `api` no existe en este módulo
@@ -99,6 +111,7 @@ def get_ruta_chofer(request, fecha: date, camion: str):
             "id": r.id,
             "doc_num": r.doc_num,
             "card_name": r.card_name,
+            "ship_to_code": d.ship_to_code if d else None,
             "estado": r.estado,
             "secuencia_ruta": r.secuencia_ruta,
             "address": (d.street or "") if d else "",

@@ -58,9 +58,17 @@ export default function TarjetaParada({
         </span>
 
         <div className="flex-1 min-w-0">
+          {/* El nombre de la SUCURSAL primero, no la razón social. Un mismo
+              cliente (Pollo Loco, Pizza Legacy...) reparte en varios puntos el
+              mismo día, y "Pollos Expo Guadalupe, S.A. De C.V." se repetía
+              IDÉNTICO en dos paradas seguidas — solo la calle, en gris chiquito,
+              las distinguía. `ship_to_code` es lo que está pintado en el local. */}
           <div className={`text-[15px] font-extrabold leading-snug ${hecha ? 'text-gray-500' : 'text-gray-900'}`}>
-            {parada.card_name}
+            {parada.ship_to_code || parada.card_name}
           </div>
+          {parada.ship_to_code && (
+            <div className="text-[11px] text-gray-500 truncate">{parada.card_name}</div>
+          )}
           <div className="text-[12px] text-gray-400 mt-0.5">{parada.address || 'Sin dirección'}</div>
 
           <div className="flex items-center gap-2.5 mt-1.5 flex-wrap">

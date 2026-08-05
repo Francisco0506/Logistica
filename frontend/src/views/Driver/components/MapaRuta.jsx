@@ -154,7 +154,13 @@ export default function MapaRuta({ paradas, siguiente, miPosicion, alto = 'h-[30
             )}
           >
             <Popup>
-              <b>{p.card_name}</b><br />
+              {/* La sucursal, no la razón social — ver la nota en
+                  TarjetaParada.jsx. Es la que distingue dos paradas del
+                  mismo cliente en el mapa. */}
+              <b>{p.ship_to_code || p.card_name}</b><br />
+              {p.ship_to_code && (
+                <span style={{ fontSize: 11, color: '#64748b' }}>{p.card_name}<br /></span>
+              )}
               <span style={{ fontSize: 11, color: '#64748b' }}>
                 Parada {p.secuencia_ruta}{p.eta_desde ? ` · llega ${p.eta_desde}-${p.eta_hasta}` : ''}
               </span>
