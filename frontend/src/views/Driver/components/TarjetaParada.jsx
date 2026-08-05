@@ -23,9 +23,26 @@ const ESTILO_ESTADO = ESTILO_ENTREGA;
  * Waze se abre por su esquema propio (`waze://`) y Google Maps por su URL
  * universal, que en un celular la abre la app y en una computadora el navegador.
  */
+// Los dos arrancan la navegación DESDE DONDE VA EL CHOFER en ese momento, sin
+// que él tenga que escribir de dónde sale.
+//
+// Ninguno lleva `origin`/punto de partida a propósito: en cuanto se omite, las
+// dos apps toman el GPS del celular. Ponerlo a mano —con la última posición
+// conocida del camión, por ejemplo— sería peor: esa posición trae minutos de
+// retraso y lo mandaría a salir de una esquina por la que ya pasó.
+//
+// `dir_action=navigate` es lo que faltaba en Google Maps: sin él la app solo
+// PINTA la ruta y se queda esperando a que el chofer le dé "Iniciar" — un
+// toque de más, de pie junto al camión, cada parada. Waze ya lo hacía con
+// `navigate=yes`.
+//
+// OJO al probarlo: en una computadora las dos van a pedir la ubicación o a
+// dejarla en blanco, porque un navegador de escritorio no tiene GPS. La prueba
+// de verdad es en el celular.
 const enlaceWaze = (lat, lng) => `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`;
 const enlaceMaps = (lat, lng) =>
-  `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+  `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`
+  + '&travelmode=driving&dir_action=navigate';
 
 /**
  * Una parada en la lista: todo lo que el chofer necesita antes de bajarse del
