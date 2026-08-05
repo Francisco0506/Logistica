@@ -426,8 +426,18 @@ export default function DriverApp() {
               </div>
             )}
 
-            {/* ═══ MAPA — al centro, igual que en ventas ═══ */}
-            <section className="space-y-2">
+            {/* ═══ MAPA — se queda PEGADO debajo de la cabecera ═══
+
+                Antes se iba hacia arriba con el resto de la página: en cuanto
+                el chofer bajaba a ver sus paradas, el mapa desaparecía detrás
+                de la cabecera (que sí es sticky) y para volver a verlo tenía
+                que subir hasta arriba. En la calle eso es justo al revés de lo
+                que ocupa: mira la lista Y el mapa a la vez.
+
+                `top-[57px]` es el alto de la cabecera; el mapa se detiene ahí
+                en vez de seguir subiendo. En pantallas chicas va más bajito
+                (h-52) para que abajo quede espacio real para la lista. */}
+            <section className="sticky top-[57px] z-10 -mx-4 px-4 pt-2 pb-2 bg-gray-50 space-y-2">
               <button
                 onClick={() => setVerMapa((v) => !v)}
                 className="w-full flex items-center gap-2 px-1"
@@ -439,7 +449,12 @@ export default function DriverApp() {
                 </span>
               </button>
               {verMapa && (
-                <MapaRuta paradas={paradas} siguiente={siguiente} miPosicion={miPosicion} />
+                <MapaRuta
+                  paradas={paradas}
+                  siguiente={siguiente}
+                  miPosicion={miPosicion}
+                  alto="h-52 sm:h-[300px]"
+                />
               )}
             </section>
 
