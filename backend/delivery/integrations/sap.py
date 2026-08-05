@@ -224,6 +224,11 @@ def _traer_de_sap(fecha: date):
         cursor.execute(f"""
             SELECT L.DocEntry, L.LineNum, L.ItemCode, L.Dscription,
                    L.Quantity, L.unitMsr,
+                   -- Piezas por unidad de venta: 6 para una "Caja 6 Pz", 1
+                   -- para lo que se vende suelto o por kilo. Es lo que deja
+                   -- decirle al chofer que sus 24 cajas son 144 piezas sin
+                   -- cambiarle la unidad con la que reporta la entrega.
+                   ISNULL(L.NumPerMsr, 1) AS PiezasPorUnidad,
                    -- peso de UNA unidad de este renglón, no de la caja:
                    -- misma cuenta que el total de arriba (IWeight1 primero,
                    -- por ser el peso de la unidad de inventario capturado
@@ -414,6 +419,7 @@ def _mapear_remisiones(rows, destinos_por_doc_entry, lineas_por_pedido):
                     "descripcion": linea.Dscription or linea.ItemCode,
                     "unidad": linea.unitMsr,
                     "cantidad": linea.Quantity,
+                    "piezas_por_unidad": linea.PiezasPorUnidad,
                     "peso_unitario_kg": float(linea.SWeight1) if linea.SWeight1 else None,
                 },
             )

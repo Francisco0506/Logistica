@@ -69,23 +69,23 @@ export default function TarjetaParada({
           {parada.ship_to_code && (
             <div className="text-[11px] text-gray-500 truncate">{parada.card_name}</div>
           )}
-          <div className="text-[12px] text-gray-400 mt-0.5">{parada.address || 'Sin dirección'}</div>
+          <div className="text-[13px] text-gray-500 mt-0.5">{parada.address || 'Sin dirección'}</div>
 
           <div className="flex items-center gap-2.5 mt-1.5 flex-wrap">
             {parada.eta_desde && (
-              <span className="text-[11px] font-bold text-gray-500 flex items-center gap-1">
+              <span className="text-[12px] font-bold text-gray-600 flex items-center gap-1">
                 <Clock className="w-3 h-3" /> {parada.eta_desde}-{parada.eta_hasta}
               </span>
             )}
-            {parada.ventana && <span className="text-[11px] text-gray-400">recibe {parada.ventana}</span>}
-            <span className="text-[11px] text-gray-400">
+            {parada.ventana && <span className="text-[12px] text-gray-500">recibe {parada.ventana}</span>}
+            <span className="text-[12px] text-gray-500">
               {parada.lineas.length} producto{parada.lineas.length === 1 ? '' : 's'}
             </span>
           </div>
 
           {estado && (
-            <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border mt-2 ${estado.clase}`}>
-              <Icono className="w-3 h-3" /> {estado.corto}
+            <span className={`inline-flex items-center gap-1 text-[11px] font-bold uppercase px-2.5 py-1 rounded-full border mt-2 ${estado.clase}`}>
+              <Icono className="w-3.5 h-3.5" /> {estado.corto}
               {parada.entregado_en && ` · ${parada.entregado_en}`}
             </span>
           )}
@@ -109,7 +109,7 @@ export default function TarjetaParada({
           <button
             onClick={onReintentarEvidencia}
             disabled={subiendoEvidencia}
-            className="flex-shrink-0 bg-amber-500 active:bg-amber-600 disabled:opacity-50 text-white font-bold text-[12px] px-3 py-2 rounded-lg"
+            className="flex-shrink-0 bg-amber-500 active:bg-amber-600 disabled:opacity-50 text-white font-bold text-[13px] px-4 py-2.5 rounded-lg"
           >
             {subiendoEvidencia ? 'Subiendo…' : 'Reintentar'}
           </button>
@@ -123,9 +123,9 @@ export default function TarjetaParada({
           {parada.telefono && (
             <a
               href={`tel:${parada.telefono}`}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[12px] font-bold text-gray-600 active:bg-gray-50"
+              className="flex-1 flex items-center justify-center gap-1.5 py-3.5 text-[13px] font-bold text-gray-700 active:bg-gray-100"
             >
-              <Phone className="w-3.5 h-3.5" /> Llamar
+              <Phone className="w-4 h-4" /> Llamar
             </a>
           )}
           {/* Waze y Maps por separado, no un solo "Cómo llegar".
@@ -140,17 +140,17 @@ export default function TarjetaParada({
                 href={enlaceWaze(parada.lat, parada.lng)}
                 target="_blank"
                 rel="noreferrer"
-                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[12px] font-bold text-gray-600 active:bg-gray-50"
+                className="flex-1 flex items-center justify-center gap-1.5 py-3.5 text-[13px] font-bold text-gray-700 active:bg-gray-100"
               >
-                <Navigation className="w-3.5 h-3.5" /> Waze
+                <Navigation className="w-4 h-4" /> Waze
               </a>
               <a
                 href={enlaceMaps(parada.lat, parada.lng)}
                 target="_blank"
                 rel="noreferrer"
-                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[12px] font-bold text-gray-600 active:bg-gray-50"
+                className="flex-1 flex items-center justify-center gap-1.5 py-3.5 text-[13px] font-bold text-gray-700 active:bg-gray-100"
               >
-                <MapIcon className="w-3.5 h-3.5" /> Maps
+                <MapIcon className="w-4 h-4" /> Maps
               </a>
             </>
           )}
@@ -158,9 +158,9 @@ export default function TarjetaParada({
             onClick={onAbrir}
             disabled={!puedeEntregar}
             title={puedeEntregar ? undefined : 'El camión todavía no sale del CEDIS'}
-            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[12px] font-extrabold text-orange-600 active:bg-orange-50 disabled:text-gray-300 disabled:active:bg-transparent"
+            className="flex-1 flex items-center justify-center gap-1.5 py-3.5 text-[13px] font-extrabold text-orange-600 active:bg-orange-100 disabled:text-gray-300 disabled:active:bg-transparent"
           >
-            <MapPin className="w-3.5 h-3.5" /> Entregar
+            <MapPin className="w-4 h-4" /> Entregar
           </button>
         </div>
       )}

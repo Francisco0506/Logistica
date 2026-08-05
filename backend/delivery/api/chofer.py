@@ -24,6 +24,11 @@ class LineaOut(Schema):
     descripcion: str
     unidad: Optional[str] = None
     cantidad: float
+    # Cuantas piezas trae cada unidad de venta (6 en una "Caja 6 Pz"). Sirve
+    # para decirle al chofer que sus 24 cajas son 144 piezas SIN cambiarle la
+    # unidad con la que reporta: la entrega se sigue confirmando por caja,
+    # porque asi se vendio y nadie abre una caja para sacar piezas sueltas.
+    piezas_por_unidad: Optional[float] = None
     cantidad_entregada: Optional[float] = None
 
 
@@ -131,6 +136,7 @@ def get_ruta_chofer(request, fecha: date, camion: str):
                     "descripcion": l.descripcion,
                     "unidad": l.unidad,
                     "cantidad": float(l.cantidad),
+                    "piezas_por_unidad": float(l.piezas_por_unidad) if l.piezas_por_unidad is not None else None,
                     "cantidad_entregada": float(l.cantidad_entregada) if l.cantidad_entregada is not None else None,
                 }
                 for l in r.lineas.all()

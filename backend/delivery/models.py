@@ -238,6 +238,20 @@ class LineaRemision(models.Model):
     cantidad = models.DecimalField(max_digits=12, decimal_places=3)
     peso_unitario_kg = models.FloatField(null=True, blank=True)
 
+    # Cuántas PIEZAS trae cada unidad de venta (`DLN1.NumPerMsr` en SAP).
+    #
+    # `cantidad` va siempre en la unidad con que se VENDIÓ —24 "Caja 6 Pz", 1
+    # "Caja 5 Pz"— porque así se le facturó al cliente y así se entrega: nadie
+    # abre una caja para sacar piezas sueltas. Pero el chofer necesita saber
+    # QUÉ tanto es eso cuando lo está bajando del camión, y "24" a secas no se
+    # lo dice: son 144 piezas. Con este número el panel puede mostrarlo sin
+    # cambiar la unidad con la que se reporta la entrega.
+    #
+    # 1 para lo que se vende por pieza o por kilo, que es el caso más común.
+    piezas_por_unidad = models.DecimalField(
+        max_digits=12, decimal_places=3, null=True, blank=True
+    )
+
     # Lo que el chofer confirmó que dejó. `null` = todavía no se confirma nada;
     # 0 = se confirmó que NO se entregó nada de este renglón. Son cosas
     # distintas y por eso no se usa 0 como valor inicial.
