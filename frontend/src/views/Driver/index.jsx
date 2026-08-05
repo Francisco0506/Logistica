@@ -6,13 +6,12 @@ import {
 } from 'lucide-react';
 import LabenLogo from '../../components/LabenLogo';
 import { useAviso } from '../../components/useAviso';
-import { getRutas, confirmarEntrega, subirFotoEntrega, subirFirmaEntrega } from '../../services/api';
+import { confirmarEntrega, subirFotoEntrega, subirFirmaEntrega } from '../../services/api';
 import HojaEntrega from './components/HojaEntrega';
 import ResumenReportado from './components/ResumenReportado';
 import MapaRuta from './components/MapaRuta';
 import TarjetaParada from './components/TarjetaParada';
 import { esVisitada, huboEntrega, salioMal } from '../../config/estadosRuta';
-import { hoyLocal } from '../../lib/fecha';
 import { useConfig } from '../../config/useConfig';
 import { useRutaChofer } from './hooks/useRutaChofer';
 import { useEvidencia } from './hooks/useEvidencia';
@@ -50,12 +49,11 @@ export default function DriverApp() {
   const [guardando, setGuardando] = useState(false);
   const [verMapa, setVerMapa] = useState(true);
   const [verHechas, setVerHechas] = useState(false);   // lo ya reportado no estorba
-  const fecha = hoyLocal();
 
   const {
-    rutasDelDia, setRutasDelDia, buscandoRutas, setBuscandoRutas,
+    rutasDelDia, buscandoRutas, reintentarBusqueda,
     colorDe, gps, ruta, cargando, refrescarRuta,
-  } = useRutaChofer(camion, fecha);
+  } = useRutaChofer(camion);
 
   const {
     evidenciaPendiente, setEvidenciaPendiente, subiendoEvidencia,
@@ -227,7 +225,7 @@ export default function DriverApp() {
                 sola; no tienes que hacer nada.
               </p>
               <button
-                onClick={() => { setBuscandoRutas(true); getRutas(fecha).then(setRutasDelDia).catch(() => {}).finally(() => setBuscandoRutas(false)); }}
+                onClick={reintentarBusqueda}
                 className="mt-5 inline-flex items-center gap-2 bg-gray-100 active:bg-gray-200 text-gray-700 font-bold text-[15px] px-5 py-3 rounded-xl"
               >
                 <RefreshCw className="w-4 h-4" /> Volver a buscar

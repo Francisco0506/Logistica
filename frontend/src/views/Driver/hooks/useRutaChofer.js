@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { getRutas, getRutaChofer, getCamionesGPS, getFlota } from '../../../services/api';
+import {
+  getRutas, getRutaChofer, getCamionesGPS, getFlota, getJornada,
+} from '../../../services/api';
 
 // Se refresca para que el chofer vea si el despachador le movió algo.
 const REFRESH_MS = 60_000;
@@ -11,7 +13,21 @@ const REFRESH_MS = 60_000;
  * y, ya escogido el camión, su ruta del día — con el refresco periódico y el
  * candado de corridas para que una respuesta vieja no pise a una nueva.
  */
-export function useRutaChofer(camion, fecha) {
+export function useRutaChofer(camion) {
+  // La fecha con la que están guardadas las rutas es la de CAPTURA
+  // (`fecha_carga`), no la de hoy: lo capturado ayer sale hoy. `Ruta.fecha` en
+  // el backend se filtra por esa fecha de captura, igual que en el panel del
+  // despachador — que la pide con `getJornada()` en vez de usar el día de
+  // reloj.
+  //
+  // Antes esta pantalla armaba la fecha con `hoyLocal()` a secas. Entre semana
+  // funciona casi siempre por casualidad: de madrugada o muy noche coincide
+  // con la fecha de captura. Pero cualquier día normal a media mañana —que es
+  // cuando el chofer de verdad abre la app— `hoyLocal()` es la fecha de
+  // REPARTO, no la de captura, así que `getRutas`/`getRutaChofer` preguntaban
+  // por rutas guardadas bajo un día que no es, y la pantalla decía "todavía no
+  // hay camiones para hoy" con el CEDIS ya despachando desde hace rato.
+  const [fechaCarga, setFechaCarga] = useState(null);
   const [rutasDelDia, setRutasDelDia] = useState([]);
   // Distinguir "todavía no llega la respuesta" de "no hay rutas". Sin esto, con
   // la señal de la calle el chofer veía "Sin rutas todavía · Pregunta en el
@@ -22,6 +38,17 @@ export function useRutaChofer(camion, fecha) {
   const [ruta, setRuta] = useState(null);
   const [cargando, setCargando] = useState(false);
   const [gps, setGps] = useState([]);
+
+  // Se pregunta una sola vez, al entrar — mismo criterio que
+  // Dispatcher/hooks/useJornada.js: no le mueve la fecha bajo los pies al
+  // chofer a media jornada.
+  useEffect(() => {
+    const c = new AbortController();
+    getJornada({ signal: c.signal })
+      .then((j) => setFechaCarga(j.fecha_carga))
+      .catch(() => {});
+    return () => c.abort();
+  }, []);
 
   // Token de corrida para las respuestas de /chofer/ruta. Mismo patrón que
   // `corrida` en Dispatcher/hooks/useJornada.js, y aquí hacía más falta que allá.
@@ -40,20 +67,25 @@ export function useRutaChofer(camion, fecha) {
   // los que están apagados y los que no tienen ruta: el chofer podía escoger un
   // camión que no va a ninguna parte.
   useEffect(() => {
+    // Sin fecha de captura todavía no hay nada que preguntar — y no se debe
+    // preguntar con una fecha a medias, porque una respuesta vacía apagaría
+    // `buscandoRutas` antes de tiempo y la pantalla diría "no hay camiones"
+    // por un instante aunque sí los haya.
+    if (!fechaCarga) return undefined;
     const c = new AbortController();
     // Se vuelve a preguntar cada 30 s. Antes se pedía UNA sola vez al abrir la
     // app: si el despachador generaba las rutas a las 6:40 y el chofer había
     // abierto a las 6:35, la pantalla se quedaba vacía PARA SIEMPRE hasta que
     // se le ocurriera recargar el navegador — y un chofer no tiene por qué
     // saber recargar un navegador.
-    const traer = () => getRutas(fecha, { signal: c.signal })
+    const traer = () => getRutas(fechaCarga, { signal: c.signal })
       .then(setRutasDelDia)
       .catch(() => {})
       .finally(() => setBuscandoRutas(false));
     traer();
     const i = setInterval(traer, 30_000);
     return () => { c.abort(); clearInterval(i); };
-  }, [fecha]);
+  }, [fechaCarga]);
 
   // El color del camión, que lo identifica en TODAS las demás pantallas. Esta
   // era la única donde no aparecía.
@@ -75,11 +107,11 @@ export function useRutaChofer(camion, fecha) {
   }, []);
 
   useEffect(() => {
-    if (!camion) { setRuta(null); return; }
+    if (!camion || !fechaCarga) { setRuta(null); return undefined; }
     const c = new AbortController();
     const traer = () => {
       const mia = ++corrida.current;
-      getRutaChofer(fecha, camion, { signal: c.signal })
+      getRutaChofer(fechaCarga, camion, { signal: c.signal })
         .then((r) => { if (mia === corrida.current) setRuta(r); })
         .catch((e) => { if (e.name !== 'AbortError') console.error('Ruta chofer:', e); })
         .finally(() => { if (mia === corrida.current) setCargando(false); });
@@ -88,7 +120,7 @@ export function useRutaChofer(camion, fecha) {
     traer();
     const i = setInterval(traer, REFRESH_MS);
     return () => { c.abort(); clearInterval(i); };
-  }, [camion, fecha]);
+  }, [camion, fechaCarga]);
 
   /**
    * Pedir la ruta y escribirla SOLO si sigue siendo la respuesta más nueva.
@@ -98,12 +130,23 @@ export function useRutaChofer(camion, fecha) {
    */
   const refrescarRuta = async () => {
     const mia = ++corrida.current;
-    const r = await getRutaChofer(fecha, camion);
+    const r = await getRutaChofer(fechaCarga, camion);
     if (mia === corrida.current) setRuta(r);
   };
 
+  // Para el botón "Volver a buscar": mismo `getRutas`, misma fecha de
+  // captura, sin que quien llama tenga que saber cuál es.
+  const reintentarBusqueda = () => {
+    if (!fechaCarga) return;
+    setBuscandoRutas(true);
+    getRutas(fechaCarga)
+      .then(setRutasDelDia)
+      .catch(() => {})
+      .finally(() => setBuscandoRutas(false));
+  };
+
   return {
-    rutasDelDia, setRutasDelDia, buscandoRutas, setBuscandoRutas,
-    flota, colorDe, gps, ruta, cargando, refrescarRuta,
+    rutasDelDia, buscandoRutas,
+    flota, colorDe, gps, ruta, cargando, refrescarRuta, reintentarBusqueda,
   };
 }
