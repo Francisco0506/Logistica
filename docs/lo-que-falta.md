@@ -153,18 +153,27 @@ propósito claro**. Repartidas así no estorban. Se anota aquí para que nadie l
 
 ## 🟡 Bugs conocidos, sin arreglar
 
-Salieron de la auditoría del 1-ago y siguen abiertos:
+**Al 5-ago-2026.** De los 8 que salieron de la auditoría del 1-ago, 7 ya se
+arreglaron (verificado leyendo el código actual, no de memoria — ver
+`git log` del 4/5-ago). Queda uno:
 
 | Dónde | Qué pasa |
 |---|---|
-| `optimizer/manual.py:96,266` | El candado de "ruta ya despachada" está copiado a mano y le faltan `Cargando` y `Listo`: se puede meter un pedido a un camión **ya cargado y con manifiesto impreso**, y ahí queda congelado para siempre. |
-| `optimizer/manual.py:282-303` | Meter un pedido a mano **no recalcula ninguna ETA**. Insertar en la posición 4 de una ruta de 12 empuja 25-30 min a las ocho paradas siguientes, y ventas sigue mostrando las horas viejas. La función para arreglarlo (`recalcular_etas_desde_salida`) ya existe y no se llama. |
-| `optimizer/manual.py:126,195` | Las sugerencias miden contra la hora de salida y el turno **por default** (09:00 / 6 h), no contra los de la corrida. Si se optimizó con salida 07:00, el panel rechaza como "llegaría después de que cierren" pedidos que caben perfecto. |
-| `MapaRutas.jsx:360-375` | El mapa del despachador numera las paradas por **índice del arreglo ya filtrado por coordenadas**, no por `secuencia_ruta`. Si una parada no trae lat/lng, todos los números posteriores se corren uno contra los del celular del chofer. |
-| `PreviewManifiesto.jsx:109` | La guía impresa usa una **tercera** numeración (`paradas.length - i`), contradiciendo su propio comentario. |
-| `MenuSeleccion.jsx:22` | Si el valor filtrado ya no está entre las opciones, el botón muestra "Todos los camiones" pero **el filtro sigue aplicado**. En ventas, si ese día solo hay un camión el selector ni se dibuja: no hay forma de quitar el filtro salvo recargar. |
-| `Driver/index.jsx:420-431` | La parada "que sigue" aparece **dos veces**: una en su sección y otra como primer renglón de "Por entregar", cuyo contador dice 8 cuando abajo quedan 7. |
-| `HojaEntrega.jsx:46-49` | El `useEffect` de limpieza depende de `[vistaPrevia, vistaFirma]`, así que al capturar la firma revoca el object URL de la foto. Hoy no se nota porque el `<img>` ya está pintado, pero la relación está invertida. |
+| `optimizer/manual.py:126,195` | Las sugerencias de "en qué camión cabe un pedido" miden contra la hora de salida y el turno **por default** (`HORA_CERO` = 09:00, `MINUTOS_TURNO_MAXIMO` = 6h), no contra los de la corrida real. Si se optimizó con salida 07:00 o turno de 8h, el panel puede rechazar como "llegaría después de que cierren" un pedido que en la ruta real sí cabe. La ruta ya guarda `salida_plan` (agregado el 4-ago) con la hora correcta; falta que `sugerir_camiones_para_remision` la use en vez de las constantes. |
+
+Los 7 ya resueltos, para que quede constancia de qué se comprobó y no se
+repita el trabajo:
+
+- El candado de "ruta ya despachada" en `manual.py` (`ESTADOS_RUTA_DESPACHADA`,
+  incluye `Cargando` y `Listo`).
+- Meter un pedido a mano sí recalcula las ETAs de toda la ruta.
+- El mapa numera las paradas por `secuencia_ruta`, no por índice del arreglo.
+- La guía impresa (`PreviewManifiesto.jsx`) usa esa misma `secuencia_ruta`.
+- `MenuSeleccion.jsx` suelta el filtro cuando el valor ya no existe entre las
+  opciones, en vez de mostrar "Todos" con el filtro viejo pegado.
+- La parada "que sigue" ya no se repite en `Driver/index.jsx`.
+- El `useEffect` de `HojaEntrega.jsx` ya no revoca la foto al capturar la
+  firma (ni al revés): sigue las dos URLs por `ref`, no por dependencia.
 
 ---
 

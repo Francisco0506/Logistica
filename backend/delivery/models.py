@@ -212,10 +212,6 @@ class Remision(models.Model):
     # lo que el chofer reporta.
     foto = models.ImageField(upload_to='entregas/%Y/%m/', null=True, blank=True)
 
-    @property
-    def entrega_confirmada(self):
-        return self.estado in ESTADOS_ENTREGA_FINAL
-
     def __str__(self):
         return f"Remision {self.doc_num} - {self.card_name}"
 

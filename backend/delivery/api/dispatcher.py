@@ -115,14 +115,6 @@ def sync_sap(request, fecha: date):
     return res
 
 
-# Hora a partir de la cual el despachador ya está preparando el día SIGUIENTE.
-#
-# Los camiones salen entre las 7:03 y las 10:35 (medido con GPS, 8 días). Pasada
-# esa hora el plan de hoy ya está en la calle y lo que toca preparar es mañana.
-# Se pone a las 11 para dar margen al día que salen tarde.
-HORA_CORTE_JORNADA = 11
-
-
 class JornadaOut(Schema):
     # El día cuyas entregas hay que planear ahora. Es el que abre el panel.
     fecha_carga: str
