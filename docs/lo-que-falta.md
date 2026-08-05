@@ -87,31 +87,34 @@ es justo el que se cae a línea recta.
 
 ---
 
-## 🟠 El `try/except` de SAP que disfraza errores
+## ✅ El `try/except` de SAP que disfrazaba errores — resuelto el 5-ago
 
-`integrations/sap.py` tiene **393 líneas dentro de un solo `try`** (línea 36 a
-la 429). Cualquier error de Python en el mapeo —un `AttributeError`, un
-`IntegrityError` por folio duplicado, un `None` donde se esperaba número— sale
-reportado como:
+`integrations/sap.py` tenía **393 líneas dentro de un solo `try`**. Cualquier
+error de Python en el mapeo salía reportado como *"Falló la conexión con SAP
+B1"*, mandando a quien lo leyera a revisar la red y el cable en vez del bug
+real.
 
-> *"Falló la conexión con SAP B1"*
+Se hicieron los dos cambios que pedía este documento:
 
-Y quien lo lea va a revisar la red, el cable y el firewall. **El síntoma apunta
-al lugar equivocado**, que es exactamente el problema que ya nos costó una tarde
-con el Postgres de Windows.
+1. `sync_from_sap` se partió en cuatro funciones: `_traer_de_sap` (conexión +
+   las dos consultas) → `_mapear_destinos` → `_mapear_remisiones` →
+   `_limpiar_sobrantes`.
+2. El `try/except` quedó acotado a la llamada a `_traer_de_sap` — 2 líneas de
+   `sync_from_sap`, contra las ~422 de antes. Todo el mapeo corre fuera: un
+   bug de Python ahí ya sale con su propio traceback.
 
-Son dos cambios, y el segundo importa más que el primero:
+Sigue siendo `@transaction.atomic` sobre la función completa, así que la
+atomicidad no se rompió al partirla.
 
-1. Partir `sync_from_sap` en cuatro: traer → mapear destinos → mapear remisiones
-   → limpiar sobrantes.
-2. **Acotar el `try/except` solo a la conexión y la consulta**, para que un bug
-   de Python truene como bug de Python.
+**Verificado, no solo dicho:** hay una prueba
+(`test_sap.py::UnBugDeMapeoNoEsUnaFallaDeConexion`) que mete un
+`AttributeError` real en el mapeo y comprueba que el mensaje NO dice
+"conexión". 151 pruebas en verde.
 
-Es lo que más urge del refactor, y no por el tamaño: es porque va a morder justo
-cuando se conecte SAP en la Mac.
-
-> **Cómo saber que quedó:** meter a propósito un `AttributeError` en el mapeo y
-> comprobar que el mensaje NO dice "conexión".
+Deuda menor sin tocar (no funcional): la columna calculada de la consulta de
+líneas se sigue llamando `AS SWeight1` en el SQL aunque la fórmula ahora
+prioriza `IWeight1`. Es solo el alias de una columna del cursor, no un campo
+del modelo — vale la pena renombrarla en otro momento para que no confunda.
 
 ---
 
@@ -275,9 +278,11 @@ mano y se pierde al recargar. Antes de construir la tabla hay que responder:
    diez minutos.
 2. **Cloudflare Access** — una tarde, sin tocar código, y cierra el agujero más
    grave.
-3. **Acotar el `try/except` de `sap.py`** — va a morder justo al conectar SAP.
+3. ~~**Acotar el `try/except` de `sap.py`**~~ — hecho el 5-ago.
 4. **Cargar las 136 direcciones** — cero código, sube la cobertura 28 puntos.
-5. **Refactor de `Driver/index.jsx`** — el archivo más grande y el más delicado.
+5. ~~**Refactor de `Driver/index.jsx`**~~ — hecho el 5-ago (840 → 542 líneas,
+   extraído a `hooks/useRutaChofer.js`, `hooks/useEvidencia.js` y
+   `components/TarjetaParada.jsx`).
 6. **Los bugs de `manual.py`** — los tres son de la misma zona, conviene hacerlos
    juntos.
 7. **Autenticación de verdad** con roles.

@@ -153,10 +153,10 @@ def get_jornada(request, reparto: date = None):
 # inventados. Como la API no pide autenticación, cualquiera con la dirección
 # podía tumbar el día de trabajo, y el botón estaba a un clic en el panel.
 #
-# Se quitó ahora que SAP está conectado y hay datos reales con qué probar. La
-# capacidad sigue disponible desde la consola, donde solo llega quien desarrolla:
-#
-#     python manage.py cargar_prueba --fecha 2026-07-25 --n 80
+# Se quitó ahora que SAP está conectado y hay datos reales con qué probar. El
+# comando de consola (`manage.py cargar_prueba`) que la reemplazaba también se
+# eliminó por completo más adelante, junto con el resto de `test_data.py`: ya
+# no hay ninguna vía de datos inventados en el sistema, ni de API ni de consola.
 #
 # 3. Optimizar Rutas usando OR-Tools
 class GenerarRutasIn(Schema):

@@ -268,3 +268,32 @@ class SinConfiguracion(TestCase):
             res = sap.sync_from_sap(FECHA)
         self.assertEqual(res["status"], "warning")
         self.assertEqual(Remision.objects.count(), 0)
+
+
+class UnBugDeMapeoNoEsUnaFallaDeConexion(TestCase):
+    """
+    El try/except solo debe cubrir conectar() y las dos consultas SQL. Un
+    AttributeError, un IntegrityError por folio duplicado, un None donde se
+    esperaba número, todo eso pasa DESPUÉS de traer los datos, en el mapeo a
+    Destino/Remision/LineaRemision. Si el try lo sigue envolviendo, ese bug de
+    Python sale reportado como "Falló la conexión con SAP B1" y quien lo lea
+    revisa la red y el cable en vez del bug real — justo lo que va a pasar el
+    día que se conecte SAP en la Mac.
+
+    Criterio de aceptación del propio plan (docs/lo-que-falta.md): meter a
+    propósito un AttributeError en el mapeo y comprobar que el mensaje NO
+    dice "conexión". Se dispara con un renglón sin CardCode (None), que
+    revienta en `_mapear_destinos` al construir el Destino.
+    """
+
+    def test_un_AttributeError_en_el_mapeo_no_se_reporta_como_falla_de_conexion(self):
+        fila_rota = renglon(1, 250001, CardCode=None)
+        # Con CardCode None, `Destino.objects.get_or_create` truena por el
+        # NOT NULL de card_code: es el bug de Python que se espera atrapar,
+        # no un problema de red ni de credenciales.
+        with SyncFalso([fila_rota]):
+            with self.assertRaises(Exception) as ctx:
+                sap.sync_from_sap(FECHA)
+
+        self.assertNotIn("conexión", str(ctx.exception).lower())
+        self.assertNotIn("Falló la conexión con SAP B1", str(ctx.exception))
