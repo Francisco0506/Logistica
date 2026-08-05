@@ -195,16 +195,6 @@ export default function HojaEntrega({
                           {l.cantidad}
                         </div>
                         <div className="text-[10px] font-bold text-gray-400 uppercase">{l.unidad}</div>
-                        {/* Cuántas piezas son en total. "24 · CAJA 6 PZ" no le
-                            dice al chofer qué tanto está bajando del camión;
-                            "144 pz" sí. La unidad de arriba NO cambia: la
-                            entrega se sigue reportando por caja, porque así se
-                            vendió. */}
-                        {l.piezas_por_unidad > 1 && (
-                          <div className="text-[10px] text-gray-400 tabular-nums mt-0.5">
-                            {l.cantidad * l.piezas_por_unidad} pz
-                          </div>
-                        )}
                       </div>
                     )}
                   </div>
@@ -226,14 +216,6 @@ export default function HojaEntrega({
                           <span className="text-sm text-gray-400 font-bold"> / {l.cantidad}</span>
                         </div>
                         <div className="text-[10px] font-bold text-gray-400 uppercase mt-0.5">{l.unidad}</div>
-                        {/* Las piezas que de verdad son, para que el chofer
-                            sepa qué tanto está dejando de entregar: quitar 1
-                            "Caja 6 Pz" son 6 piezas menos, no una. */}
-                        {l.piezas_por_unidad > 1 && (
-                          <div className="text-[11px] text-gray-400 tabular-nums mt-1">
-                            {dejado * l.piezas_por_unidad} de {l.cantidad * l.piezas_por_unidad} pz
-                          </div>
-                        )}
                       </div>
 
                       <button
