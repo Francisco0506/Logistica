@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import {
-  getRutas, getRutaChofer, getCamionesGPS, getFlota, getJornada,
+  getRutas, getRutaChofer, getFlota, getJornada,
 } from '../../../services/api';
 import { hoyLocal } from '../../../lib/fecha';
 
@@ -10,8 +10,8 @@ const REFRESH_MS = 60_000;
 
 /**
  * Todo lo que la app del chofer necesita TRAER del backend: la lista de
- * camiones que salen hoy (para escoger), la flota (colores), su posición GPS
- * y, ya escogido el camión, su ruta del día — con el refresco periódico y el
+ * camiones que salen hoy (para escoger), la flota (colores) y, ya escogido el
+ * camión, su ruta del día — con el refresco periódico y el
  * candado de corridas para que una respuesta vieja no pise a una nueva.
  */
 export function useRutaChofer(camion) {
@@ -38,7 +38,6 @@ export function useRutaChofer(camion) {
   const [flota, setFlota] = useState([]);
   const [ruta, setRuta] = useState(null);
   const [cargando, setCargando] = useState(false);
-  const [gps, setGps] = useState([]);
 
   // Se pregunta POR EL REPARTO DE HOY, no "qué toca preparar ahora".
   //
@@ -107,16 +106,6 @@ export function useRutaChofer(camion) {
   }, []);
   const colorDe = (placa) => flota.find((f) => f.placa === placa)?.color || '#94a3b8';
 
-  // Su propia posición, para verse en el mapa. Aparte de la ruta: si Samsara
-  // falla, la lista de paradas sigue funcionando.
-  useEffect(() => {
-    const c = new AbortController();
-    const traer = () => getCamionesGPS({ signal: c.signal }).then(setGps).catch(() => {});
-    traer();
-    const i = setInterval(traer, 20_000);
-    return () => { c.abort(); clearInterval(i); };
-  }, []);
-
   useEffect(() => {
     if (!camion || !fechaCarga) { setRuta(null); return undefined; }
     const c = new AbortController();
@@ -158,6 +147,6 @@ export function useRutaChofer(camion) {
 
   return {
     rutasDelDia, buscandoRutas,
-    flota, colorDe, gps, ruta, cargando, refrescarRuta, reintentarBusqueda,
+    flota, colorDe, ruta, cargando, refrescarRuta, reintentarBusqueda,
   };
 }

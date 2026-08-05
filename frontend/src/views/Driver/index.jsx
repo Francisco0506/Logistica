@@ -2,14 +2,13 @@ import React, { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Truck, Check, AlertTriangle,
-  ChevronRight, ChevronDown, ChevronUp, LogOut, RefreshCw, PackageCheck, Map as MapIcon,
+  ChevronRight, ChevronDown, ChevronUp, LogOut, RefreshCw, PackageCheck,
 } from 'lucide-react';
 import LabenLogo from '../../components/LabenLogo';
 import { useAviso } from '../../components/useAviso';
 import { confirmarEntrega, subirFotoEntrega, subirFirmaEntrega } from '../../services/api';
 import HojaEntrega from './components/HojaEntrega';
 import ResumenReportado from './components/ResumenReportado';
-import MapaRuta from './components/MapaRuta';
 import TarjetaParada from './components/TarjetaParada';
 import { esVisitada, huboEntrega, salioMal } from '../../config/estadosRuta';
 import { useConfig } from '../../config/useConfig';
@@ -47,12 +46,11 @@ export default function DriverApp() {
   // congelado en la foto de hace un minuto.
   const [revisandoId, setRevisandoId] = useState(null);
   const [guardando, setGuardando] = useState(false);
-  const [verMapa, setVerMapa] = useState(true);
   const [verHechas, setVerHechas] = useState(false);   // lo ya reportado no estorba
 
   const {
     rutasDelDia, buscandoRutas, reintentarBusqueda,
-    colorDe, gps, ruta, cargando, refrescarRuta,
+    colorDe, ruta, cargando, refrescarRuta,
   } = useRutaChofer(camion);
 
   const {
@@ -82,7 +80,6 @@ export default function DriverApp() {
   const pendientes = porReportar.slice(1);
   const reportadas = paradas.filter((p) => esVisitada(p.estado));
   const incompletas = paradas.filter((p) => salioMal(p.estado)).length;
-  const miPosicion = gps.find((c) => c.placa === camion) || null;
   // Solo se puede entregar si el camión YA SALIÓ del CEDIS. Mientras el
   // despachador no le dé Salida, la mercancía sigue en el almacén: dejar
   // reportar entregas antes convertiría el dato en algo que no ocurrió, que es
@@ -426,37 +423,11 @@ export default function DriverApp() {
               </div>
             )}
 
-            {/* ═══ MAPA — se queda PEGADO debajo de la cabecera ═══
-
-                Antes se iba hacia arriba con el resto de la página: en cuanto
-                el chofer bajaba a ver sus paradas, el mapa desaparecía detrás
-                de la cabecera (que sí es sticky) y para volver a verlo tenía
-                que subir hasta arriba. En la calle eso es justo al revés de lo
-                que ocupa: mira la lista Y el mapa a la vez.
-
-                `top-[57px]` es el alto de la cabecera; el mapa se detiene ahí
-                en vez de seguir subiendo. En pantallas chicas va más bajito
-                (h-52) para que abajo quede espacio real para la lista. */}
-            <section className="sticky top-[57px] z-10 -mx-4 px-4 pt-2 pb-2 bg-gray-50 space-y-2">
-              <button
-                onClick={() => setVerMapa((v) => !v)}
-                className="w-full flex items-center gap-2 px-1"
-              >
-                <MapIcon className="w-3.5 h-3.5 text-orange-500" />
-                <h2 className="text-[11px] font-bold text-gray-400 uppercase tracking-wide">Mi ruta en el mapa</h2>
-                <span className="ml-auto text-gray-400">
-                  {verMapa ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                </span>
-              </button>
-              {verMapa && (
-                <MapaRuta
-                  paradas={paradas}
-                  siguiente={siguiente}
-                  miPosicion={miPosicion}
-                  alto="h-52 sm:h-[300px]"
-                />
-              )}
-            </section>
+            {/* Aquí vivía el mapa de la ruta. Se quitó (Francisco, 5-ago).
+                Estorbaba más de lo que servía: se come media pantalla del
+                celular y el chofer igual no navega desde ahí — para eso están
+                los botones de Waze y Maps de cada parada, que abren la app que
+                de verdad usa, con la coordenada del plan. */}
 
             {/* ═══ POR ENTREGAR ═══ */}
             {pendientes.length > 0 && (
