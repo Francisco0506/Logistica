@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   getRutas, getRutaChofer, getCamionesGPS, getFlota, getJornada,
 } from '../../../services/api';
+import { hoyLocal } from '../../../lib/fecha';
 
 // Se refresca para que el chofer vea si el despachador le movió algo.
 const REFRESH_MS = 60_000;
@@ -39,12 +40,22 @@ export function useRutaChofer(camion) {
   const [cargando, setCargando] = useState(false);
   const [gps, setGps] = useState([]);
 
-  // Se pregunta una sola vez, al entrar — mismo criterio que
-  // Dispatcher/hooks/useJornada.js: no le mueve la fecha bajo los pies al
-  // chofer a media jornada.
+  // Se pregunta POR EL REPARTO DE HOY, no "qué toca preparar ahora".
+  //
+  // `getJornada()` sin parámetro contesta lo que le sirve al DESPACHADOR, y a
+  // las 11 de la mañana (HORA_CORTE_JORNADA) cambia solo: pasa a preparar el
+  // reparto de MAÑANA, porque lo de hoy ya está en la calle. Para el
+  // despachador es correcto; para el chofer es exactamente lo contrario de lo
+  // que necesita — él está en la calle repartiendo lo de HOY, y a las 11:00 la
+  // pantalla se le brincaba al día siguiente y le decía "todavía no hay
+  // camiones para hoy" con su propia ruta a medio hacer.
+  //
+  // Preguntando por `reparto = hoy` se obtiene la fecha de captura de lo que
+  // se está entregando hoy (el 04 para el reparto del 05), que es con la que
+  // están guardadas sus rutas, y ya no depende de la hora.
   useEffect(() => {
     const c = new AbortController();
-    getJornada({ signal: c.signal })
+    getJornada({ reparto: hoyLocal(), signal: c.signal })
       .then((j) => setFechaCarga(j.fecha_carga))
       .catch(() => {});
     return () => c.abort();
