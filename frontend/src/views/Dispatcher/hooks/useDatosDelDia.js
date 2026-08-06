@@ -77,13 +77,20 @@ export function useDatosDelDia(fecha) {
     }
 
     try {
+      // Pedidos y rutas se piden JUNTOS (no uno tras otro) y sus dos `setState`
+      // van pegados, sin ningún `await` entre medio: React los aplica en el
+      // mismo render. Separados como estaban antes, quedaba un instante donde
+      // `orders` ya traía los pedidos con camión asignado (recién optimizados)
+      // pero `routesGenerated` seguía con el valor viejo (false, si era la
+      // primera corrida del día) — el mapa veía "hay pedidos con camión pero
+      // no hay rutas" y esa vuelta no dibujaba ninguna línea.
+      const [remData, rutData] = await Promise.all([
+        getRemisiones(dia, { signal }),
+        getRutas(dia, { signal }),
+      ]);
+      if (!vigente()) return;
       // `truck` ya viene como placa real del backend.
-      const remData = await getRemisiones(dia, { signal });
-      if (!vigente()) return;
       setOrders(remData.map((o) => ({ ...o, truck: o.truck || null })));
-
-      const rutData = await getRutas(dia, { signal });
-      if (!vigente()) return;
       setRutas(rutData);
       // Con `else`: antes solo se prendía. Al cambiar del reparto de hoy (con
       // rutas) al de mañana (sin rutas), la bandera se quedaba en true y el
