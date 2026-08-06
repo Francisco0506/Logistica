@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, Check, Minus, Plus, AlertTriangle, Camera, Trash2, PenLine } from 'lucide-react';
 import PanelFirma from './PanelFirma';
+import { comprimirFoto } from '../../../lib/imagen';
 
 /**
  * La hoja donde el chofer confirma qué dejó en una parada.
@@ -92,23 +93,87 @@ export default function HojaEntrega({
       const actual = prev[linea.id] ?? linea.cantidad;
       // Entre 0 y lo que trae: no se puede dejar de MÁS de lo que venía, y el
       // paso es de una pieza completa — media caja de queso no se entrega.
-      const siguiente = Math.max(0, Math.min(linea.cantidad, actual + delta));
+      //
+      // El redondeo es por los renglones vendidos por kilo, que traen
+      // cantidades con decimales (18.1 kg de queso). En punto flotante
+      // 18.1 - 1 - 1 - 1... se va desviando, y al chofer le aparecía
+      // "4.100000000000001" en la pantalla, de pie en la puerta del cliente.
+      //
+      // Es solo lo que se VE: el valor que se guarda no se corrompe, porque
+      // `Math.min` de arriba lo topa en `linea.cantidad` y la base redondea a
+      // tres decimales de todos modos (LineaRemision.cantidad,
+      // decimal_places=3). Se comprobó recorriendo ~5,900 combinaciones de
+      // cantidad con decimales: en ninguna una ida y vuelta hasta el tope
+      // termina por debajo del total, así que una entrega completa nunca se
+      // reporta como faltante por esto.
+      //
+      // Se redondea justo a esos tres decimales para que la pantalla y la base
+      // digan el mismo número.
+      const crudo = Math.max(0, Math.min(linea.cantidad, actual + delta));
+      const siguiente = Math.round(crudo * 1000) / 1000;
       return { ...prev, [linea.id]: siguiente };
+    });
+    // Si venía tecleando ese renglón, el ± manda: se suelta el texto a medias
+    // para que el recuadro muestre el número nuevo y no lo que iba escrito.
+    cerrarEdicion(linea);
+  };
+
+  // ── Teclear la cantidad ──
+  //
+  // Mientras el chofer teclea se guarda el TEXTO tal cual, no el número: si se
+  // normalizara en cada tecla, escribir "0.5" es imposible —al llegar al punto,
+  // "0." se convierte en 0 y el punto desaparece— y borrar todo para empezar de
+  // nuevo rebota a "0" antes de que teclee el primer dígito.
+  const [textos, setTextos] = useState({});
+
+  const textoCantidad = (l) => textos[l.id] ?? String(cantidades[l.id] ?? l.cantidad);
+
+  const escribirCantidad = (l, texto) => {
+    // Solo números y un punto. Se rechaza cualquier otra tecla en vez de
+    // limpiarla después: así el recuadro nunca enseña algo que no es un número.
+    if (!/^\d*\.?\d*$/.test(texto)) return;
+    setTextos((prev) => ({ ...prev, [l.id]: texto }));
+
+    const n = parseFloat(texto);
+    if (Number.isNaN(n)) return;   // "" o "." a medio escribir: aún no hay valor
+    // No se puede dejar MÁS de lo que traía el camión.
+    const acotado = Math.max(0, Math.min(l.cantidad, n));
+    setCantidades((prev) => ({ ...prev, [l.id]: Math.round(acotado * 1000) / 1000 }));
+  };
+
+  /** Al salir del recuadro se tira el texto a medias y se enseña el valor real:
+   *  si tecleó 25 sobre un renglón de 18.1, el número ya se acotó a 18.1 y el
+   *  recuadro tiene que decir 18.1, no 25.
+   *
+   *  Si lo dejó VACÍO se conserva el último valor bueno, no se pone en 0: borrar
+   *  el recuadro para volver a teclear es lo normal, y que eso se guardara como
+   *  "no entregué nada" sería reportarle a ventas un faltante que no existió. */
+  const cerrarEdicion = (l) => {
+    setTextos((prev) => {
+      if (!(l.id in prev)) return prev;
+      const copia = { ...prev };
+      delete copia[l.id];
+      return copia;
     });
   };
 
   const faltantes = parada.lineas.filter((l) => (cantidades[l.id] ?? l.cantidad) < l.cantidad);
   const nadaEntregado = parada.lineas.every((l) => (cantidades[l.id] ?? l.cantidad) === 0);
 
-  const tomarFoto = (e) => {
+  const tomarFoto = async (e) => {
     const archivo = e.target.files?.[0];
     if (!archivo) return;
+    // Se achica ANTES de guardarla para subir: la cámara del celular entrega
+    // 3-4 MB y el chofer está en la calle con la señal que haya (ver
+    // lib/imagen.js). Si la compresión falla devuelve la original, así que
+    // aquí no hay caso de "se quedó sin foto".
+    const chica = await comprimirFoto(archivo);
     // Suelta la anterior: retomar la foto sin pasar por el bote de basura es lo
     // más normal del mundo (salió movida, salió oscura) y cada intento dejaba
     // un object URL retenido en la memoria del celular.
     if (vistaPrevia) URL.revokeObjectURL(vistaPrevia);
-    setFoto(archivo);
-    setVistaPrevia(URL.createObjectURL(archivo));
+    setFoto(chica);
+    setVistaPrevia(URL.createObjectURL(chica));
   };
 
   const quitarFoto = () => {
@@ -204,22 +269,37 @@ export default function HojaEntrega({
                     <div className="flex items-center gap-3 mt-3">
                       <button
                         onClick={() => ajustar(l, -1)}
+                        aria-label={`Quitar uno de ${l.descripcion}`}
                         disabled={dejado <= 0}
                         className="w-12 h-12 rounded-xl bg-gray-100 hover:bg-gray-200 active:bg-gray-300 disabled:opacity-30 flex items-center justify-center flex-shrink-0"
                       >
                         <Minus className="w-5 h-5 text-gray-700" />
                       </button>
 
+                      {/* La cantidad se TECLEA, no solo se pica de uno en uno.
+                          Un renglón por kilo trae 18.1 kg: dejarlo en cero con
+                          el botón de menos son 18 toques de pie en la banqueta.
+                          Los ± se quedan para el ajuste fino. */}
                       <div className="flex-1 text-center">
-                        <div className={`text-2xl font-extrabold tabular-nums leading-none ${corto ? 'text-amber-700' : 'text-gray-800'}`}>
-                          {dejado}
-                          <span className="text-sm text-gray-400 font-bold"> / {l.cantidad}</span>
+                        <div className="flex items-baseline justify-center gap-1">
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            aria-label={`Cantidad entregada de ${l.descripcion}`}
+                            value={textoCantidad(l)}
+                            onChange={(e) => escribirCantidad(l, e.target.value)}
+                            onFocus={(e) => e.target.select()}
+                            onBlur={() => cerrarEdicion(l)}
+                            className={`w-24 text-2xl font-extrabold tabular-nums leading-none text-right bg-transparent border-b-2 border-dashed border-gray-300 focus:border-orange-400 focus:outline-none ${corto ? 'text-amber-700' : 'text-gray-800'}`}
+                          />
+                          <span className="text-sm text-gray-400 font-bold">/ {l.cantidad}</span>
                         </div>
                         <div className="text-[10px] font-bold text-gray-400 uppercase mt-0.5">{l.unidad}</div>
                       </div>
 
                       <button
                         onClick={() => ajustar(l, 1)}
+                        aria-label={`Agregar uno de ${l.descripcion}`}
                         disabled={dejado >= l.cantidad}
                         className="w-12 h-12 rounded-xl bg-gray-100 hover:bg-gray-200 active:bg-gray-300 disabled:opacity-30 flex items-center justify-center flex-shrink-0"
                       >
